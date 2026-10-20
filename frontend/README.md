@@ -1,38 +1,49 @@
-# External Store Integration
+# 青笺 · 角色与故事
 
-This example demonstrates how to use assistant-ui with an external message store using `useExternalStoreRuntime`.
+基于 Next.js、assistant-ui 和 IndexedDB 的角色聊天前端。后端保持现状，只接入已有的 `POST /api/chat`，不请求摘要或图片接口。
 
-## Quick Start
+## 本地启动
 
-### Using CLI (Recommended)
-
-```bash
-npx assistant-ui@latest create my-app --example with-external-store
-cd my-app
-```
-
-### Environment Variables
-
-Create `.env.local`:
-
-```
-OPENAI_API_KEY=sk-...
-```
-
-### Run
+在 `frontend` 目录运行：
 
 ```bash
+npm ci
+cp .env.example .env.local
 npm run dev
 ```
 
-## Features
+打开 `http://localhost:3000`。默认转发到 `http://127.0.0.1:8080/api/chat`；后端地址不同则在 `.env.local` 设置 `BACKEND_URL`，重启 Next.js。模型密钥配置在原 Spring Boot 后端，前端无需密钥。
 
-- External store runtime via `useExternalStoreRuntime`
-- Custom message state management
-- React state-based message storage
-- Message conversion utilities
+也可以使用本机局域网地址访问（例如 `http://172.29.242.179:3000`）。开发配置会将本机 IPv4 地址与 `127.0.0.1` 加入 Next.js 的 `allowedDevOrigins`，保证开发脚本与 HMR 正常启动；通过代理域名访问时，可在 `.env.local` 的 `DEV_ALLOWED_ORIGINS` 中补充主机名，不带协议和端口。修改配置或网络地址后重启开发服务器。局域网 HTTP 下使用 `getRandomValues` 生成 UUID，不依赖仅安全上下文提供的 `randomUUID`。
 
-## Related Documentation
+Next.js 的 `app/api/chat/route.ts` 只进行同源流式转发，直接传递后端的 `delta / done / error` 事件，并保留 HTTP 错误状态。部署前端需要 Node.js 服务，不能仅导出静态页面。
 
-- [assistant-ui Documentation](https://www.assistant-ui.com/docs)
-- [External Store Runtime Guide](https://www.assistant-ui.com/docs/runtimes/custom/external-store)
+## 已实现
+
+- 角色创建、编辑、复制、归档与切换；现有会话保留创建时的角色设定。
+- 一键新建会话，以首条用户消息前 20 个字素簇自动命名；支持手动改名、删除与历史分页。超过 5 个会话时提供标题搜索。
+- 复用 assistant-ui 的消息、Composer、滚动、复制、会话列表和操作组件；台词为浅底正文，描写为无背景正文。
+- SSE 增量解码与渲染、停止、错误提示、生成时切换会话；同时只运行一个生成任务。
+- 角色级人工重要记忆与手动共享经历，跨会话共用、角色之间隔离；可从回复摘录为记忆。
+- 浅绿主题，浅色、深色与跟随系统；手机导航抽屉与全屏记忆面板。
+- IndexedDB 事务存储、约 500ms 流式检查点、约 300ms 草稿保存、异常中断恢复；其他标签页只读（浏览器支持 Web Locks 时）。
+- 草稿保存在中文输入法组合输入期间暂停，确认文字后再防抖保存；保存状态只更新提示，不触发整个聊天运行时同步，也不向输入框回填草稿。
+- 完整 JSON 备份、导入预检与事务覆盖、清空确认，以及存储用量与持久存储状态。
+
+自动摘要暂未接入。超过后端 20 条历史限制的较早记录，在预算内以原文放入 `summary`，不会静默丢弃；原文预算超过 20000 字符时提示通过会话菜单「整理剧情」手工维护备忘。跨会话共享的是用户维护的事实与共享经历，不会自动把所有对话整合为长期记忆。
+
+数据保存在同一站点地址、同一浏览器配置中；改变协议、域名或端口，需要使用备份迁移。关闭浏览器后会恢复已提交的消息、当前角色/会话、主题和输入草稿；正在生成的回复保留最后检查点并标记中断，不自动重发。重新打开默认显示最近消息，原始记录可向上分页读取。清理站点数据或结束隐私模式可能丢失数据，请导出备份。
+
+## 检查
+
+```bash
+npm run typecheck
+npm test
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+单元测试使用内存 IndexedDB 验证事务、恢复、备份、上下文和 SSE 边界。浏览器测试覆盖桌面和手机，启动测试专用 SSE 服务（18080）和前端（3100），不访问真实模型；测试服务不属于生产后端。
+
+设计依据见 [前端设计](../docs/AI%20角色聊天系统-前端设计.md)。

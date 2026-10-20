@@ -1,0 +1,589 @@
+"use client";
+
+import { create } from "zustand";
+import * as db from "@/lib/db";
+import { chatContext } from "@/lib/chat/context";
+import { streamChat } from "@/lib/chat/sse";
+import {
+  appendDelta,
+  errorText,
+  now,
+  plainText,
+  visibleCharacters,
+  type Character,
+  type CharacterProfile,
+  type Memory,
+  type Message,
+  type Session,
+  type ThemeMode,
+} from "@/lib/domain";
+import { restoreSnapshot, takeSnapshot, type Backup } from "@/lib/backup";
+
+type AppState = {
+  ready: boolean;
+  bootError: string;
+  readOnly: boolean;
+  busy: boolean;
+  error: string;
+  saveStatus: "saved" | "saving" | "failed";
+  characters: Character[];
+  sessions: Session[];
+  memories: Memory[];
+  characterId: string | null;
+  sessionId: string | null;
+  messages: Message[];
+  hasEarlier: boolean;
+  loadingMessages: boolean;
+  draft: string;
+  themeMode: ThemeMode;
+  activeSessionId: string | null;
+  memoryOpen: boolean;
+};
+export const useAppStore = create<AppState>(() => ({
+  ready: false,
+  bootError: "",
+  readOnly: false,
+  busy: false,
+  error: "",
+  saveStatus: "saved",
+  characters: [],
+  sessions: [],
+  memories: [],
+  characterId: null,
+  sessionId: null,
+  messages: [],
+  hasEarlier: false,
+  loadingMessages: false,
+  draft: "",
+  themeMode: "system",
+  activeSessionId: null,
+  memoryOpen: false,
+}));
+const get = useAppStore.getState;
+const set = useAppStore.setState;
+let writes: Promise<unknown> = Promise.resolve();
+export function write<T>(task: () => Promise<T>): Promise<T> {
+  if (get().readOnly)
+    return Promise.reject(
+      new Error("此标签页为只读，请关闭另一标签页后刷新。"),
+    );
+  const result = writes.then(async () => {
+    set({ saveStatus: "saving" });
+    return task();
+  });
+  writes = result.then(
+    () => {
+      set({ saveStatus: "saved" });
+    },
+    (error) => {
+      set({ error: errorText(error), saveStatus: "failed" });
+    },
+  );
+  return result;
+}
+export function report(error: unknown) {
+  set({ error: errorText(error) });
+}
+let initPromise: Promise<void> | undefined;
+let selection = 0;
+let controller: AbortController | null = null;
+let generation: Promise<void> | null = null;
+let liveReply: Message | null = null;
+const draftBuffers = new Map<
+  string,
+  { text: string; timer: ReturnType<typeof setTimeout> }
+>();
+
+async function acquireWriteLock() {
+  if (!navigator.locks) return;
+  await new Promise<void>((resolve, reject) => {
+    void navigator.locks
+      .request("roleplay-agent-writer", { ifAvailable: true }, async (lock) => {
+        set({ readOnly: !lock });
+        resolve();
+        if (lock) await new Promise<void>(() => {});
+      })
+      .catch(reject);
+  });
+}
+export function initialize() {
+  if (!initPromise)
+    initPromise = (async () => {
+      try {
+        await acquireWriteLock();
+        if (!get().readOnly) await db.recoverInterrupted();
+        const database = await db.database();
+        const [characters, settings] = await Promise.all([
+          database.getAll("characters"),
+          database.getAll("settings"),
+        ]);
+        const saved = new Map(settings.map((item) => [item.key, item.value]));
+        const mode = saved.get("themeMode");
+        set({
+          characters,
+          themeMode: mode === "dark" || mode === "light" ? mode : "system",
+        });
+        const character =
+          characters.find((item) => item.id === saved.get("characterId")) ??
+          characters.find((item) => !item.archived);
+        if (character)
+          await selectCharacter(character.id, saved.get("sessionId"));
+        set({ ready: true, bootError: "" });
+      } catch (error) {
+        set({ bootError: `无法打开本地数据：${errorText(error)}` });
+        initPromise = undefined;
+      }
+    })();
+  return initPromise;
+}
+export async function refreshMetadata() {
+  const database = await db.database();
+  const characters = await database.getAll("characters");
+  const characterId = get().characterId;
+  const [sessions, memories] = characterId
+    ? await Promise.all([
+        database.getAllFromIndex("sessions", "character", characterId),
+        database.getAllFromIndex("memories", "character", characterId),
+      ])
+    : [[], []];
+  if (get().characterId !== characterId) return;
+  set({
+    characters,
+    sessions: sessions.sort(
+      (a, b) =>
+        b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id),
+    ),
+    memories: memories.sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+  });
+}
+export async function selectCharacter(
+  characterId: string,
+  preferredSession?: string,
+) {
+  await flushDrafts();
+  const version = ++selection;
+  set({
+    characterId,
+    sessionId: null,
+    messages: [],
+    sessions: [],
+    memories: [],
+    draft: "",
+    loadingMessages: true,
+    memoryOpen: false,
+  });
+  await refreshMetadata();
+  if (selection !== version) return;
+  const session =
+    get().sessions.find((item) => item.id === preferredSession) ??
+    get().sessions[0];
+  if (session) await selectSession(session.id);
+  else set({ loadingMessages: false, hasEarlier: false });
+  if (!get().readOnly)
+    await write(() => db.setting("characterId", characterId));
+}
+export async function selectSession(sessionId: string) {
+  await flushDrafts();
+  const version = ++selection;
+  set({
+    sessionId,
+    messages: [],
+    draft: "",
+    loadingMessages: true,
+    hasEarlier: false,
+  });
+  const [page, draft] = await Promise.all([
+    db.getMessages(sessionId),
+    (await db.database()).get("drafts", sessionId),
+  ]);
+  if (selection !== version) return;
+  const currentReply = liveReply?.sessionId === sessionId ? liveReply : null;
+  set({
+    ...page,
+    messages: currentReply
+      ? page.messages.map((message) =>
+          message.id === currentReply.id ? currentReply : message,
+        )
+      : page.messages,
+    draft: draft?.text ?? "",
+    loadingMessages: false,
+  });
+  if (!get().readOnly) await write(() => db.setting("sessionId", sessionId));
+}
+export async function loadEarlier() {
+  const { sessionId, messages } = get();
+  if (!sessionId || !messages.length) return;
+  const page = await db.getMessages(sessionId, messages[0].seq);
+  if (get().sessionId === sessionId)
+    set((state) => ({
+      messages: [...page.messages, ...state.messages],
+      hasEarlier: page.hasEarlier,
+    }));
+}
+export function pauseDraft(sessionId: string) {
+  const draft = draftBuffers.get(sessionId);
+  if (draft) clearTimeout(draft.timer);
+}
+export function scheduleDraft(sessionId: string, text: string) {
+  if (get().readOnly) return;
+  const old = draftBuffers.get(sessionId);
+  if (old) clearTimeout(old.timer);
+  const timer = setTimeout(() => {
+    void flushDrafts().catch(report);
+  }, 300);
+  draftBuffers.set(sessionId, { text, timer });
+  set({ saveStatus: "saving" });
+}
+export async function flushDrafts() {
+  const buffered = Array.from(draftBuffers);
+  draftBuffers.clear();
+  if (!buffered.length) return;
+  for (const [, draft] of buffered) clearTimeout(draft.timer);
+  await write(async () => {
+    const database = await db.database();
+    const tx = database.transaction(["drafts", "sessions"], "readwrite");
+    for (const [sessionId, draft] of buffered)
+      if (await tx.objectStore("sessions").get(sessionId))
+        await tx
+          .objectStore("drafts")
+          .put({ sessionId, text: draft.text, updatedAt: now() });
+    await tx.done;
+  });
+}
+export async function newSession() {
+  if (get().busy) return;
+  const characterId = get().characterId;
+  if (!characterId) return;
+  set({ busy: true });
+  try {
+    await flushDrafts();
+    const session = await write(() => db.createSession(characterId));
+    if (get().characterId === characterId) {
+      await refreshMetadata();
+      await selectSession(session.id);
+    }
+  } finally {
+    set({ busy: false });
+  }
+}
+export async function saveProfile(
+  profile: CharacterProfile,
+  existing?: Character,
+) {
+  const preferred =
+    existing?.id === get().characterId
+      ? (get().sessionId ?? undefined)
+      : undefined;
+  const character = await write(() => db.saveCharacter(profile, existing));
+  await refreshMetadata();
+  await selectCharacter(character.id, preferred);
+  return character;
+}
+export async function archiveCharacter(character: Character) {
+  await write(async () => {
+    const database = await db.database();
+    const tx = database.transaction("characters", "readwrite");
+    await tx.store.put({
+      ...character,
+      archived: !character.archived,
+      updatedAt: now(),
+    });
+    await tx.done;
+  });
+  await refreshMetadata();
+}
+export async function renameSession(session: Session, title: string) {
+  if (!title.trim() || visibleCharacters(title.trim()).length > 60)
+    throw new Error("标题需要在 1–60 个可见字符之间。");
+  await write(async () => {
+    const database = await db.database();
+    const tx = database.transaction("sessions", "readwrite");
+    const current = await tx.store.get(session.id);
+    if (!current) throw new Error("会话不存在。");
+    await tx.store.put({
+      ...current,
+      title: title.trim(),
+      titleSource: "manual",
+      updatedAt: now(),
+    });
+    await tx.done;
+  });
+  await refreshMetadata();
+}
+export async function removeSession(session: Session) {
+  if (get().activeSessionId === session.id)
+    throw new Error("请先停止这段对话的生成。");
+  await flushDrafts();
+  await write(() => db.deleteSession(session.id));
+  await refreshMetadata();
+  if (get().sessionId === session.id) {
+    const next = get().sessions[0];
+    if (next) await selectSession(next.id);
+    else {
+      ++selection;
+      set({ sessionId: null, messages: [], draft: "", hasEarlier: false });
+    }
+  }
+}
+export async function saveMemory(
+  content: string,
+  existing?: Memory,
+  source?: { sourceSessionId: string; sourceMessageId: string },
+) {
+  const characterId = get().characterId;
+  if (!characterId) return;
+  await write(() => db.putMemory(characterId, content, existing, source));
+  await refreshMetadata();
+}
+export async function removeMemory(memory: Memory) {
+  await write(async () => {
+    const database = await db.database();
+    const tx = database.transaction("memories", "readwrite");
+    await tx.store.delete(memory.id);
+    await tx.done;
+  });
+  await refreshMetadata();
+}
+export async function saveSharedSummary(
+  characterId: string,
+  sharedSummary: string,
+) {
+  if (sharedSummary.length > 8000) throw new Error("共享经历最多 8000 字符。");
+  await write(async () => {
+    const database = await db.database();
+    const tx = database.transaction("characters", "readwrite");
+    const current = await tx.store.get(characterId);
+    if (!current) throw new Error("角色不存在。");
+    await tx.store.put({ ...current, sharedSummary, updatedAt: now() });
+    await tx.done;
+  });
+  await refreshMetadata();
+}
+export async function saveSessionSummary(sessionId: string, summary: string) {
+  if (!summary.trim() || summary.length > 8000)
+    throw new Error("请填写 1–8000 字符的剧情备忘。");
+  await write(async () => {
+    const database = await db.database();
+    const tx = database.transaction(["sessions", "messages"], "readwrite");
+    const session = await tx.objectStore("sessions").get(sessionId);
+    if (!session) throw new Error("会话不存在。");
+    const messages = await tx
+      .objectStore("messages")
+      .index("sequence")
+      .getAll(
+        IDBKeyRange.bound([sessionId, 0], [sessionId, Number.MAX_SAFE_INTEGER]),
+      );
+    const recent = messages.slice(-20);
+    const through =
+      messages.filter((message) => message.seq < (recent[0]?.seq ?? 0)).at(-1)
+        ?.seq ?? 0;
+    await tx.objectStore("sessions").put({
+      ...session,
+      summary,
+      summaryThroughSeq: through,
+      updatedAt: now(),
+    });
+    await tx.done;
+  });
+  await refreshMetadata();
+}
+export async function changeTheme(themeMode: ThemeMode) {
+  await write(() => db.setting("themeMode", themeMode));
+  set({ themeMode });
+}
+
+export async function sendMessage(text: string) {
+  if (get().activeSessionId)
+    throw new Error("已有一段对话正在回复，请稍候或先停止。");
+  const { sessionId, characterId, readOnly } = get();
+  if (!sessionId || !characterId || readOnly)
+    throw new Error("当前会话不可发送。");
+  if (!text.trim() || text.length > 2000)
+    throw new Error("请输入 1–2000 个字符。");
+  set({ activeSessionId: sessionId, error: "" });
+  const runController = new AbortController();
+  controller = runController;
+  let reply: Message | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let paintTimer: ReturnType<typeof setTimeout> | undefined;
+  let queue: Promise<void> = Promise.resolve();
+  let storageError: unknown;
+  let preparationError: unknown;
+  const publish = () => {
+    if (get().sessionId === sessionId && reply)
+      set((state) => ({
+        messages: state.messages.some((item) => item.id === reply!.id)
+          ? state.messages.map((item) =>
+              item.id === reply!.id ? reply! : item,
+            )
+          : [...state.messages, reply!],
+      }));
+  };
+  const persist = () => {
+    if (!reply || storageError) return;
+    const snapshot = structuredClone(reply);
+    queue = queue
+      .then(() => write(() => db.checkpoint(snapshot)))
+      .catch((error) => {
+        storageError = error;
+        runController.abort();
+      });
+  };
+  const run = async () => {
+    try {
+      await flushDrafts();
+      const database = await db.database();
+      const [character, session, memories] = await Promise.all([
+        database.get("characters", characterId),
+        database.get("sessions", sessionId),
+        database.getAllFromIndex("memories", "character", characterId),
+      ]);
+      if (!character || !session) throw new Error("角色或会话不存在。");
+      if (character.archived)
+        throw new Error("请先在角色库恢复这个角色，再继续对话。");
+      const after = Math.min(
+        session.summaryThroughSeq,
+        Math.max(0, session.nextMessageSeq - 21),
+      );
+      const history = await db.allMessages(sessionId, after);
+      const body = chatContext(character, session, memories, history, text);
+      if (runController.signal.aborted) return;
+      const turn = await write(() => db.beginTurn(sessionId, text));
+      reply = turn.assistant;
+      liveReply = reply;
+      if (get().sessionId === sessionId)
+        set((state) => ({
+          messages: [...state.messages, turn.user, turn.assistant],
+          draft: "",
+        }));
+      await refreshMetadata();
+      const reason = await streamChat(body, runController.signal, (delta) => {
+        reply = appendDelta(reply!, delta);
+        liveReply = reply;
+        if (!paintTimer)
+          paintTimer = setTimeout(() => {
+            paintTimer = undefined;
+            publish();
+          }, 32);
+        if (!timer) {
+          persist();
+          timer = setTimeout(() => {
+            timer = undefined;
+            persist();
+          }, 500);
+        }
+      });
+      reply = {
+        ...reply,
+        status: reason === "stop" ? "complete" : "error",
+        finishReason: reason,
+        error:
+          reason === "stop"
+            ? plainText(reply)
+              ? undefined
+              : "本次未返回正文。"
+            : reason === "length"
+              ? "输出达到模型长度限制。"
+              : `回复未正常完成（${reason}）。`,
+        checkpointVersion: reply.checkpointVersion + 1,
+        updatedAt: now(),
+      };
+    } catch (error) {
+      const cancelled = runController.signal.aborted && !storageError;
+      if (!reply && !cancelled) preparationError = error;
+      if (reply)
+        reply = {
+          ...reply,
+          status: cancelled ? "cancelled" : "error",
+          error: cancelled
+            ? "已停止，保留已收到的内容。"
+            : errorText(storageError ?? error),
+          checkpointVersion: reply.checkpointVersion + 1,
+          updatedAt: now(),
+        };
+      if (!cancelled) report(storageError ?? error);
+    } finally {
+      clearTimeout(timer);
+      clearTimeout(paintTimer);
+      await queue;
+      if (reply) {
+        publish();
+        try {
+          await write(() => db.checkpoint(reply!));
+        } catch (error) {
+          report(error);
+        }
+      }
+      if (controller === runController) controller = null;
+      liveReply = null;
+      set({ activeSessionId: null });
+    }
+  };
+  const currentRun = run();
+  generation = currentRun;
+  try {
+    await currentRun;
+  } finally {
+    if (generation === currentRun) generation = null;
+  }
+  if (preparationError) throw preparationError;
+}
+export async function cancelGeneration() {
+  controller?.abort();
+  await generation;
+}
+export async function exportBackup() {
+  await cancelGeneration();
+  await flushDrafts();
+  await writes;
+  return takeSnapshot();
+}
+export async function importBackup(backup: Backup) {
+  await cancelGeneration();
+  await flushDrafts();
+  await write(() => restoreSnapshot(backup));
+  const database = await db.database();
+  const characters = await database.getAll("characters");
+  const settings = new Map(
+    (await database.getAll("settings")).map((item) => [item.key, item.value]),
+  );
+  const mode = settings.get("themeMode");
+  set({
+    characters,
+    themeMode: mode === "light" || mode === "dark" ? mode : "system",
+    characterId: null,
+    sessionId: null,
+    sessions: [],
+    messages: [],
+    memories: [],
+    draft: "",
+    error: "",
+  });
+  const character =
+    characters.find((item) => item.id === settings.get("characterId")) ??
+    characters[0];
+  if (character) await selectCharacter(character.id, settings.get("sessionId"));
+}
+export async function clearData() {
+  await cancelGeneration();
+  await flushDrafts();
+  await write(async () => {
+    const database = await db.database();
+    const tx = database.transaction(db.TABLES, "readwrite");
+    for (const table of db.TABLES) await tx.objectStore(table).clear();
+    await tx.done;
+  });
+  ++selection;
+  set({
+    characters: [],
+    sessions: [],
+    memories: [],
+    messages: [],
+    characterId: null,
+    sessionId: null,
+    draft: "",
+    hasEarlier: false,
+    themeMode: "system",
+    error: "",
+  });
+}
