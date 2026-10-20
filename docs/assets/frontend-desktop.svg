@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
+  <title id="title">角色聊天系统桌面布局</title>
+  <desc id="desc">左栏为角色和会话，中间是台词与描写分开呈现的聊天区，右栏是所有林溪会话共享的角色记忆。</desc>
+  <style>
+    text { font-family: 'WenQuanYi Zen Hei', 'Microsoft YaHei', sans-serif; fill: #243a36; font-size: 17px; }
+    .muted { fill: #63756f; font-size: 15px; }
+    .small { font-size: 13px; fill: #63756f; }
+    .heading { font-size: 21px; font-weight: 700; }
+    .label { font-size: 14px; fill: #216957; font-weight: 700; }
+    .white { fill: #fff; font-weight: 700; }
+    .line { stroke: #dce5df; stroke-width: 1; }
+  </style>
+  <rect width="1440" height="900" fill="#eef2ed"/>
+  <text x="42" y="44" class="heading">桌面端 · 简洁淡绿主题 / 浅色模式</text>
+  <text x="42" y="73" class="muted">一键新建对话 · 首条用户消息自动命名 · 复用 assistant-ui 消息、输入与会话列表</text>
+  <rect x="32" y="100" width="1376" height="724" fill="#fff"/>
+  <rect x="32" y="100" width="268" height="724" fill="#f6f8f4"/>
+  <line x1="300" y1="100" x2="300" y2="824" class="line"/>
+  <line x1="1064" y1="100" x2="1064" y2="824" class="line"/>
+  <circle cx="74" cy="143" r="21" fill="#dcece2"/>
+  <text x="63" y="150">林</text>
+  <text x="108" y="141" class="heading">林溪</text>
+  <text x="108" y="166" class="small">旅馆老板 · 切换角色 ⌄</text>
+  <rect x="52" y="196" width="228" height="43" rx="9" fill="#286b58"/>
+  <text x="108" y="224" class="white">＋ 新建对话</text>
+  <text x="54" y="279" class="small">林溪的对话</text>
+  <rect x="48" y="300" width="236" height="73" rx="10" fill="#e2eee5"/>
+  <text x="65" y="330" font-weight="700">我回来了，明天还去…</text>
+  <text x="65" y="354" class="small">正在回复…</text>
+  <text x="65" y="411">废塔探险</text>
+  <text x="65" y="435" class="small">昨天 · 地图上的红色标记</text>
+  <text x="65" y="493">雨后的约定</text>
+  <text x="65" y="517" class="small">10 月 18 日</text>
+  <line x1="52" y1="697" x2="280" y2="697" class="line"/>
+  <text x="65" y="736">角色库</text>
+  <text x="65" y="775">数据管理</text>
+  <text x="330" y="140" class="heading">我回来了，明天还去废塔吗？</text>
+  <text x="330" y="168" class="small">林溪 · 角色记忆共享</text>
+  <rect x="899" y="124" width="140" height="39" rx="9" fill="#eef5ee"/>
+  <text x="918" y="150" class="label">林溪的记忆 →</text>
+  <line x1="300" y1="191" x2="1064" y2="191" class="line"/>
+  <text x="654" y="226" class="small">今天 19:30</text>
+  <rect x="709" y="249" width="320" height="58" rx="14" fill="#e8f0e6"/>
+  <text x="732" y="285">我回来了，明天还去废塔吗？</text>
+  <circle cx="351" cy="352" r="18" fill="#dcece2"/>
+  <text x="342" y="359">林</text>
+  <text x="381" y="357" font-weight="700">林溪</text>
+  <text x="381" y="422">（她放下手中的烛台，抬头望向门口。）</text>
+  <rect x="381" y="480" width="610" height="83" rx="11" fill="#f0f7f1"/>
+  <text x="401" y="516">“当然，阿远。地图我已经收好了。”</text>
+  <text x="401" y="544">“不过，出发前我们得先…”</text>
+  <rect x="675" y="530" width="3" height="18" fill="#44826a"/>
+  <text x="384" y="590" class="small">正在回复 · 可随时停止</text>
+  <text x="384" y="619" class="small">复制    加入角色记忆</text>
+  <line x1="300" y1="674" x2="1064" y2="674" class="line"/>
+  <rect x="330" y="697" width="704" height="88" rx="14" fill="#fff" stroke="#bdcfc1"/>
+  <text x="350" y="729" class="muted">等待林溪回复，或点击停止…</text>
+  <rect x="933" y="739" width="81" height="32" rx="8" fill="#286b58"/>
+  <text x="953" y="761" class="white" style="font-size:14px">■ 停止</text>
+  <text x="333" y="807" class="small">已保存到本机</text>
+  <text x="781" y="807" class="small">Enter 发送 · Shift+Enter 换行</text>
+  <text x="1088" y="140" class="heading">林溪的记忆</text>
+  <text x="1088" y="169" class="small">该角色的全部对话共享</text>
+  <line x1="1064" y1="191" x2="1408" y2="191" class="line"/>
+  <text x="1088" y="231" font-weight="700">重要事实</text>
+  <rect x="1310" y="208" width="74" height="32" rx="8" fill="#e7f1e8"/>
+  <text x="1323" y="230" class="label">＋ 新增</text>
+  <text x="1104" y="283">用户希望被称为“阿远”</text>
+  <text x="1104" y="312" class="small">来源：旅馆初遇 ↗</text>
+  <text x="1104" y="333" class="small">编辑 · 删除</text>
+  <line x1="1088" y1="351" x2="1384" y2="351" class="line"/>
+  <text x="1104" y="391">约好天亮后一起前往废塔</text>
+  <text x="1104" y="420" class="small">来源：雨后的约定 ↗</text>
+  <text x="1104" y="441" class="small">编辑 · 删除</text>
+  <text x="1088" y="503" font-weight="700">跨对话经历摘要</text>
+  <text x="1104" y="552" class="muted">两人在雨夜相识，随后发现</text>
+  <text x="1104" y="581" class="muted">地图上的红色标记。林溪</text>
+  <text x="1104" y="610" class="muted">答应与阿远一起探索废塔。</text>
+  <text x="1104" y="639" class="small">最近更新 19:28 · 查看全部</text>
+  <text x="1088" y="703" class="small">当前回复结束后整理新经历</text>
+  <text x="1088" y="732" class="small">其他角色不会读取这些记忆</text>
+  <text x="42" y="864" class="muted">平铺面板与记忆条目；描写直接排入正文，台词仅保留单层浅底。记忆面板默认收起，图中为展开状态。</text>
+</svg>
