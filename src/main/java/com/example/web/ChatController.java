@@ -35,11 +35,7 @@ public class ChatController {
         }
     }
 
-    @PostMapping(
-            value = "/chat",
-            consumes = MediaType.APPLICATION_JSON_VALUE,
-            produces = MediaType.TEXT_EVENT_STREAM_VALUE
-    )
+    @PostMapping(value = "/chat", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<SseEmitter> chat(@RequestBody ChatApiRequest request) {
         // 必须先校验再进入异步处理，使非法输入直接返回 HTTP 400。
         chatService.validateRequest(request);
