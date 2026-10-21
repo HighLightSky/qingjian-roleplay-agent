@@ -21,6 +21,11 @@ import { imageIds, type ContentPart } from "@/lib/images/types";
 import { chatContext } from "@/lib/chat/context";
 import { streamChat } from "@/lib/chat/sse";
 import {
+  ensureContextBudget,
+  resumeCompactionTasks,
+} from "@/lib/context/coordinator";
+import { unknownUsage, type ContextBudget } from "@/lib/context/types";
+import {
   appendDelta,
   DEFAULT_INTERACTION_SETTINGS,
   errorText,
@@ -40,6 +45,7 @@ import {
 import { restoreSnapshot, takeSnapshot, type Backup } from "@/lib/backup";
 
 type AppState = {
+  contextBudget: { sessionId: string; budget: ContextBudget } | null;
   ready: boolean;
   bootError: string;
   readOnly: boolean;
@@ -64,6 +70,7 @@ type AppState = {
   memoryOpen: boolean;
 };
 export const useAppStore = create<AppState>(() => ({
+  contextBudget: null,
   ready: false,
   bootError: "",
   readOnly: false,
@@ -562,6 +569,7 @@ export async function sendMessage(
           status: "pending",
           error: undefined,
           finishReason: undefined,
+          usage: unknownUsage(),
           checkpointVersion: previous.checkpointVersion + 1,
           updatedAt: now(),
         };
@@ -584,6 +592,12 @@ export async function sendMessage(
         write,
         refreshActivity,
       );
+      await resumeCompactionTasks(
+        sessionId,
+        runController.signal,
+        write,
+        refreshActivity,
+      );
       const [character, session, memories, goals] = await Promise.all([
         database.get("characters", characterId),
         database.get("sessions", sessionId),
@@ -595,7 +609,7 @@ export async function sendMessage(
       const history = (await db.allMessages(sessionId)).filter(
         (m) => m.seq < turn.user.seq,
       );
-      const base = chatContext(
+      let base = chatContext(
         character,
         session,
         memories,
@@ -606,32 +620,73 @@ export async function sendMessage(
         goals,
         `select:${reply.id}`,
       );
-      const body = await prepareImageContext(
+      const { buildCatalog } = await import("@/lib/images/coordinator");
+      base = {
+        ...base,
+        visual: {
+          sessionId,
+          assetCatalog: await buildCatalog(sessionId, history),
+          plan: null,
+          imagePayloads: [],
+        },
+      } as typeof base;
+      const budgetRun = { batches: 0 };
+      let prepared = await ensureContextBudget(
         base,
-        sessionId,
-        history,
-        runController.signal,
+        "required",
         reply.id,
-        recordOperation,
+        runController.signal,
+        write,
+        refreshActivity,
+        budgetRun,
       );
+      let body;
+      for (;;) {
+        body = await prepareImageContext(
+          prepared.context,
+          sessionId,
+          history,
+          runController.signal,
+          reply.id,
+          recordOperation,
+        );
+        const checked = await ensureContextBudget(
+          body,
+          "final",
+          reply.id,
+          runController.signal,
+          write,
+          refreshActivity,
+          budgetRun,
+        );
+        set({ contextBudget: { sessionId, budget: checked.budget } });
+        if (!checked.compacted) break;
+        prepared = checked;
+      }
       runController.signal.throwIfAborted();
       set({ preparingInput: false });
-      const reason = await streamChat(body, runController.signal, (delta) => {
-        reply = appendDelta(reply!, delta);
-        liveReply = reply;
-        if (!paintTimer)
-          paintTimer = setTimeout(() => {
-            paintTimer = undefined;
-            publish();
-          }, 32);
-        if (!timer) {
-          persist();
-          timer = setTimeout(() => {
-            timer = undefined;
+      const result = await streamChat(
+        body,
+        runController.signal,
+        (delta) => {
+          reply = appendDelta(reply!, delta);
+          liveReply = reply;
+          if (!paintTimer)
+            paintTimer = setTimeout(() => {
+              paintTimer = undefined;
+              publish();
+            }, 32);
+          if (!timer) {
             persist();
-          }, 500);
-        }
-      });
+            timer = setTimeout(() => {
+              timer = undefined;
+              persist();
+            }, 500);
+          }
+        },
+        (budget) => set({ contextBudget: { sessionId, budget } }),
+      );
+      const reason = result.finishReason;
       clearTimeout(timer);
       clearTimeout(paintTimer);
       await queue;
@@ -640,6 +695,7 @@ export async function sendMessage(
         ...reply,
         status: reason === "stop" && plainText(reply) ? "complete" : "error",
         finishReason: reason,
+        usage: result.usage,
         error:
           reason === "stop"
             ? plainText(reply)
@@ -753,6 +809,34 @@ export async function retryLastMessage() {
   const user = messages.filter((m) => m.role === "user").at(-1);
   if (!user) return;
   return sendMessage(user.text ?? "", user.parts, user.id);
+}
+
+export async function recoverCompactionTasks(operationId: string) {
+  const sessionId = get().sessionId;
+  if (!sessionId || get().readOnly || get().activeSessionId) return;
+  const runController = new AbortController();
+  controller = runController;
+  set({ activeSessionId: sessionId, preparingInput: true });
+  const currentRun = resumeCompactionTasks(
+    sessionId,
+    runController.signal,
+    write,
+    refreshActivity,
+    operationId,
+  )
+    .catch((error) => {
+      if (!runController.signal.aborted) report(error);
+    })
+    .finally(() => {
+      if (controller === runController) controller = null;
+      set({ activeSessionId: null, preparingInput: false });
+    });
+  generation = currentRun;
+  try {
+    await currentRun;
+  } finally {
+    if (generation === currentRun) generation = null;
+  }
 }
 export async function cancelGeneration() {
   controller?.abort();

@@ -10,7 +10,7 @@ import {
 } from "../domain";
 import type { Goal, StateSnapshot } from "../state/types";
 
-function historyText(message: Message): string {
+export function historyText(message: Message): string {
   const text =
     message.role === "user"
       ? plainText(message)
@@ -64,7 +64,22 @@ export function chatContext(
   goals: Goal[] = [],
   operationId = `chat:${session.id}`,
 ) {
-  const history = messages
+  const history = historyMessages(
+    messages.filter((m) => m.seq > session.summary.throughSeq),
+  );
+  return {
+    character: session.characterSnapshot,
+    state: stateSnapshot(character, session, memories, goals),
+    summary: { ...session.summary },
+    history,
+    input: { text: input, ...(parts ? { parts } : {}) },
+    interactionSettings: { ...interactionSettings },
+    operationId,
+  };
+}
+
+export function historyMessages(messages: Message[]) {
+  return messages
     .filter(
       (m) =>
         !["pending", "streaming"].includes(m.status) &&
@@ -73,24 +88,12 @@ export function chatContext(
     .map((m) => ({
       role: m.role,
       id: m.id,
+      seq: m.seq,
+      status: m.status,
+      checkpointVersion: m.checkpointVersion,
       parts: m.parts,
       text: historyText(m),
     }));
-  const earlierHistory = history
-    .slice(0, -20)
-    .map((m) => `${m.role === "user" ? "用户" : character.name}：${m.text}`)
-    .join("\n");
-  if (earlierHistory.length > 20_000)
-    throw new Error("较早原文已超过本轮上下文字符预算，本版尚未支持自动压缩。");
-  return {
-    character: session.characterSnapshot,
-    state: stateSnapshot(character, session, memories, goals),
-    earlierHistory,
-    history: history.slice(-20),
-    input: { text: input, ...(parts ? { parts } : {}) },
-    interactionSettings: { ...interactionSettings },
-    operationId,
-  };
 }
 export type ChatContext = ReturnType<typeof chatContext> & {
   visual?: VisualContext;

@@ -13,7 +13,6 @@
     "narrativeMode": "scene"
   },
   "operationId": "chat:example",
-  "earlierHistory": "",
   "state": {
     "sessionId": "session-example",
     "characterId": "character-example",
@@ -33,5 +32,10 @@
     "storySources": {},
     "memories": [],
     "goals": []
+  },
+  "summary": {
+    "text": "",
+    "throughSeq": 0,
+    "version": 0
   }
 }

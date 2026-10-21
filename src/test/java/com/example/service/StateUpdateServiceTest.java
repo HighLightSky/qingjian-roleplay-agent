@@ -13,6 +13,8 @@ import org.junit.jupiter.api.Test;
 import com.example.TestRequests;
 import com.example.config.VisionProperties;
 import com.example.llm.LLMClient;
+import com.example.llm.model.ChatStreamResult;
+import com.example.llm.model.TokenUsage;
 import com.example.llm.model.*;
 import com.example.prompt.StateUpdatePromptBuilder;
 import com.example.web.dto.*;
@@ -29,11 +31,11 @@ class StateUpdateServiceTest {
     StateUpdateServiceTest() {
         vision.setSupported(true);
         service = new StateUpdateService(model, mapper, new StateUpdatePromptBuilder(mapper),
-                new ContextValidation(mapper), new ImageValidationService(vision));
+                new ContextValidation(mapper), new ImageValidationService(vision), com.example.TestRequests.budgets());
     }
 
     private UpdateRequest request(Snapshot state, List<ContentPartDto> parts, List<Payload> payloads) {
-        return new UpdateRequest("operation", new ChatApiRequest(new CharacterDto("林溪", "旧友", "老板"), state, "",
+        return new UpdateRequest("operation", new ChatApiRequest(new CharacterDto("林溪", "旧友", "老板"), state, com.example.TestRequests.summary(),
                 List.of(), new InputDto("我们到了旅馆", parts),
                 new InteractionSettingsDto(InteractionSettingsDto.ReplyLength.STANDARD, InteractionSettingsDto.NarrativeMode.SCENE),
                 payloads.isEmpty() ? null : new Context("session", List.of(), null, payloads), "operation"), 0, 2,
@@ -42,7 +44,7 @@ class StateUpdateServiceTest {
     }
 
     private UpdateRequest request() { return request(TestRequests.state(List.of()), null, List.of()); }
-    private void answer(String content) throws Exception { when(model.chat(any())).thenReturn(new ChatResponse(content, "stop")); }
+    private void answer(String content) throws Exception { when(model.chat(any())).thenReturn(new ChatResponse(content, "stop", com.example.llm.model.TokenUsage.unavailable())); }
     private String output(String story, String memory, String goal) {
         return "{\"visualObservations\":[],\"storyChanges\":" + story + ",\"memoryChanges\":" + memory + ",\"goalChanges\":" + goal + "}";
     }
@@ -120,7 +122,7 @@ class StateUpdateServiceTest {
             answer(json);
             assertThrows(IOException.class, () -> service.update(request()));
         }
-        when(model.chat(any())).thenReturn(new ChatResponse(output("[]", "[]", "[]"), "length"));
+        when(model.chat(any())).thenReturn(new ChatResponse(output("[]", "[]", "[]"), "length", com.example.llm.model.TokenUsage.unavailable()));
         assertThrows(IOException.class, () -> service.update(request()));
     }
 
@@ -209,7 +211,7 @@ class StateUpdateServiceTest {
     @Test void characterAndBudgetsAreValidatedAtEntry() {
         var r = request();
         var context = r.context();
-        var oversized = new ChatApiRequest(context.character(), context.state(), "字".repeat(ContextLimits.EARLIER_HISTORY_CHARS + 1),
+        var oversized = new ChatApiRequest(context.character(), context.state(), new com.example.web.dto.ContextDtos.HistorySummary("字".repeat(ContextLimits.CONTEXT_CHARS + 1), 1, 1),
                 context.history(), context.input(), context.interactionSettings(), context.visual(), context.operationId());
         assertThrows(IllegalArgumentException.class, () -> service.update(new UpdateRequest("operation", oversized, 0, 2, r.messages())));
         verifyNoInteractions(model);

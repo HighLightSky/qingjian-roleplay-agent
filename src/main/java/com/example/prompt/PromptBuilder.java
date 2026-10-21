@@ -44,10 +44,19 @@ public class PromptBuilder {
      * @return 包含消息列表与生成参数的模型请求
      */
     public ChatRequest build(ChatApiRequest request) {
+        return assemble(request, true);
+    }
+
+    /** 预算预览允许尚未加载图片字节，原图另按尺寸估算，不发送此请求生成正文。 */
+    public ChatRequest buildText(ChatApiRequest request) {
+        return assemble(request, false);
+    }
+
+    private ChatRequest assemble(ChatApiRequest request, boolean includeImages) {
         StringBuilder systemPrompt = new StringBuilder(buildSystemPrompt(
-                request.character(), request.state(), request.earlierHistory(), request.interactionSettings()));
+                request.character(), request.state(), request.summary().text(), request.interactionSettings()));
         List<Message> messages = new ArrayList<>();
-        appendVisualContext(systemPrompt, messages, request);
+        appendVisualContext(systemPrompt, messages, request, includeImages);
         messages.addFirst(new Message("system", systemPrompt.toString()));
 
         return new ChatRequest(
@@ -95,7 +104,7 @@ public class PromptBuilder {
         state.goals().stream().filter(g -> !"dismissed".equals(g.value().status()))
                 .forEach(g -> systemPrompt.append(g.value()).append('\n'));
         if (!earlierHistory.isBlank()) {
-            systemPrompt.append("\n【较早聊天原文，未经摘要】\n").append(earlierHistory).append('\n');
+            systemPrompt.append("\n【较早历史摘要：有损记录，保持来源与不确定性】\n").append(earlierHistory).append('\n');
         }
         return systemPrompt.toString();
     }
@@ -143,7 +152,8 @@ public class PromptBuilder {
     }
 
     /** 原图仅放入选中的来源消息；较早消息中的图片作为历史参考重新提供。 */
-    private void appendVisualContext(StringBuilder systemPrompt, List<Message> messages, ChatApiRequest request) {
+    private void appendVisualContext(StringBuilder systemPrompt, List<Message> messages, ChatApiRequest request,
+            boolean includeImages) {
         List<Asset> catalog = request.visual() == null ? List.of() : request.visual().assetCatalog();
         Map<String, Asset> assetsById = catalog.stream().collect(Collectors.toMap(Asset::assetId, a -> a));
         Map<String, String> payloads = new HashMap<>();
@@ -185,7 +195,7 @@ public class PromptBuilder {
                         parts.add(Message.Part.text(p.text()));
                     } else if (selectedIds.contains(p.assetId()) && sent.add(p.assetId())) {
                         parts.add(Message.Part.text("历史图片 " + p.assetId()));
-                        parts.add(Message.Part.image(payloads.get(p.assetId())));
+                        if (includeImages) parts.add(Message.Part.image(payloads.get(p.assetId())));
                     } else {
                         parts.add(Message.Part.text("[历史图片引用：" + p.assetId() + "，本位置未附原图]"));
                     }
@@ -199,7 +209,7 @@ public class PromptBuilder {
                 continue;
             archived.add(Message.Part.text("历史视觉参考（不是本轮上传），来源："
                     + assetsById.get(p.assetId()).sources() + "，用途：" + p.purpose()));
-            archived.add(Message.Part.image(payloads.get(p.assetId())));
+            if (includeImages) archived.add(Message.Part.image(payloads.get(p.assetId())));
         }
         if (!archived.isEmpty())
             messages.add(new Message("user", archived));
@@ -209,7 +219,7 @@ public class PromptBuilder {
                 current.add(Message.Part.text(p.text()));
             } else {
                 current.add(Message.Part.text("本轮图片 " + p.assetId()));
-                current.add(Message.Part.image(payloads.get(p.assetId())));
+                if (includeImages) current.add(Message.Part.image(payloads.get(p.assetId())));
             }
         }
         messages.add(toMessage("user", current));

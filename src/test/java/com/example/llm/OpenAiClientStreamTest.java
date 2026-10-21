@@ -2,6 +2,7 @@ package com.example.llm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import com.example.llm.model.ChatRequest;
+import com.example.llm.model.ChatStreamResult;
 import com.example.llm.model.Message;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -34,6 +36,7 @@ class OpenAiClientStreamTest {
             byte[] data = ("data: {\"choices\":[{\"delta\":{\"content\":\"[台\"}}]}\n\n"
                     + "data: {\"choices\":[{\"delta\":{\"content\":\"词]你好\"}}]}\n\n"
                     + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+                    + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":18,\"total_tokens\":33,\"prompt_tokens_details\":{\"cached_tokens\":11}}}\n\n"
                     + "data: [DONE]\n\n").getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
             exchange.sendResponseHeaders(200, 0);
@@ -44,13 +47,43 @@ class OpenAiClientStreamTest {
         server.start();
         try (HttpClient http = HttpClient.newHttpClient()) {
             List<String> chunks = new ArrayList<>();
-            String reason = client(http, server).chatStream(request(), chunks::add);
-            assertEquals("stop", reason);
+            ChatStreamResult result = client(http, server).chatStream(request(), chunks::add);
+            assertEquals("stop", result.finishReason());
+            assertEquals(15L, result.usage().inputTokens());
+            assertEquals(18L, result.usage().outputTokens());
+            assertEquals(33L, result.usage().totalTokens());
             assertEquals(List.of("[台", "词]你好"), chunks);
             assertTrue(new ObjectMapper().readTree(requestBody.get()).path("stream").asBoolean());
+            assertTrue(new ObjectMapper().readTree(requestBody.get()).path("stream_options").path("include_usage").asBoolean());
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void preservesLengthUsageAndDistinguishesUnknownUsageFromBrokenStreams() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicReference<String> payload = new AtomicReference<>();
+        server.createContext("/chat", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            byte[] bytes = payload.get().getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (var body = exchange.getResponseBody()) { body.write(bytes); }
+        });
+        server.start();
+        try (HttpClient http = HttpClient.newHttpClient()) {
+            String finish = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n";
+            String usage = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":10,\"total_tokens\":30}}\n\n";
+            payload.set(finish + usage + usage + "data: [DONE]\n\n");
+            var result = client(http, server).chatStream(request(), text -> {});
+            assertEquals("length", result.finishReason());
+            assertEquals(30L, result.usage().totalTokens());
+            payload.set(finish + "data: [DONE]\n\n");
+            assertEquals("unavailable", client(http, server).chatStream(request(), text -> {}).usage().status());
+            payload.set(finish + usage);
+            assertThrows(IOException.class, () -> client(http, server).chatStream(request(), text -> {}));
+        } finally { server.stop(0); }
     }
 
     @Test
@@ -129,7 +162,8 @@ class OpenAiClientStreamTest {
     private OpenAiClient client(HttpClient http, HttpServer server) {
         return new OpenAiClient(http, new ObjectMapper(),
                 "http://127.0.0.1:" + server.getAddress().getPort() + "/chat",
-                "test-key", "test-model", Duration.ofSeconds(5));
+                "test-key", Duration.ofSeconds(5), new LlmRequestMapper(new ObjectMapper(),
+                new com.example.config.LlmProperties("", "", "test-model", .8, 800, 5)));
     }
 
     private ChatRequest request() {

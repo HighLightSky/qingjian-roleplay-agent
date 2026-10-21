@@ -9,6 +9,7 @@ import {
 import {
   useAppStore,
   recoverStateTasks,
+  recoverCompactionTasks,
   retryLastMessage,
   report,
 } from "@/stores/use-app-store";
@@ -24,6 +25,7 @@ import {
 } from "@/lib/state/types";
 import { useImageUrl } from "@/hooks/use-image-url";
 import { Button } from "@/components/ui/button";
+import type { CompactionResult } from "@/lib/context/types";
 
 function Picture({ id }: { id: string }) {
   const url = useImageUrl(id, true);
@@ -69,7 +71,11 @@ function describe(value: unknown): string {
 }
 function summary(op: Operation) {
   const label =
-    op.kind === "selection" ? "选择历史图片" : "整理视觉、剧情、记忆与目标";
+    op.kind === "selection"
+      ? "选择历史图片"
+      : op.kind === "compaction"
+        ? "压缩较早剧情"
+        : "整理视觉、剧情、记忆与目标";
   if (op.status === "pending") return `${label}：等待执行`;
   if (op.status === "running") return `${label}：正在请求`;
   if (op.status === "computed")
@@ -77,7 +83,15 @@ function summary(op: Operation) {
   if (op.status === "cancelled") return `${label}：已停止`;
   if (op.status === "stale") return `${label}：结果已过期`;
   if (op.status === "failed")
-    return op.kind === "state_update" ? "正文已保存，整理待重试" : "选图未完成";
+    return op.kind === "state_update"
+      ? "正文已保存，整理待重试"
+      : op.kind === "compaction"
+        ? "压缩未完成，待重试"
+        : "选图未完成";
+  if (op.kind === "compaction") {
+    const result = op.result as CompactionResult;
+    return `已压缩较早剧情：${result.beforeTokens.toLocaleString()} → ${result.afterTokens.toLocaleString()} token`;
+  }
   if (op.kind === "selection") {
     const { plan } = op.result as SelectionResult;
     return plan.selectedHistoricalImages.length
@@ -196,6 +210,20 @@ const AppOperation: ToolCallMessagePartComponent = (props) => {
           {operation.result &&
             (operation.kind === "selection" ? (
               <SelectionDetails result={operation.result as SelectionResult} />
+            ) : operation.kind === "compaction" ? (
+              <div className="space-y-2">
+                <p>
+                  摘要覆盖至消息{" "}
+                  {(operation.result as CompactionResult).throughSeq}
+                  ；原始聊天记录继续保存在本地。
+                </p>
+                <p className="whitespace-pre-wrap">
+                  {(operation.result as CompactionResult).summary.text}
+                </p>
+                <SourceLinks
+                  ids={(operation.result as CompactionResult).sourceMessageIds}
+                />
+              </div>
             ) : (
               <StateDetails result={operation.result as StateResult} />
             ))}
@@ -206,9 +234,11 @@ const AppOperation: ToolCallMessagePartComponent = (props) => {
               disabled={disabled}
               onClick={() =>
                 void (
-                  operation.kind === "state_update"
-                    ? recoverStateTasks(operation.id)
-                    : retryLastMessage()
+                  operation.kind === "compaction"
+                    ? recoverCompactionTasks(operation.id)
+                    : operation.kind === "state_update"
+                      ? recoverStateTasks(operation.id)
+                      : retryLastMessage()
                 ).catch(report)
               }
             >
@@ -221,7 +251,7 @@ const AppOperation: ToolCallMessagePartComponent = (props) => {
   );
 };
 export const OperationTool: ToolCallMessagePartComponent = (props) =>
-  props.toolName === "selection" || props.toolName === "state_update" ? (
+  ["selection", "state_update", "compaction"].includes(props.toolName) ? (
     <AppOperation {...props} />
   ) : (
     <ToolFallback {...props} />

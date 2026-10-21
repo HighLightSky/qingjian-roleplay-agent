@@ -32,6 +32,8 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import com.example.llm.LLMClient;
+import com.example.llm.model.ChatStreamResult;
+import com.example.llm.model.TokenUsage;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -49,6 +51,15 @@ class ChatControllerTest {
     @MockitoBean
     private LLMClient llmClient;
 
+    @MockitoBean
+    private com.example.service.LlamaTokenCounter counter;
+
+    @org.junit.jupiter.api.BeforeEach
+    void counts() throws Exception {
+        org.mockito.Mockito.when(counter.count(any())).thenReturn(
+                new com.example.web.dto.ContextDtos.TokenCount(100, "exact", "test", "fingerprint"));
+    }
+
     @Test
     void streamsBeforeGenerationCompletesAndThenSendsDone() throws Exception {
         CountDownLatch continueGeneration = new CountDownLatch(1);
@@ -57,7 +68,7 @@ class ChatControllerTest {
             onText.accept("[台词]“你好。”");
             assertTrue(continueGeneration.await(5, TimeUnit.SECONDS));
             onText.accept("\n[描写]（她挥手。）");
-            return "stop";
+            return new ChatStreamResult("stop", TokenUsage.unavailable());
         }).when(llmClient).chatStream(any(), any());
 
         try (HttpClient client = HttpClient.newHttpClient()) {
@@ -68,6 +79,8 @@ class ChatControllerTest {
             assertEquals("no", response.headers().firstValue("X-Accel-Buffering").orElseThrow());
             try (BufferedReader reader = reader(response)) {
                 // 模型尚未结束时已经能读到首个事件，证明没有缓冲整段回复。
+                String contextEvent = readEvent(reader);
+                assertTrue(contextEvent.contains("event:context"), contextEvent);
                 String firstEvent = readEvent(reader);
                 assertTrue(firstEvent.contains("event:delta"), firstEvent);
                 assertTrue(firstEvent.contains("\"kind\":\"dialogue\""), firstEvent);
@@ -100,19 +113,23 @@ class ChatControllerTest {
     }
 
     @Test
-    void returns502JsonBeforeFirstEventWithoutLeakingUpstreamDetails() throws Exception {
+    void sendsModelErrorAfterContextWithoutLeakingUpstreamDetails() throws Exception {
         doAnswer(invocation -> { throw new IOException("secret-api-key upstream body"); })
                 .when(llmClient).chatStream(any(), any());
         HttpResponse<String> response = post(validJson());
-        assertJsonError(response, 502, "MODEL_ERROR");
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains("event:context"));
+        assertTrue(response.body().contains("MODEL_ERROR"));
         assertFalse(response.body().contains("secret"));
     }
 
     @Test
-    void returns504JsonForUpstreamTimeoutBeforeFirstEvent() throws Exception {
+    void sendsTimeoutAfterContext() throws Exception {
         doAnswer(invocation -> { throw new HttpTimeoutException("upstream timed out"); })
                 .when(llmClient).chatStream(any(), any());
-        assertJsonError(post(validJson()), 504, "MODEL_TIMEOUT");
+        var response = post(validJson());
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains("MODEL_TIMEOUT"));
     }
 
     @Test
@@ -132,10 +149,12 @@ class ChatControllerTest {
     }
 
     @Test
-    void deadlineBeforeFirstEventReturns504AndInterruptsWorker() throws Exception {
+    void deadlineAfterContextSendsTimeoutAndInterruptsWorker() throws Exception {
         CountDownLatch stopped = new CountDownLatch(1);
         blockModel(false, stopped);
-        assertJsonError(post(validJson()), 504, "MODEL_TIMEOUT");
+        var response = post(validJson());
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains("MODEL_TIMEOUT"));
         assertTrue(stopped.await(3, TimeUnit.SECONDS));
     }
 
@@ -171,6 +190,7 @@ class ChatControllerTest {
         try (HttpClient client = HttpClient.newHttpClient()) {
             HttpResponse<InputStream> response = client.send(request(validJson()), HttpResponse.BodyHandlers.ofInputStream());
             try (BufferedReader reader = reader(response)) {
+                assertTrue(readEvent(reader).contains("event:context"));
                 assertTrue(readEvent(reader).contains("event:delta"));
             }
             assertTrue(stopped.await(1, TimeUnit.SECONDS), "连接断开后应停止生成，无需等待两秒截止时间");
@@ -185,7 +205,7 @@ class ChatControllerTest {
                     onText.accept("[台词]部分回复");
                 }
                 new CountDownLatch(1).await();
-                return "stop";
+                return new ChatStreamResult("stop", TokenUsage.unavailable());
             } finally {
                 stopped.countDown();
             }
@@ -226,7 +246,7 @@ class ChatControllerTest {
             assertTrue(prompt.contains("【叙事推进】"));
             Consumer<String> onText = invocation.getArgument(1);
             onText.accept("[台词]我来看看地图。\n[描写]她展开地图。");
-            return "stop";
+            return new ChatStreamResult("stop", TokenUsage.unavailable());
         }).when(llmClient).chatStream(any(), any());
         for (String length : List.of("short", "standard", "detailed")) {
             for (String mode : List.of("interactive", "scene")) {
@@ -280,7 +300,7 @@ class ChatControllerTest {
 
     @Test
     void acceptsNameOnlyAndExactCharacterLimits() throws Exception {
-        doAnswer(invocation -> "stop").when(llmClient).chatStream(any(), any());
+        doAnswer(invocation -> new ChatStreamResult("stop", TokenUsage.unavailable())).when(llmClient).chatStream(any(), any());
         for (boolean full : List.of(false, true)) {
             ObjectNode body = (ObjectNode) objectMapper.readTree(validJson());
             ((ObjectNode) body.get("character")).put("name", "名".repeat(full ? 60 : 1))
@@ -339,7 +359,7 @@ class ChatControllerTest {
         return """
                 {"character":{"name":"林溪","identity":"老板","description":"好奇，说话简短，生活在山城。"},
                 "operationId":"operation","state":{"sessionId":"session","characterId":"character","sessionVersion":0,"memoryVersion":0,"processedThroughSeq":0,
-                "story":{"location":"","storyTime":"","characterState":"","userState":"","presentCharacters":[],"relationships":[],"items":[],"openThreads":[]},"memories":[],"goals":[]},"earlierHistory":"","history":[],"input":{"text":"你好"},
+                "story":{"location":"","storyTime":"","characterState":"","userState":"","presentCharacters":[],"relationships":[],"items":[],"openThreads":[]},"memories":[],"goals":[]},"summary":{"text":"","throughSeq":0,"version":0},"history":[],"input":{"text":"你好"},
                 "interactionSettings":{"replyLength":"standard","narrativeMode":"scene"}}
                 """;
     }

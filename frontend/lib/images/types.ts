@@ -68,6 +68,13 @@ export type VisualContext = {
   imagePayloads: ImagePayload[];
 };
 export type Capabilities = {
+  contextWindowTokens: number;
+  outputReserveTokens: number;
+  safetyTokens: number;
+  compactionTriggerRatio: number;
+  compactionTargetRatio: number;
+  retainedTurns: number;
+  compactionMaxBatches: number;
   visionSupported: boolean;
   mimeTypes: string[];
   maxImages: number;

@@ -18,14 +18,16 @@ public class VisualSelectionService {
     private final VisualSelectionPromptBuilder prompts;
     private final ImageValidationService images;
     private final ContextValidation contexts;
+    private final ContextBudgetService budgets;
 
     public VisualSelectionService(LLMClient client, ObjectMapper mapper, VisualSelectionPromptBuilder prompts,
-            ImageValidationService images, ContextValidation contexts) {
+            ImageValidationService images, ContextValidation contexts, ContextBudgetService budgets) {
         this.client = client;
         this.mapper = mapper;
         this.prompts = prompts;
         this.images = images;
         this.contexts = contexts;
+        this.budgets = budgets;
     }
 
     /** 绑定发送前上下文及观察版本；排除随后补传的字节和计划自身，便于无状态复核。 */
@@ -46,9 +48,7 @@ public class VisualSelectionService {
         List<Asset> catalog = ImageValidationService.catalog(request);
         if (catalog.isEmpty())
             return new Plan("ready", List.of(), List.of(), "", fingerprint(request), request.operationId());
-        int budget = images.properties().getPlanningInputChars() - prompts.context(request).length() - 2500;
-        if (budget < 1000)
-            throw new IllegalArgumentException("选图文字上下文超过规划预算，请先整理剧情");
+        int budget = images.properties().getPlanningInputChars();
         List<List<Asset>> batches = new ArrayList<>();
         List<Asset> batch = new ArrayList<>();
         int size = 0;
@@ -103,7 +103,9 @@ public class VisualSelectionService {
         String phase = candidatePhase ? "当前为目录分批候选提取。只判断当前批次中相关的图，不因其他图片未在本批出现而猜测其 ID；候选之后会统一决策。" : "当前为最终选图，判断完整候选中本次真正需要的原图。";
         String correction = phase;
         for (int attempt = 0; attempt < 2; attempt++) {
-            var response = client.chat(prompts.build(r, catalog, slots, correction));
+            var modelRequest = prompts.build(r, catalog, slots, correction);
+            budgets.checkModelRequest(modelRequest);
+            var response = client.chat(modelRequest);
             try {
                 if (!"stop".equals(response.getFinishReason()))
                     throw new IllegalArgumentException("选图输出未完成");

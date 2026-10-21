@@ -18,6 +18,8 @@ public class StateUpdatePromptBuilder {
 
     public String material(UpdateRequest r) {
         var data = mapper.valueToTree(r);
+        // 整理只需要本批来源和已有领域状态，不重复注入完整聊天历史。
+        ((com.fasterxml.jackson.databind.node.ObjectNode) data.path("context")).remove("history");
         if (data.path("context").path("visual").isObject())
             ((com.fasterxml.jackson.databind.node.ObjectNode) data.path("context").path("visual"))
                     .remove("imagePayloads");

@@ -23,6 +23,140 @@ async function send(page: Page, text: string) {
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
 }
 
+test("上下文环位于32px发送按钮左侧，支持查看预留，本轮usage刷新后保留", async ({
+  page,
+}) => {
+  await createRole(page);
+  const ring = page.getByRole("button", { name: "上下文用量", exact: true });
+  const sendButton = page.getByRole("button", {
+    name: "发送消息",
+    exact: true,
+  });
+  await expect(ring).toBeVisible();
+  const layout = await Promise.all([
+    ring.boundingBox(),
+    sendButton.boundingBox(),
+    page.getByRole("button", { name: "图片", exact: true }).boundingBox(),
+    page.getByRole("button", { name: /^回复长度：/ }).boundingBox(),
+  ]);
+  for (const box of layout) expect(Math.round(box!.height)).toBe(32);
+  expect(layout[0]!.x + layout[0]!.width).toBeLessThanOrEqual(layout[1]!.x);
+  if ((page.viewportSize()?.width ?? 1440) < 768) await ring.tap();
+  else await ring.hover();
+  await expect(page.getByText("输出预留：8,192 token")).toBeVisible();
+  await expect(page.getByText(/精确计数/)).toBeVisible();
+  await page.getByRole("textbox", { name: "消息内容" }).click();
+  await send(page, "你好");
+  await expect(
+    page.locator('[data-slot="turn-token-usage"]').last(),
+  ).toHaveText("输入 12,300 · 输出 780 · 合计 13,080 token");
+  await page.reload();
+  await expect(
+    page.locator('[data-slot="turn-token-usage"]').last(),
+  ).toHaveText("输入 12,300 · 输出 780 · 合计 13,080 token");
+});
+
+test("达到70%自动压缩前30轮并保留最近10轮，原始历史不删除", async ({
+  page,
+}) => {
+  await createRole(page);
+  await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("roleplay-agent", 5);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      const tx = db.transaction(["sessions", "messages"], "readwrite");
+      const request = tx.objectStore("sessions").getAll();
+      request.onsuccess = () => {
+        const session = request.result[0];
+        const timestamp = new Date().toISOString();
+        for (let i = 0; i < 40; i++) {
+          const userId = `old-user-${i}`;
+          tx.objectStore("messages").put({
+            id: userId,
+            sessionId: session.id,
+            seq: i * 2 + 1,
+            role: "user",
+            text: `旧问题${i}`,
+            status: "complete",
+            checkpointVersion: 1,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          });
+          tx.objectStore("messages").put({
+            id: `old-assistant-${i}`,
+            sessionId: session.id,
+            seq: i * 2 + 2,
+            role: "assistant",
+            replyToMessageId: userId,
+            segments: [
+              {
+                kind: "narration",
+                text: "旧剧情中的地图与人物约定。".repeat(1000),
+              },
+            ],
+            usage: {
+              status: "unavailable",
+              inputTokens: null,
+              outputTokens: null,
+              totalTokens: null,
+            },
+            status: "complete",
+            checkpointVersion: 1,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          });
+        }
+        tx.objectStore("sessions").put({
+          ...session,
+          nextMessageSeq: 81,
+          stateProcessedThroughSeq: 80,
+        });
+      };
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error);
+      });
+    } finally {
+      db.close();
+    }
+  });
+  await page.reload();
+  let input:
+    { summary: { throughSeq: number }; history: { seq: number }[] } | undefined;
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/chat")) input = request.postDataJSON();
+  });
+  await send(page, "继续");
+  await expect(
+    page.locator('[data-slot="turn-token-usage"]').last(),
+  ).toContainText("合计 13,080 token");
+  expect(input!.summary.throughSeq).toBe(60);
+  expect(input!.history.map((m) => m.seq)).toEqual(
+    Array.from({ length: 20 }, (_, i) => i + 61),
+  );
+  await expect(page.locator('[data-operation="compaction"]')).toContainText(
+    "已压缩较早剧情",
+  );
+  const count = await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      const r = indexedDB.open("roleplay-agent", 5);
+      r.onsuccess = () => resolve(r.result);
+    });
+    try {
+      return await new Promise<number>((resolve) => {
+        const r = db.transaction("messages").objectStore("messages").count();
+        r.onsuccess = () => resolve(r.result);
+      });
+    } finally {
+      db.close();
+    }
+  });
+  expect(count).toBe(82);
+});
+
 async function chooseSetting(page: Page, label: string, option: string) {
   await page.getByRole("button", { name: new RegExp(`^${label}：`) }).click();
   await page
@@ -403,7 +537,7 @@ test("LAN HTTP access hydrates, creates IDs and restores the conversation", asyn
     await page.route("**/api/chat", (route) =>
       route.fulfill({
         contentType: "text/event-stream",
-        body: 'event: delta\ndata: {"kind":"dialogue","text":"“欢迎回来，旅人。”"}\n\nevent: done\ndata: {"finishReason":"stop"}\n\n',
+        body: 'event: delta\ndata: {"kind":"dialogue","text":"“欢迎回来，旅人。”"}\n\nevent: done\ndata: {"finishReason":"stop","usage":{"status":"reported","inputTokens":100,"outputTokens":20,"totalTokens":120}}\n\n',
       }),
     );
     await createRole(page);
@@ -972,7 +1106,9 @@ test("精简目标详情、双方剧情状态、折叠消息预览及手动星�
   });
   await expect(messageLink).toBeVisible();
   await expect(
-    references.getByRole("button", { name: /^消息2：（她放下烛台，望向门口。）/ }),
+    references.getByRole("button", {
+      name: /^消息2：（她放下烛台，望向门口。）/,
+    }),
   ).toBeVisible();
   await messageLink.click();
   await expect(

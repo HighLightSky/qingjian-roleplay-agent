@@ -1,4 +1,10 @@
 import { migrateV4 } from "./state/migrate-v4";
+import { migrateV5 } from "./context/migrate-v5";
+import {
+  emptySummary,
+  unknownUsage,
+  type CompactionTask,
+} from "./context/types";
 import { validateMemoryValue } from "./state/validation";
 import {
   EMPTY_STORY,
@@ -31,6 +37,11 @@ import {
 } from "./domain";
 
 export interface RoleplayDB extends DBSchema {
+  compactionTasks: {
+    key: string;
+    value: CompactionTask;
+    indexes: { session: string };
+  };
   assets: { key: string; value: ImageAsset; indexes: { sha256: string } };
   visualObservations: {
     key: string;
@@ -53,6 +64,7 @@ export interface RoleplayDB extends DBSchema {
   settings: { key: string; value: Setting };
 }
 export const TABLES = [
+  "compactionTasks",
   "characters",
   "sessions",
   "messages",
@@ -70,13 +82,19 @@ let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
     let upgradeError: unknown;
-    connection = openDB<RoleplayDB>("roleplay-agent", 4, {
+    connection = openDB<RoleplayDB>("roleplay-agent", 5, {
       upgrade(db, oldVersion, _newVersion, tx) {
         void tx.done.catch((error: unknown) => {
           upgradeError ??= error;
         });
-        if (oldVersion === 3) {
-          void migrateV4(tx).catch((error: unknown) => {
+        if (oldVersion === 3 || oldVersion === 4) {
+          db.createObjectStore("compactionTasks", {
+            keyPath: "id",
+          }).createIndex("session", "sessionId");
+          void (async () => {
+            if (oldVersion === 3) await migrateV4(tx);
+            await migrateV5(tx);
+          })().catch((error: unknown) => {
             upgradeError = error;
             tx.abort();
           });
@@ -109,6 +127,7 @@ export function database(): Promise<IDBPDatabase<RoleplayDB>> {
           "visualObservations",
           "imageUsages",
           "stateTasks",
+          "compactionTasks",
           "operations",
           "goals",
         ] as const)
@@ -244,6 +263,7 @@ export async function createSession(characterId: string) {
     storySources: {},
     stateVersion: 0,
     stateProcessedThroughSeq: 0,
+    summary: emptySummary(),
     nextMessageSeq: 1,
     createdAt: now(),
     updatedAt: now(),
@@ -286,6 +306,7 @@ export async function beginTurn(
       updatedAt: now(),
     };
     const assistant: Message = {
+      usage: unknownUsage(),
       id: id(),
       sessionId,
       seq: session.nextMessageSeq + 1,
@@ -338,6 +359,7 @@ export async function deleteSession(sessionId: string) {
     "visualObservations",
     "imageUsages",
     "stateTasks",
+    "compactionTasks",
     "operations",
     "goals",
   ] as const) {
@@ -381,6 +403,10 @@ export async function collectUnreferenced(
   for (const row of await tx.objectStore("imageUsages").getAll())
     used.add(row.assetId);
   for (const row of await tx.objectStore("stateTasks").getAll()) {
+    imageIds(row.context.input.parts).forEach((assetId) => used.add(assetId));
+    row.context.visual?.assetCatalog.forEach((a) => used.add(a.assetId));
+  }
+  for (const row of await tx.objectStore("compactionTasks").getAll()) {
     imageIds(row.context.input.parts).forEach((assetId) => used.add(assetId));
     row.context.visual?.assetCatalog.forEach((a) => used.add(a.assetId));
   }

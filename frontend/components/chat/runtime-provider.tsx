@@ -246,6 +246,11 @@ function RuntimeBindings({
     const unsubscribe = runtime.thread.composer.subscribe(() =>
       queueMicrotask(() => syncDraft()),
     );
+    // 预检和压缩期间暂停草稿写入，结束后补存期间输入的下一条草稿。
+    const unsubscribePreparation = useAppStore.subscribe((state, previous) => {
+      if (previous.preparingInput && !state.preparingInput)
+        queueMicrotask(() => syncDraft());
+    });
     const unsubscribeError = runtime.thread.composer.unstable_on(
       "attachmentAddError",
       (event) => report(new Error(event.message)),
@@ -278,6 +283,7 @@ function RuntimeBindings({
     document.addEventListener("visibilitychange", flush);
     return () => {
       unsubscribe();
+      unsubscribePreparation();
       unsubscribeError();
       disposed = true;
       void flushDrafts().catch(report);

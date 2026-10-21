@@ -7,7 +7,8 @@ import java.util.function.Consumer;
 import org.springframework.stereotype.Service;
 
 import com.example.llm.LLMClient;
-import com.example.llm.model.ChatRequest;
+import com.example.llm.model.ChatStreamResult;
+import com.example.web.dto.ContextDtos.ContextBudget;
 import com.example.prompt.PromptBuilder;
 import com.example.web.dto.ChatApiRequest;
 import com.example.web.dto.InputDto;
@@ -16,15 +17,15 @@ import com.example.web.dto.SegmentDelta;
 /** 串起一次聊天的校验、提示词构建、模型调用与流式解析，不保存会话状态。 */
 @Service
 public class ChatService {
-    private final PromptBuilder promptBuilder;
+    private final ContextBudgetService budgets;
     private final LLMClient llmClient;
     private final ImageValidationService images;
     private final VisualSelectionService selection;
     private final ContextValidation contexts;
 
-    public ChatService(PromptBuilder promptBuilder, LLMClient llmClient, ImageValidationService images,
+    public ChatService(ContextBudgetService budgets, LLMClient llmClient, ImageValidationService images,
             VisualSelectionService selection, ContextValidation contexts) {
-        this.promptBuilder = promptBuilder;
+        this.budgets = budgets;
         this.llmClient = llmClient;
         this.images = images;
         this.selection = selection;
@@ -40,23 +41,29 @@ public class ChatService {
      * @throws IOException 模型请求或响应读取失败
      * @throws InterruptedException 当前模型请求被中断
      */
-    public String chatStream(ChatApiRequest request, Consumer<SegmentDelta> onDelta)
+    public ChatStreamResult chatStream(ChatApiRequest request, Consumer<SegmentDelta> onDelta, Consumer<ContextBudget> onContext)
             throws IOException, InterruptedException {
         Objects.requireNonNull(onDelta, "onDelta 不能为空");
 
-        ChatRequest chatRequest = promptBuilder.build(request);
+        var prepared = budgets.prepare(request);
+        budgets.requireSendable(prepared.budget());
+        onContext.accept(prepared.budget());
         // 解析器有当前行的状态，因此每次请求都要新建，不能放在成员字段中共享。
         SegmentStreamParser parser = new SegmentStreamParser(onDelta);
 
         // parser::feed 作为回调函数传入
-        String finishReason = llmClient.chatStream(chatRequest, parser::feed);
+        ChatStreamResult result = llmClient.chatStream(prepared.request(), parser::feed);
 
-        if (finishReason == null || finishReason.isBlank()) {
+        if (result.finishReason() == null || result.finishReason().isBlank()) {
             throw new IOException("模型流缺少结束原因，可能已意外中断");
         }
 
         parser.finish();
-        return finishReason;
+        if ("reported".equals(result.usage().status()) && "exact".equals(prepared.budget().accuracy())
+                && result.usage().inputTokens() != prepared.budget().inputTokens())
+            org.slf4j.LoggerFactory.getLogger(ChatService.class).warn("上下文计数与实报不一致：预检={}，实报={}",
+                    prepared.budget().inputTokens(), result.usage().inputTokens());
+        return result;
     }
 
     /** 在调用模型之前检查业务输入，参数错误统一使用 IllegalArgumentException。 */

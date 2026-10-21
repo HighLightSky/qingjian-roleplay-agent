@@ -128,7 +128,7 @@ export type Operation = {
   runId: string;
   anchorMessageId: string;
   placement: "before" | "after";
-  kind: "selection" | "state_update";
+  kind: "selection" | "state_update" | "compaction";
   status:
     | "pending"
     | "running"
@@ -137,7 +137,8 @@ export type Operation = {
     | "failed"
     | "cancelled"
     | "stale";
-  result?: StateResult | SelectionResult;
+  result?:
+    StateResult | SelectionResult | import("../context/types").CompactionResult;
   sourceVersions?: { id: string; checkpointVersion: number }[];
   error?: string;
   createdAt: string;

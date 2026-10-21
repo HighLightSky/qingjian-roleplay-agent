@@ -81,8 +81,8 @@ public class ChatController {
 
         private void generate() {
             try {
-                String finishReason = chatService.chatStream(request, delta -> send("delta", delta));
-                complete(finishReason);
+                var result = chatService.chatStream(request, delta -> send("delta", delta), budget -> send("context", budget));
+                complete(result);
             } catch (InterruptedException exception) {
                 fail(exception);
                 Thread.currentThread().interrupt();
@@ -108,9 +108,9 @@ public class ChatController {
             }
         }
 
-        private synchronized void complete(String finishReason) {
+        private synchronized void complete(com.example.llm.model.ChatStreamResult result) {
             if (!closed) {
-                send("done", Map.of("finishReason", finishReason));
+                send("done", result);
                 closed = true;
                 emitter.complete();
                 stopThreads();

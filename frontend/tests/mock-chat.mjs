@@ -10,6 +10,13 @@ createServer(async (request, response) => {
   if (request.url === "/api/capabilities") {
     response.writeHead(200, { "content-type": "application/json" }).end(
       JSON.stringify({
+        contextWindowTokens: 193024,
+        outputReserveTokens: 8192,
+        safetyTokens: 1024,
+        compactionTriggerRatio: 0.7,
+        compactionTargetRatio: 0.5,
+        retainedTurns: 10,
+        compactionMaxBatches: 8,
         visionSupported: true,
         mimeTypes: ["image/png", "image/jpeg"],
         maxImages: 4,
@@ -18,6 +25,62 @@ createServer(async (request, response) => {
         maxRequestBytes: 67108864,
       }),
     );
+    return;
+  }
+  if (
+    request.url === "/api/context/budget" ||
+    request.url === "/api/context/compact"
+  ) {
+    let raw = "";
+    for await (const chunk of request) raw += chunk;
+    const data = JSON.parse(raw);
+    const context = data.context;
+    const inputTokens = 500 + Math.ceil(JSON.stringify(context).length / 3);
+    const starts = context.history
+      .map((m, i) => (m.role === "user" ? i : -1))
+      .filter((i) => i >= 0);
+    const end =
+      starts.length > 10
+        ? context.history[starts[starts.length - 10] - 1].seq
+        : context.summary.throughSeq;
+    const budget = {
+      inputTokens,
+      contextWindowTokens: 193024,
+      usageRatio: inputTokens / 193024,
+      outputReserveTokens: 8192,
+      safetyTokens: 1024,
+      accuracy: "exact",
+      needsCompaction: inputTokens >= 193024 * 0.7,
+      fits: inputTokens + 8192 + 1024 <= 193024,
+      requestFingerprint: String(inputTokens),
+      compactThroughSeq: end,
+    };
+    let result = budget;
+    if (request.url === "/api/context/compact") {
+      result = {
+        operationId: data.operationId,
+        sessionId: context.state.sessionId,
+        baseSessionVersion: context.state.sessionVersion,
+        baseMemoryVersion: context.state.memoryVersion,
+        baseSummaryVersion: context.summary.version,
+        fromExclusiveSeq: context.summary.throughSeq,
+        throughSeq: end,
+        summary: {
+          text: "旅人曾经探访废塔，约定保留地图线索。",
+          throughSeq: end,
+          version: context.summary.version + 1,
+        },
+        beforeTokens: inputTokens,
+        afterTokens: 1000,
+        sourceMessageIds: context.history
+          .filter((m) => m.seq <= end)
+          .map((m) => m.id),
+        sourceFingerprint: "fixture-context",
+      };
+    }
+    response
+      .writeHead(200, { "content-type": "application/json" })
+      .end(JSON.stringify(result));
     return;
   }
   if (
@@ -195,6 +258,14 @@ createServer(async (request, response) => {
     text: `${body.state.memories.some((memory) => memory.value.status === "active" && memory.value.content.includes("阿远")) ? "阿远" : "旅人"}。”`,
   });
   if (!body.input.text.includes("没有结束"))
-    event("done", { finishReason: "stop" });
+    event("done", {
+      finishReason: "stop",
+      usage: {
+        status: "reported",
+        inputTokens: 12300,
+        outputTokens: 780,
+        totalTokens: 13080,
+      },
+    });
   response.end();
 }).listen(Number(process.env.ROLEPLAY_E2E_BACKEND_PORT ?? 18080), "127.0.0.1");

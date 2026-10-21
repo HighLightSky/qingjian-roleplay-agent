@@ -18,6 +18,12 @@ import com.example.web.dto.ApiError;
 /** 流式输出开始前的错误统一返回 JSON，不将上游错误正文或密钥发送给浏览器。 */
 @RestControllerAdvice
 public class ApiExceptionHandler {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    @ExceptionHandler(com.example.service.ContextTooLargeException.class)
+    public ResponseEntity<ApiError> contextTooLarge(com.example.service.ContextTooLargeException exception) {
+        return jsonError(HttpStatus.CONFLICT, new ApiError("CONTEXT_TOO_LARGE", exception.getMessage()));
+    }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ApiError> badRequest(IllegalArgumentException exception) {
@@ -38,6 +44,7 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler({IOException.class, InterruptedException.class, RuntimeException.class})
     public ResponseEntity<ApiError> modelError(Exception exception, HttpServletResponse response) {
+        log.error("模型处理失败：{}", exception.getMessage(), exception);
         // 已提交的 SSE 响应或已断开的连接不能再改成 JSON 响应。
         if (response.isCommitted()) {
             return null;
@@ -49,6 +56,8 @@ public class ApiExceptionHandler {
 
     /** 普通 JSON 错误和 SSE error 事件使用同样的错误码与文案。 */
     static ApiError toModelError(Exception exception) {
+        if (exception instanceof com.example.service.ContextTooLargeException)
+            return new ApiError("CONTEXT_TOO_LARGE", exception.getMessage());
         return exception instanceof HttpTimeoutException
                 ? new ApiError("MODEL_TIMEOUT", "模型请求超时，请稍后重试。")
                 : new ApiError("MODEL_ERROR", "模型服务调用失败，请稍后重试。");

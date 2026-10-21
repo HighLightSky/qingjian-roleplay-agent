@@ -80,9 +80,9 @@ function SettingMenu<T extends string>({
               </DropdownMenu.RadioItem>
             ))}
           </DropdownMenu.RadioGroup>
-          <p className="px-2 py-1.5 text-xs text-muted-foreground">
+          {/* <p className="px-2 py-1.5 text-xs text-muted-foreground">
             所有会话共用，下次回复生效
-          </p>
+          </p> */}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
@@ -117,9 +117,9 @@ export function InteractionSettingsControls() {
       aria-label="全局交互设置"
       aria-busy={saving}
     >
-      <span id={descriptionId} className="sr-only">
+      {/* <span id={descriptionId} className="sr-only">
         所有会话共用，下次回复生效
-      </span>
+      </span> */}
       <SettingMenu
         label="回复长度"
         value={settings.replyLength}

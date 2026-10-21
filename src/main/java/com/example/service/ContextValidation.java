@@ -18,23 +18,31 @@ public class ContextValidation {
             throw new IllegalArgumentException("上下文不能为空");
         CharacterDto.validate(r.character());
         StateValidation.snapshot(r.state());
-        StateValidation.text(r.earlierHistory(), ContextLimits.EARLIER_HISTORY_CHARS);
-        if (r.history() == null || r.input() == null || r.interactionSettings() == null
+        if (r.summary() == null)
+            throw new IllegalArgumentException("历史摘要缺失");
+        StateValidation.text(r.summary().text(), ContextLimits.CONTEXT_CHARS);
+        if (r.history().size() > ContextLimits.HISTORY_MESSAGES || r.input() == null || r.interactionSettings() == null
                 || r.interactionSettings().replyLength() == null || r.interactionSettings().narrativeMode() == null)
             throw new IllegalArgumentException("历史、输入或交互设置缺失");
         StateValidation.id(r.operationId());
         StateValidation.text(r.input().textOf(), ContextLimits.INPUT_CHARS);
+        int previous = r.summary().throughSeq();
+        var ids = new java.util.HashSet<String>();
         for (HistoryMessageDto h : r.history()) {
             if (h == null || h.role() == null || !java.util.Set.of("user", "assistant").contains(h.role())
                     || h.text() == null)
                 throw new IllegalArgumentException("历史消息的角色或内容无效");
             StateValidation.id(h.id());
+            if (!ids.add(h.id()) || h.seq() <= previous || h.checkpointVersion() < 0 || h.status() == null
+                    || !java.util.Set.of("complete", "cancelled", "error", "interrupted").contains(h.status()))
+                throw new IllegalArgumentException("历史消息顺序、版本或状态无效");
+            previous = h.seq();
         }
         if (r.visual() != null && !r.state().sessionId().equals(r.visual().sessionId()))
             throw new IllegalArgumentException("图片与领域快照不属于同一会话");
         var node = mapper.valueToTree(r);
         ((com.fasterxml.jackson.databind.node.ObjectNode) node).remove("visual");
         if (node.toString().length() > ContextLimits.CONTEXT_CHARS)
-            throw new IllegalArgumentException("上下文超过字符预算，本版尚未支持自动压缩");
+            throw new IllegalArgumentException("上下文超过请求材料字符上限，请分批恢复历史");
     }
 }

@@ -1,4 +1,6 @@
 import type { Segment } from "../domain";
+import type { ContextBudget, TokenUsage } from "../context/types";
+import { validateBudget, validateUsage } from "../context/validation";
 
 type Event = { name: string; data: string };
 /** Incremental SSE lines: CR, LF and CRLF may themselves cross network chunks. */
@@ -48,7 +50,8 @@ export async function streamChat(
   body: unknown,
   signal: AbortSignal,
   onDelta: (delta: Segment) => void,
-): Promise<string> {
+  onContext: (budget: ContextBudget) => void,
+): Promise<{ finishReason: string; usage: TokenUsage }> {
   const response = await fetch("/api/chat", {
     method: "POST",
     headers: {
@@ -72,9 +75,10 @@ export async function streamChat(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let finishReason: string | undefined;
+  let usage: TokenUsage | undefined;
   const parser = new SSEParser((event) => {
     if (finishReason) return;
-    if (!["delta", "done", "error"].includes(event.name)) return;
+    if (!["context", "delta", "done", "error"].includes(event.name)) return;
     let data;
     try {
       data = JSON.parse(event.data);
@@ -85,10 +89,17 @@ export async function streamChat(
       throw new Error("聊天事件格式不正确。");
     if (event.name === "error")
       throw new Error(data.message || "角色回复失败。");
+    if (event.name === "context") {
+      validateBudget(data);
+      onContext(data);
+      return;
+    }
     if (event.name === "done") {
       if (typeof data.finishReason !== "string" || !data.finishReason)
         throw new Error("回复缺少结束原因。");
       finishReason = data.finishReason;
+      validateUsage(data.usage);
+      usage = data.usage;
     } else {
       if (
         !["dialogue", "narration"].includes(data.kind) ||
@@ -109,7 +120,8 @@ export async function streamChat(
     }
     if (!finishReason)
       throw new Error("连接中断，已保留收到的回复。可以继续发送新消息。");
-    return finishReason;
+    if (!usage) throw new Error("回复终态缺少用量状态。");
+    return { finishReason, usage };
   } finally {
     await reader.cancel().catch(() => {});
     reader.releaseLock();

@@ -1,4 +1,10 @@
 import type { StateTask, Operation, Goal } from "./state/types";
+import type { CompactionTask } from "./context/types";
+import {
+  validateSummary,
+  validateUsage,
+  validateCompaction,
+} from "./context/validation";
 import {
   object,
   string,
@@ -38,6 +44,7 @@ type BackupAsset = Omit<ImageAsset, "originalBlob" | "thumbnailBlob"> & {
   base64: string;
 };
 export type Snapshot = {
+  compactionTasks: CompactionTask[];
   assets: BackupAsset[];
   visualObservations: VisualObservation[];
   imageUsages: ImageUsage[];
@@ -53,7 +60,7 @@ export type Snapshot = {
 };
 export type Backup = {
   format: "roleplay-agent-backup";
-  formatVersion: 5;
+  formatVersion: 6;
   exportedAt: string;
   data: Snapshot;
 };
@@ -66,7 +73,7 @@ export function validateBackup(value: unknown): Backup {
   object(value);
   if (new Blob([JSON.stringify(value)]).size > 50 * 1024 * 1024)
     throw new Error("备份不能超过 50 MiB。");
-  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 5)
+  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 6)
     throw new Error("不支持此备份格式或版本，请选择本应用导出的文件。");
   date(value.exportedAt);
   object(value.data);
@@ -94,6 +101,19 @@ export function validateBackup(value: unknown): Backup {
   const sessions = new Map(
     snapshot.sessions.map((session) => [session.id, session]),
   );
+  for (const session of snapshot.sessions) {
+    validateSummary(session.summary);
+    if (
+      session.summary.throughSeq > 0 &&
+      !snapshot.messages.some(
+        (m) =>
+          m.sessionId === session.id && m.seq === session.summary.throughSeq,
+      )
+    )
+      throw new Error("摘要覆盖终点缺少原始消息。");
+  }
+  for (const message of snapshot.messages)
+    if (message.role === "assistant") validateUsage(message.usage);
   const sequences = new Set<string>();
   const maxSeq = new Map<string, number>();
   for (const character of snapshot.characters) {
@@ -234,7 +254,7 @@ export function validateBackup(value: unknown): Backup {
   validateImages(snapshot);
   return {
     format: "roleplay-agent-backup",
-    formatVersion: 5,
+    formatVersion: 6,
     exportedAt: value.exportedAt as string,
     data: snapshot,
   };
@@ -354,7 +374,7 @@ function validateImages(snapshot: Snapshot) {
     if (
       messages.get(op.anchorMessageId)?.sessionId !== op.sessionId ||
       !sessions.has(op.sessionId) ||
-      !["selection", "state_update"].includes(op.kind) ||
+      !["selection", "state_update", "compaction"].includes(op.kind) ||
       !["before", "after"].includes(op.placement) ||
       ![
         "pending",
@@ -370,7 +390,39 @@ function validateImages(snapshot: Snapshot) {
     string(op.runId, 200);
     if (op.error !== undefined) string(op.error, 8000);
     if (op.result !== undefined) {
-      if (op.kind === "state_update") {
+      if (op.kind === "compaction") {
+        validateCompaction(op.result);
+        if (
+          op.result.operationId !== op.id ||
+          op.result.sessionId !== op.sessionId ||
+          !Array.isArray(op.sourceVersions) ||
+          !op.sourceVersions.length
+        )
+          throw new Error("压缩操作结果与来源版本无效。");
+        for (const source of op.sourceVersions) {
+          integer(source.checkpointVersion);
+          if (messages.get(source.id)?.sessionId !== op.sessionId)
+            throw new Error("压缩操作来源不属于当前会话。");
+        }
+        const sourceRows = snapshot.messages
+          .filter(
+            (m) =>
+              m.sessionId === op.sessionId &&
+              m.seq >
+                (op.result as import("./context/types").CompactionResult)
+                  .fromExclusiveSeq &&
+              m.seq <=
+                (op.result as import("./context/types").CompactionResult)
+                  .throughSeq,
+          )
+          .sort((a, b) => a.seq - b.seq);
+        if (
+          op.result.sourceMessageIds.some(
+            (id) => !sourceRows.some((m) => m.id === id),
+          )
+        )
+          throw new Error("压缩操作包含范围外的消息引用。");
+      } else if (op.kind === "state_update") {
         validateStateResult(op.result);
         if (
           !Array.isArray(op.sourceVersions) ||
@@ -524,7 +576,7 @@ function validateImages(snapshot: Snapshot) {
     validateSnapshot(task.context.state);
     parseCharacterProfile(task.context.character);
     parseInteractionSettings(task.context.interactionSettings);
-    string(task.context.earlierHistory, 20_000);
+    validateFrozenContext(task.context, task.sessionId, messages);
     object(task.context.input);
     if (task.context.state.sessionId !== task.sessionId)
       throw new Error("整理任务会话无效。");
@@ -565,6 +617,68 @@ function validateImages(snapshot: Snapshot) {
         throw new Error("整理任务选图计划无效。");
     }
   }
+  for (const task of snapshot.compactionTasks) {
+    const assistant = messages.get(task.assistantMessageId);
+    const operation = operations.get(task.id);
+    if (
+      !assistant ||
+      assistant.role !== "assistant" ||
+      assistant.sessionId !== task.sessionId ||
+      !operation ||
+      operation.kind !== "compaction" ||
+      operation.status === "committed" ||
+      operation.anchorMessageId !== task.assistantMessageId
+    )
+      throw new Error("压缩待办的锚点或操作来源无效。");
+    integer(task.automaticAttempts);
+    validateFrozenContext(task.context, task.sessionId, messages);
+    if (task.context.visual?.imagePayloads.length)
+      throw new Error("压缩待办不应保存原图载荷。");
+    for (const asset of task.context.visual?.assetCatalog ?? [])
+      if (!sessionHasAsset(task.sessionId, asset.assetId))
+        throw new Error("压缩待办包含其他会话图片。");
+  }
+}
+
+function validateFrozenContext(
+  context: import("./chat/context").ChatContext,
+  sessionId: string,
+  messages: Map<string, Message>,
+) {
+  object(context);
+  validateSnapshot(context.state);
+  validateSummary(context.summary);
+  parseCharacterProfile(context.character);
+  parseInteractionSettings(context.interactionSettings);
+  if (
+    context.state.sessionId !== sessionId ||
+    !Array.isArray(context.history) ||
+    context.history.length > 2000
+  )
+    throw new Error("冻结上下文会话或历史数量无效。");
+  let previous = context.summary.throughSeq;
+  const ids = new Set<string>();
+  for (const message of context.history) {
+    integer(message.seq, previous + 1);
+    integer(message.checkpointVersion);
+    string(message.text, 2_000_000);
+    if (
+      ids.has(message.id) ||
+      messages.get(message.id)?.sessionId !== sessionId ||
+      messages.get(message.id)?.seq !== message.seq ||
+      !["user", "assistant"].includes(message.role) ||
+      !["complete", "cancelled", "error", "interrupted"].includes(
+        message.status,
+      )
+    )
+      throw new Error("冻结历史消息来源、顺序或状态无效。");
+    ids.add(message.id);
+    previous = message.seq;
+  }
+  if (JSON.stringify(context).length > 2_000_000)
+    throw new Error("冻结上下文超过字符上限。");
+  object(context.input);
+  string(context.input.text, 2000);
 }
 export async function takeSnapshot(): Promise<Backup> {
   const db = await database();
@@ -589,7 +703,7 @@ export async function takeSnapshot(): Promise<Backup> {
   }
   const backup: Backup = {
     format: "roleplay-agent-backup",
-    formatVersion: 5,
+    formatVersion: 6,
     exportedAt: new Date().toISOString(),
     data: { ...data, assets: serialized },
   };

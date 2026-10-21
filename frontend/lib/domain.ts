@@ -1,5 +1,6 @@
 import type { ContentPart } from "./images/types";
 import type { Story, StorySources } from "./state/types";
+import type { HistorySummary, TokenUsage } from "./context/types";
 export type { Memory } from "./state/types";
 
 export type CharacterProfile = {
@@ -51,6 +52,7 @@ export type Character = CharacterProfile & {
   updatedAt: string;
 };
 export type Session = {
+  summary: HistorySummary;
   id: string;
   characterId: string;
   title: string;
@@ -67,6 +69,7 @@ export type Session = {
 };
 export type Segment = { kind: "dialogue" | "narration"; text: string };
 export type Message = {
+  usage?: TokenUsage;
   id: string;
   sessionId: string;
   seq: number;

@@ -507,7 +507,7 @@ test("整轮发送登记任务失败时不会单独补写完整正文终态", as
   const put = IDBObjectStore.prototype.put;
   globalThis.fetch = async () =>
     new Response(
-      'event: delta\ndata: {"kind":"dialogue","text":"已收到。"}\n\nevent: done\ndata: {"finishReason":"stop"}\n\n',
+      'event: delta\ndata: {"kind":"dialogue","text":"已收到。"}\n\nevent: done\ndata: {"finishReason":"stop","usage":{"status":"reported","inputTokens":100,"outputTokens":20,"totalTokens":120}}\n\n',
       { headers: { "content-type": "text/event-stream" } },
     );
   IDBObjectStore.prototype.put = function (...args: Parameters<typeof put>) {

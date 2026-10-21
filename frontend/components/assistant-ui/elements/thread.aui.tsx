@@ -1,4 +1,6 @@
 "use client";
+import { ContextBudgetIndicator } from "@/components/chat/context-budget";
+import { TurnTokenUsage } from "@/components/chat/turn-token-usage";
 
 import {
   ComposerAddAttachment,
@@ -527,38 +529,41 @@ const ComposerAction: FC = () => {
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <ComposerAddAttachment />
         {ComposerControls && <ComposerControls />}
-        <span className="text-xs text-muted-foreground">
+        <span className="hidden text-xs text-muted-foreground sm:inline">
           {length ? `${length} / 2000` : ""}
         </span>
       </div>
-      <AuiIf condition={(state) => !state.composer.canCancel}>
-        <ComposerPrimitive.Send asChild>
-          <TooltipIconButton
-            tooltip="发送消息"
-            side="top"
-            variant="default"
-            size="icon"
-            className="size-11 rounded-md"
-            aria-label="发送消息"
-          >
-            <ArrowUpIcon className="size-5" />
-          </TooltipIconButton>
-        </ComposerPrimitive.Send>
-      </AuiIf>
-      <AuiIf condition={(state) => state.composer.canCancel}>
-        <ComposerPrimitive.Cancel asChild>
-          <TooltipIconButton
-            tooltip="停止生成"
-            side="top"
-            variant="default"
-            size="icon"
-            className="size-11 rounded-md"
-            aria-label="停止生成"
-          >
-            <SquareIcon className="size-4 fill-current" />
-          </TooltipIconButton>
-        </ComposerPrimitive.Cancel>
-      </AuiIf>
+      <div className="flex shrink-0 items-center gap-1">
+        <ContextBudgetIndicator />
+        <AuiIf condition={(state) => !state.composer.canCancel}>
+          <ComposerPrimitive.Send asChild>
+            <TooltipIconButton
+              tooltip="发送消息"
+              side="top"
+              variant="default"
+              size="icon"
+              className="size-8 rounded-md"
+              aria-label="发送消息"
+            >
+              <ArrowUpIcon className="size-4" />
+            </TooltipIconButton>
+          </ComposerPrimitive.Send>
+        </AuiIf>
+        <AuiIf condition={(state) => state.composer.canCancel}>
+          <ComposerPrimitive.Cancel asChild>
+            <TooltipIconButton
+              tooltip="停止生成"
+              side="top"
+              variant="default"
+              size="icon"
+              className="size-8 rounded-md"
+              aria-label="停止生成"
+            >
+              <SquareIcon className="size-4 fill-current" />
+            </TooltipIconButton>
+          </ComposerPrimitive.Cancel>
+        </AuiIf>
+      </div>
     </div>
   );
 };
@@ -689,7 +694,12 @@ const AssistantMessage: FC = () => {
         data-slot="aui_assistant-message-footer"
         className={cn("ms-2 flex items-center", ACTION_BAR_HEIGHT)}
       >
-        {!activity && <AssistantActionBar />}
+        {!activity && (
+          <>
+            <AssistantActionBar />
+            <TurnTokenUsage />
+          </>
+        )}
       </div>
     </MessagePrimitive.Root>
   );

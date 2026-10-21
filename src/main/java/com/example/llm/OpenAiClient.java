@@ -15,32 +15,21 @@ import java.util.function.Consumer;
 
 import com.example.llm.model.ChatRequest;
 import com.example.llm.model.ChatResponse;
-import com.example.llm.model.Message;
+import com.example.llm.model.ChatStreamResult;
+import com.example.llm.model.TokenUsage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 /** 调用 OpenAI 兼容的 Chat Completions 接口，支持普通和流式两种请求。 */
 public class OpenAiClient implements LLMClient {
-    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(120);
 
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final URI apiUri;
     private final String apiKey;
-    private final String model;
+    private final LlmRequestMapper requests;
     private final Duration requestTimeout;
-
-    // 如果不关心超时，使用默认超时
-    public OpenAiClient(
-            HttpClient httpClient,
-            ObjectMapper objectMapper,
-            String apiUrl,
-            String apiKey,
-            String model) {
-        this(httpClient, objectMapper, apiUrl, apiKey, model, DEFAULT_TIMEOUT);
-    }
 
     // 关心超时，需要提供超时参数
     public OpenAiClient(
@@ -48,20 +37,20 @@ public class OpenAiClient implements LLMClient {
             ObjectMapper objectMapper,
             String apiUrl,
             String apiKey,
-            String model,
-            Duration requestTimeout) {
+            Duration requestTimeout,
+            LlmRequestMapper requests) {
         this.httpClient = Objects.requireNonNull(httpClient, "httpClient must not be null");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper must not be null");
         this.apiUri = URI.create(requireNonBlank(apiUrl, "apiUrl"));
         this.apiKey = requireNonBlank(apiKey, "apiKey");
-        this.model = requireNonBlank(model, "model");
+        this.requests = Objects.requireNonNull(requests, "请求映射器不能为空");
         this.requestTimeout = Objects.requireNonNull(requestTimeout, "requestTimeout must not be null");
     }
 
     // 非流式请求实现
     @Override
     public ChatResponse chat(ChatRequest request) throws IOException, InterruptedException {
-        ObjectNode jsonRequest = buildRequestBody(request, false);
+        ObjectNode jsonRequest = requests.chatBody(request, false);
         HttpRequest httpRequest = buildHttpRequest(jsonRequest, "application/json");
 
         HttpResponse<String> httpResponse = httpClient.send(
@@ -88,16 +77,17 @@ public class OpenAiClient implements LLMClient {
         JsonNode finishReason = choices.path(0).path("finish_reason");
         return new ChatResponse(
                 content.asText(),
-                finishReason.isNull() || finishReason.isMissingNode() ? null : finishReason.asText());
+                finishReason.isNull() || finishReason.isMissingNode() ? null : finishReason.asText(),
+                TokenUsage.read(responseJson.path("usage")));
     }
 
     // 流式请求实现
     @Override
-    public String chatStream(ChatRequest request, Consumer<String> onTextDelta)
+    public ChatStreamResult chatStream(ChatRequest request, Consumer<String> onTextDelta)
             throws IOException, InterruptedException {
         Objects.requireNonNull(onTextDelta, "onTextDelta must not be null");
 
-        ObjectNode jsonRequest = buildRequestBody(request, true);
+        ObjectNode jsonRequest = requests.chatBody(request, true);
         HttpRequest httpRequest = buildHttpRequest(jsonRequest, "text/event-stream");
 
         HttpResponse<InputStream> httpResponse = httpClient.send(
@@ -113,6 +103,8 @@ public class OpenAiClient implements LLMClient {
         }
 
         String finishReason = null;
+        TokenUsage usage = TokenUsage.unavailable();
+        boolean ended = false;
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(httpResponse.body(), StandardCharsets.UTF_8))) {
@@ -130,10 +122,13 @@ public class OpenAiClient implements LLMClient {
                 }
                 // [DONE] 是流结束标记，不是JSON
                 if (data.equals("[DONE]")) {
+                    ended = true;
                     break;
                 }
 
                 JsonNode responseJson = objectMapper.readTree(data);
+                if (!responseJson.path("usage").isMissingNode() && !responseJson.path("usage").isNull())
+                    usage = TokenUsage.read(responseJson.path("usage"));
                 JsonNode choices = responseJson.path("choices");
                 if (!choices.isArray() || choices.isEmpty()) {
                     continue;
@@ -152,52 +147,8 @@ public class OpenAiClient implements LLMClient {
             }
         }
 
-        return finishReason;
-    }
-
-    /** 构造 OpenAI 兼容的请求体，普通和流式请求共用。 */
-    private ObjectNode buildRequestBody(ChatRequest request, boolean stream) {
-        Objects.requireNonNull(request, "request must not be null");
-        Objects.requireNonNull(request.getMessages(), "messages must not be null");
-
-        ObjectNode jsonRequest = objectMapper.createObjectNode();
-        jsonRequest.put("model", model);
-
-        ArrayNode messages = jsonRequest.putArray("messages");
-        for (Message message : request.getMessages()) {
-            Objects.requireNonNull(message, "messages must not contain null entries");
-            Objects.requireNonNull(message.getRole(), "message role must not be null");
-            if (message.getContent() == null && message.getParts() == null)
-                throw new IllegalArgumentException("message content must not be null");
-
-            ObjectNode item = messages.addObject();
-            item.put("role", message.getRole());
-            if (message.getParts() == null) {
-                item.put("content", message.getContent());
-            } else {
-                ArrayNode content = item.putArray("content");
-                for (Message.Part part : message.getParts()) {
-                    ObjectNode block = content.addObject();
-                    block.put("type", part.type());
-                    if ("text".equals(part.type()))
-                        block.put("text", part.text());
-                    else if ("image_url".equals(part.type()))
-                        block.putObject("image_url").put("url", part.imageUrl());
-                    else
-                        throw new IllegalArgumentException("未知模型内容块");
-                }
-            }
-        }
-
-        if (request.getMaxTokens() != null) {
-            jsonRequest.put("max_completion_tokens", request.getMaxTokens());
-        }
-        if (request.getTemperature() != null) {
-            jsonRequest.put("temperature", request.getTemperature());
-        }
-        jsonRequest.put("stream", stream);
-
-        return jsonRequest;
+        if (!ended) throw new IOException("模型事件流缺少结束标记，连接已中断");
+        return new ChatStreamResult(finishReason, usage);
     }
 
     private HttpRequest buildHttpRequest(ObjectNode jsonRequest, String accept) throws IOException {

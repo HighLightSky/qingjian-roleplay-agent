@@ -10,6 +10,21 @@ roleplay:
     max-tokens: 8192
     timeout-seconds: 120
 
+  context:
+    context-window-tokens: ${CONTEXT_WINDOW_TOKENS:193024}
+    compaction-trigger-ratio: 0.70
+    compaction-target-ratio: 0.50
+    retained-turns: 10
+    safety-tokens: 1024
+    compaction-batch-input-tokens: 32768
+    compaction-max-output-tokens: 8192
+    summary-max-tokens: 4096
+    compaction-max-batches: 8
+    vision-grid-pixels: 32
+    vision-min-grids: 9
+    vision-token-multiplier: 1.10
+    vision-token-overhead: 64
+
   vision:
     supported: ${ROLEPLAY_VISION_SUPPORTED:true}
     max-images: 4

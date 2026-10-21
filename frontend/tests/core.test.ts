@@ -1,3 +1,4 @@
+import { contextFixture } from "./context-fixture";
 import { emptyStateResult } from "./state-fixture";
 import "fake-indexeddb/auto";
 import { beforeEach, test } from "node:test";
@@ -122,9 +123,9 @@ test("备份拒绝旧版本、无效角色草稿和快照，空名字草稿可�
   await setup();
   await setting("characterDraft:new", JSON.stringify(EMPTY_PROFILE));
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 5);
+  assert.equal(backup.formatVersion, 6);
   validateBackup(structuredClone(backup));
-  for (const formatVersion of [1, 2, 3, 4])
+  for (const formatVersion of [1, 2, 3, 4, 5])
     assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
   for (const field of ["name", "identity", "description"] as const) {
     const invalid = structuredClone(backup);
@@ -322,7 +323,7 @@ test("interrupted history retains typed content and marks its completion note as
     ["[台词]这条路通往\n[描写]（该回复未完成。）"],
   );
 });
-test("older history is included as raw context, not silently dropped by the 20-message backend cap", async () => {
+test("all uncompressed history retains structure and is no longer blocked by a 20000-character limit", async () => {
   const { character, session } = await setup();
   for (let i = 0; i < 15; i++) {
     const { assistant } = await beginTurn(session.id, `消息${i}`);
@@ -342,24 +343,24 @@ test("older history is included as raw context, not silently dropped by the 20-m
     "本轮",
     DEFAULT_INTERACTION_SETTINGS,
   );
-  assert.equal(body.history.length, 20);
-  assert.match(body.earlierHistory, /消息0/);
-  assert.match(body.earlierHistory, /林溪：\[台词\]回复0/);
+  assert.equal(body.history.length, 30);
+  assert.match(body.history[0].text, /消息0/);
+  assert.match(body.history[1].text, /\[台词\]回复0/);
+  assert.equal(body.summary.throughSeq, 0);
   assert.equal(body.input.text, "本轮");
   const long = history.map((message) =>
     message.role === "user" ? { ...message, text: "a".repeat(4000) } : message,
   );
-  assert.throws(
-    () =>
-      chatContext(
-        character,
-        session,
-        [],
-        long,
-        "本轮",
-        DEFAULT_INTERACTION_SETTINGS,
-      ),
-    /自动压缩/,
+  assert.equal(
+    chatContext(
+      character,
+      session,
+      [],
+      long,
+      "本轮",
+      DEFAULT_INTERACTION_SETTINGS,
+    ).history.length,
+    30,
   );
 });
 test("backup roundtrip preserves structured messages and invalid import leaves data intact", async () => {
@@ -477,11 +478,13 @@ test("sending waits for an already queued settings save", async () => {
   const originalFetch = globalThis.fetch;
   let sentSettings: unknown;
   globalThis.fetch = async (_input, init) => {
+    const fixture = contextFixture(String(_input), init);
+    if (fixture) return fixture;
     if (String(_input) === "/api/state/update")
       return Response.json(emptyStateResult(JSON.parse(String(init?.body))));
     sentSettings = JSON.parse(String(init?.body)).interactionSettings;
     return new Response(
-      'event: delta\ndata: {"kind":"dialogue","text":"我来看看。"}\n\nevent: done\ndata: {"finishReason":"stop"}\n\n',
+      'event: delta\ndata: {"kind":"dialogue","text":"我来看看。"}\n\nevent: done\ndata: {"finishReason":"stop","usage":{"status":"reported","inputTokens":100,"outputTokens":20,"totalTokens":120}}\n\n',
       {
         headers: { "content-type": "text/event-stream" },
       },
@@ -529,7 +532,7 @@ test("failed settings saves keep the last committed choice", async () => {
 test("SSE parser handles split CRLF, comments, multiple events and multiline data", () => {
   const events: { name: string; data: string }[] = [];
   const parser = new SSEParser((event) => events.push(event));
-  for (const character of ': ping\r\nevent: delta\r\ndata: {"kind":"dialogue",\r\ndata: "text":"你好"}\r\n\r\nevent: done\ndata: {"finishReason":"stop"}\n\n')
+  for (const character of ': ping\r\nevent: delta\r\ndata: {"kind":"dialogue",\r\ndata: "text":"你好"}\r\n\r\nevent: done\ndata: {"finishReason":"stop","usage":{"status":"reported","inputTokens":100,"outputTokens":20,"totalTokens":120}}\n\n')
     parser.feed(character);
   assert.equal(events.length, 2);
   assert.equal(JSON.parse(events[0].data).text, "你好");
@@ -555,12 +558,13 @@ test("streaming decodes split UTF-8 and requires a terminal done event", async (
         {},
         new AbortController().signal,
         (delta) => parts.push(delta.text),
+        () => {},
       );
-      return { reason, parts };
+      return { reason: reason.finishReason, parts };
     };
     assert.deepEqual(
       await run(
-        'event: delta\ndata: {"kind":"dialogue","text":"你好🌱"}\n\nevent: done\ndata: {"finishReason":"stop"}\n\n',
+        'event: delta\ndata: {"kind":"dialogue","text":"你好🌱"}\n\nevent: done\ndata: {"finishReason":"stop","usage":{"status":"reported","inputTokens":100,"outputTokens":20,"totalTokens":120}}\n\n',
       ),
       { reason: "stop", parts: ["你好🌱"] },
     );

@@ -15,6 +15,8 @@ const additionalHosts = (process.env.DEV_ALLOWED_ORIGINS ?? "")
   .filter(Boolean);
 
 const nextConfig: NextConfig = {
+  // 独立测试构建目录，避免覆盖正在运行的开发服务产物。
+  distDir: process.env.ROLEPLAY_DIST_DIR ?? ".next",
   allowedDevOrigins: [
     ...new Set(["127.0.0.1", ...localAddresses, ...additionalHosts]),
   ],

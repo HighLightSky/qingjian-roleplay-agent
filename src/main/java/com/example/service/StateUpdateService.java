@@ -16,14 +16,16 @@ public class StateUpdateService {
     private final ObjectMapper mapper;
     private final StateUpdatePromptBuilder prompts;
     private final ContextValidation contexts;
+    private final ContextBudgetService budgets;
     private final ImageValidationService images;
 
     public StateUpdateService(LLMClient client, ObjectMapper mapper, StateUpdatePromptBuilder prompts,
-            ContextValidation contexts, ImageValidationService images) {
+            ContextValidation contexts, ImageValidationService images, ContextBudgetService budgets) {
         this.client = client;
         this.mapper = mapper;
         this.prompts = prompts;
         this.contexts = contexts;
+        this.budgets = budgets;
         this.images = images;
     }
 
@@ -31,7 +33,9 @@ public class StateUpdateService {
         validateRequest(r);
         String material = prompts.material(r);
         StateValidation.text(material, ContextLimits.CONTEXT_CHARS);
-        var response = client.chat(prompts.build(r, material));
+        var modelRequest = prompts.build(r, material);
+        budgets.checkModelRequest(modelRequest);
+        var response = client.chat(modelRequest);
         if (response.getContent() == null || response.getContent().length() > ContextLimits.CONTEXT_CHARS)
             throw new IOException("状态整理结果缺失或超过字符限制");
         if (!"stop".equals(response.getFinishReason()))
@@ -84,7 +88,7 @@ public class StateUpdateService {
         if (last.seq() != r.throughSeq() || !"assistant".equals(last.role()))
             throw new IllegalArgumentException("整理范围必须以完整正文结束");
         if (mapper.valueToTree(r.messages()).toString().length() > ContextLimits.CONTEXT_CHARS)
-            throw new IllegalArgumentException("待整理消息超过字符预算，本版尚未支持自动压缩");
+            throw new IllegalArgumentException("待整理消息超过请求材料字符上限");
         images.validateReferences(r.context());
         Set<String> required = new HashSet<>(ImageValidationService.newIds(r.context()));
         if (r.context().visual() != null && r.context().visual().plan() != null) {

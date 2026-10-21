@@ -8,7 +8,7 @@ import { validateGoalValue, validateStory } from "../lib/state/validation";
 test("v3 升级事务一次性转换目标、剧情、待办和缓存结果，失败回滚且不丢失原文", async () => {
   const old = await openDB("roleplay-agent", 3, {
     upgrade(db) {
-      for (const name of TABLES)
+      for (const name of TABLES.filter((name) => name !== "compactionTasks"))
         db.createObjectStore(name, {
           keyPath:
             name === "settings"
@@ -63,11 +63,36 @@ test("v3 升级事务一次性转换目标、剧情、待办和缓存结果，�
     stateVersion: 7,
   });
   await old.put("characters", { id: "character", name: "林溪" });
-  await old.put("messages", { id: "user", text: "我们来到旅馆找哥哥" });
+  await old.put("messages", {
+    id: "user",
+    sessionId: "session",
+    seq: 1,
+    role: "user",
+    status: "complete",
+    checkpointVersion: 0,
+    text: "我们来到旅馆找哥哥",
+  });
+  await old.put("messages", {
+    id: "assistant",
+    sessionId: "session",
+    seq: 2,
+    role: "assistant",
+    status: "complete",
+    checkpointVersion: 1,
+    replyToMessageId: "user",
+    segments: [{ kind: "narration", text: "她走入旅馆。" }],
+  });
   await old.put("goals", entry);
   await old.put("stateTasks", {
     id: "task",
-    context: { state },
+    sessionId: "session",
+    assistantMessageId: "assistant",
+    context: {
+      state,
+      earlierHistory: "",
+      history: [],
+      input: { text: "我们来到旅馆找哥哥" },
+    },
     automaticAttempts: 1,
   });
   await old.put("operations", {
@@ -102,7 +127,7 @@ test("v3 升级事务一次性转换目标、剧情、待办和缓存结果，�
   rolledBack.close();
 
   const upgraded = await database();
-  assert.equal(upgraded.version, 4);
+  assert.equal(upgraded.version, 5);
   const migratedGoal = (await upgraded.get("goals", "goal"))!;
   validateGoalValue(migratedGoal.value);
   assert.deepEqual(Object.keys(migratedGoal.value).sort(), [
@@ -146,7 +171,7 @@ test("v3 升级事务一次性转换目标、剧情、待办和缓存结果，�
     ...migratedGoal,
     value: { ...migratedGoal.value, progressSummary: "升级后继续推进的内容" },
   });
-  const reopened = await openDB("roleplay-agent", 4);
+  const reopened = await openDB("roleplay-agent", 5);
   assert.equal(
     (await reopened.get("goals", "goal")).value.progressSummary,
     "升级后继续推进的内容",

@@ -29,8 +29,8 @@ class VisualPipelineTest {
     VisualPipelineTest() {
         config.setSupported(true);
         images = new ImageValidationService(config);
-        selector = new VisualSelectionService(model, mapper, new VisualSelectionPromptBuilder(mapper), images, new ContextValidation(mapper));
-        chat = new ChatService(builder, model, images, selector, new ContextValidation(mapper));
+        selector = new VisualSelectionService(model, mapper, new VisualSelectionPromptBuilder(mapper), images, new ContextValidation(mapper), com.example.TestRequests.budgets());
+        chat = new ChatService(com.example.TestRequests.budgets(), model, images, selector, new ContextValidation(mapper));
     }
     byte[] png() throws Exception {
         var out = new ByteArrayOutputStream(); ImageIO.write(new BufferedImage(3, 2, BufferedImage.TYPE_INT_RGB), "png", out); return out.toByteArray();
@@ -43,9 +43,9 @@ class VisualPipelineTest {
                 List.of(new Source("source-" + seq, seq, "地图参考", 1, 1)), null, List.of());
     }
     ChatApiRequest request(String text, List<ContentPartDto> parts, List<Asset> catalog, Plan plan, List<Payload> payloads) {
-        return new ChatApiRequest(new CharacterDto("林溪", "老板", "好奇，说话简短，生活在山城。"), com.example.TestRequests.state(List.of()), "旧消息已摘要", List.of(), new InputDto(text, parts), new InteractionSettingsDto(InteractionSettingsDto.ReplyLength.STANDARD, InteractionSettingsDto.NarrativeMode.SCENE), new Context("session", catalog, plan, payloads), "operation");
+        return new ChatApiRequest(new CharacterDto("林溪", "老板", "好奇，说话简短，生活在山城。"), com.example.TestRequests.state(List.of()), new com.example.web.dto.ContextDtos.HistorySummary("旧消息已摘要", 1, 1), List.of(), new InputDto(text, parts), new InteractionSettingsDto(InteractionSettingsDto.ReplyLength.STANDARD, InteractionSettingsDto.NarrativeMode.SCENE), new Context("session", catalog, plan, payloads), "operation");
     }
-    void answer(String json) throws Exception { when(model.chat(any())).thenReturn(new ChatResponse(json, "stop")); }
+    void answer(String json) throws Exception { when(model.chat(any())).thenReturn(new ChatResponse(json, "stop", com.example.llm.model.TokenUsage.unavailable())); }
     @Test void firstImageIsRequiredAndNoSelectionModelIsCalled() throws Exception {
         var r = request("", List.of(new ContentPartDto("image", null, "new")), List.of(), null, List.of(payload("new")));
         chat.validateRequest(r);
@@ -94,14 +94,14 @@ class VisualPipelineTest {
         for (int i=1;i<=6;i++) catalog.add(asset("image-"+i,i));
         var r=request("比较这些图",null,catalog,null,List.of());
         int context = new VisualSelectionPromptBuilder(mapper).context(r).length();
-        config.setPlanningInputChars(context+2500+1100);
+        config.setPlanningInputChars(1100);
         when(model.chat(any())).thenAnswer(invocation -> {
             ChatRequest call=invocation.getArgument(0);
             String text=call.getMessages().getLast().getContent();
             int start=text.indexOf("图片目录：")+5, end=text.lastIndexOf(']')+1;
             var entries=mapper.readTree(text.substring(start,end));
             String chosen=entries.get(0).path("assetId").asText();
-            return new ChatResponse("{\"status\":\"ready\",\"selectedHistoricalImages\":[{\"assetId\":\""+chosen+"\",\"purpose\":\"参考\"}],\"candidateAssetIds\":[],\"message\":\"\"}","stop");
+            return new ChatResponse("{\"status\":\"ready\",\"selectedHistoricalImages\":[{\"assetId\":\""+chosen+"\",\"purpose\":\"参考\"}],\"candidateAssetIds\":[],\"message\":\"\"}","stop", com.example.llm.model.TokenUsage.unavailable());
         });
         // A large candidate merge is explicitly rejected rather than silently truncated.
         try { selector.select(r); } catch (IllegalArgumentException e) { assertTrue(e.getMessage().contains("合并")); }

@@ -1,3 +1,4 @@
+import { contextFixture } from "./context-fixture";
 import { emptyStateResult } from "./state-fixture";
 import "fake-indexeddb/auto";
 import { beforeEach, test } from "node:test";
@@ -95,6 +96,8 @@ function mockFetch() {
   globalThis.fetch = async (input, init) => {
     const path = String(input),
       body = init?.body ? JSON.parse(init.body as string) : undefined;
+    const fixture = contextFixture(path, init);
+    if (fixture) return fixture;
     calls.push({ path, body });
     if (path === "/api/capabilities")
       return json({
@@ -130,7 +133,7 @@ function mockFetch() {
         status: 502,
       });
     return new Response(
-      'event: delta\ndata: {"kind":"narration","text":"她检查地图。"}\n\nevent: done\ndata: {"finishReason":"stop"}\n\n',
+      'event: delta\ndata: {"kind":"narration","text":"她检查地图。"}\n\nevent: done\ndata: {"finishReason":"stop","usage":{"status":"reported","inputTokens":100,"outputTokens":20,"totalTokens":120}}\n\n',
       { headers: { "content-type": "text/event-stream" } },
     );
   };
@@ -281,14 +284,14 @@ test("v5 backup restores original bytes and rejects damaged originals before rep
   const a = await asset();
   await beginTurn(session.id, "", [{ type: "image", assetId: a.id }]);
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 5);
+  assert.equal(backup.formatVersion, 6);
   await restoreSnapshot(backup);
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
   const invalid = structuredClone(backup);
   invalid.data.assets[0].base64 = "AAAA";
   await assert.rejects(restoreSnapshot(invalid));
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
-  for (const formatVersion of [1, 2, 3, 4])
+  for (const formatVersion of [1, 2, 3, 4, 5])
     assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
 });
 test("ambiguous selection and cancellation preserve submitted input and never generate a reply", async () => {
