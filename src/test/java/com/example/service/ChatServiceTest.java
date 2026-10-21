@@ -18,24 +18,29 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 
 import com.example.config.LlmProperties;
+import com.example.config.VisionProperties;
 import com.example.llm.LLMClient;
 import com.example.llm.model.ChatRequest;
 import com.example.prompt.PromptBuilder;
+import com.example.prompt.VisualSelectionPromptBuilder;
 import com.example.web.dto.CharacterDto;
 import com.example.web.dto.ChatApiRequest;
 import com.example.web.dto.HistoryMessageDto;
-import com.example.web.dto.ImageDto;
 import com.example.web.dto.InputDto;
 import com.example.web.dto.InteractionSettingsDto;
 import com.example.web.dto.InteractionSettingsDto.NarrativeMode;
 import com.example.web.dto.InteractionSettingsDto.ReplyLength;
 import com.example.web.dto.SegmentDelta;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 class ChatServiceTest {
     private static final InteractionSettingsDto SETTINGS = new InteractionSettingsDto(ReplyLength.STANDARD, NarrativeMode.SCENE);
     private final LLMClient llmClient = mock(LLMClient.class);
+    private final ImageValidationService images = new ImageValidationService(new VisionProperties());
     private final ChatService service = new ChatService(
-            new PromptBuilder(new LlmProperties("", "", "", 0.8, 800, 120)), llmClient);
+            new PromptBuilder(new LlmProperties("", "", "", 0.8, 800, 120)), llmClient, images,
+            new VisualSelectionService(llmClient, new ObjectMapper(),
+                    new VisualSelectionPromptBuilder(new ObjectMapper()), images));
 
     @Test
     void buildsModelRequestAndEmitsDeltasBeforeModelReturns() throws Exception {
@@ -76,21 +81,20 @@ class ChatServiceTest {
                 new ChatApiRequest(valid.character(), List.of(), "", null, valid.input(), SETTINGS),
                 new ChatApiRequest(valid.character(), List.of(), "", List.of(), null, SETTINGS));
         for (ChatApiRequest request : invalid) {
-            assertThrows(IllegalArgumentException.class, () -> service.chatStream(request, delta -> {}));
+            assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
         }
         verifyNoInteractions(llmClient);
     }
 
     @Test
-    void rejectsBlankOversizedAndImageInputBeforeCallingModel() {
+    void rejectsBlankAndOversizedInputBeforeCallingModel() {
         for (InputDto input : List.of(
                 new InputDto(null, null),
                 new InputDto(" \n\t", null),
-                new InputDto("字".repeat(2001), null),
-                new InputDto("文字", new ImageDto("data:image/png;base64,...")))) {
+                new InputDto("字".repeat(2001), null))) {
             ChatApiRequest valid = validRequest();
             ChatApiRequest request = new ChatApiRequest(valid.character(), List.of(), "", List.of(), input, SETTINGS);
-            assertThrows(IllegalArgumentException.class, () -> service.chatStream(request, delta -> {}));
+            assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
         }
         verifyNoInteractions(llmClient);
     }
@@ -104,11 +108,11 @@ class ChatServiceTest {
                 List.of(new HistoryMessageDto(null, "缺少角色")),
                 List.of(new HistoryMessageDto("user", null)))) {
             ChatApiRequest request = new ChatApiRequest(valid.character(), List.of(), "", history, valid.input(), SETTINGS);
-            assertThrows(IllegalArgumentException.class, () -> service.chatStream(request, delta -> {}));
+            assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
         }
         for (List<String> memories : List.of(Collections.<String>singletonList(null), Collections.nCopies(51, "记忆"))) {
             ChatApiRequest request = new ChatApiRequest(valid.character(), memories, "", List.of(), valid.input(), SETTINGS);
-            assertThrows(IllegalArgumentException.class, () -> service.chatStream(request, delta -> {}));
+            assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
         }
         verifyNoInteractions(llmClient);
     }
@@ -189,7 +193,7 @@ class ChatServiceTest {
                 new InteractionSettingsDto(ReplyLength.STANDARD, null))) {
             ChatApiRequest request = new ChatApiRequest(valid.character(), valid.memories(), valid.summary(),
                     valid.history(), valid.input(), settings);
-            assertThrows(IllegalArgumentException.class, () -> service.chatStream(request, delta -> {}));
+            assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
         }
         verifyNoInteractions(llmClient);
     }

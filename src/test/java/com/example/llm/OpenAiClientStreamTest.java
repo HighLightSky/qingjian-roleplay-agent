@@ -101,6 +101,31 @@ class OpenAiClientStreamTest {
         }
     }
 
+    @Test
+    void serializesMultimodalBlocksInsteadOfPuttingBase64InText() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicReference<String> sent = new AtomicReference<>();
+        server.createContext("/chat", exchange -> {
+            sent.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] data = "{\"choices\":[{\"message\":{\"content\":\"红色\"},\"finish_reason\":\"stop\"}]}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, data.length);
+            try (var body = exchange.getResponseBody()) { body.write(data); }
+        });
+        server.start();
+        try (HttpClient http = HttpClient.newHttpClient()) {
+            var request = new ChatRequest(List.of(new Message("system", "看图"), new Message("user", List.of(
+                    Message.Part.text("什么颜色"), Message.Part.image("data:image/png;base64,test")))), 800, 0.0);
+            assertEquals("红色", client(http, server).chat(request).getContent());
+            var json = new ObjectMapper().readTree(sent.get());
+            assertTrue(json.path("messages").get(0).path("content").isTextual());
+            var content = json.path("messages").get(1).path("content");
+            assertEquals("text", content.get(0).path("type").asText());
+            assertEquals("image_url", content.get(1).path("type").asText());
+            assertEquals("data:image/png;base64,test", content.get(1).path("image_url").path("url").asText());
+        } finally { server.stop(0); }
+    }
+
     private OpenAiClient client(HttpClient http, HttpServer server) {
         return new OpenAiClient(http, new ObjectMapper(),
                 "http://127.0.0.1:" + server.getAddress().getPort() + "/chat",

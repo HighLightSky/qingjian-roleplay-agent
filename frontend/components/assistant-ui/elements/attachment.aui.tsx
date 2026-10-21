@@ -8,7 +8,7 @@ import {
 } from "react";
 import {
   XIcon,
-  PlusIcon,
+  ImageIcon,
   FileText,
   Loader2Icon,
   AlertCircleIcon,
@@ -32,11 +32,7 @@ import {
   DialogContent,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  Avatar,
-  AvatarImage,
-  AvatarFallback,
-} from "@/components/ui/avatar";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button";
 import { useAttachmentSrc } from "@/hooks/use-attachment-src";
 import { cn } from "@/lib/utils";
@@ -51,7 +47,7 @@ const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src, name }) => {
   return (
     <img
       src={src}
-      alt={`Preview of ${name}`}
+      alt={`图片 ${name}`}
       className={cn(
         "block h-auto max-h-[80vh] w-auto max-w-full rounded-sm object-contain transition-opacity duration-300 motion-reduce:transition-none",
         isLoaded
@@ -89,7 +85,7 @@ const AttachmentPreviewDialog: FC<AttachmentPreviewDialogProps> = ({
       </DialogTrigger>
       <DialogContent className="aui-attachment-preview-dialog-content [&>button]:bg-foreground/60 [&>button]:hover:bg-foreground/80 [&_svg]:text-background p-2 sm:max-w-3xl [&>button]:rounded-full [&>button]:p-1 [&>button]:opacity-100 [&>button]:ring-0!">
         <DialogTitle className="aui-sr-only sr-only">
-          Preview {name}
+          查看图片 {name}
         </DialogTitle>
         <div className="aui-attachment-preview bg-background relative mx-auto flex max-h-[80dvh] w-full items-center justify-center overflow-hidden rounded-sm">
           <AttachmentPreview src={src} name={name} />
@@ -125,11 +121,11 @@ const AttachmentUI: FC = () => {
     const type = s.attachment.type;
     switch (type) {
       case "image":
-        return "Image";
+        return "图片";
       case "document":
-        return "Document";
+        return "文档";
       case "file":
-        return "File";
+        return "文件";
       default:
         return type;
     }
@@ -153,7 +149,7 @@ const AttachmentUI: FC = () => {
   const errorMessage = useAuiState((s) =>
     s.attachment.status.type === "incomplete" &&
     s.attachment.status.reason === "error"
-      ? (s.attachment.status.message ?? "Upload failed")
+      ? (s.attachment.status.message ?? "图片准备失败")
       : undefined,
   );
 
@@ -200,8 +196,8 @@ const AttachmentUI: FC = () => {
                       }
                     : undefined
                 }
-                aria-label={`${src ? `Preview ${name}` : `${typeLabel} attachment ${name}`}${
-                  isError ? ", upload failed" : isUploading ? ", uploading" : ""
+                aria-label={`${src ? `查看 ${name}` : `${typeLabel} ${name}`}${
+                  isError ? "，准备失败" : isUploading ? "，正在准备" : ""
                 }`}
               >
                 <AttachmentThumb src={src} />
@@ -241,7 +237,8 @@ const AttachmentRemove: FC<{ name: string }> = ({ name }) => {
   return (
     <AttachmentPrimitive.Remove asChild>
       <TooltipIconButton
-        tooltip={`Remove ${name}`}
+        tooltip={`移除 ${name}`}
+        aria-label={`移除 ${name}`}
         className="aui-attachment-tile-remove absolute end-1 top-1 size-5 rounded-full bg-black/50! text-white after:absolute after:-inset-1.5 hover:bg-black/70! hover:text-white! active:scale-[0.96] motion-reduce:transition-none"
         side="top"
       >
@@ -275,14 +272,14 @@ export const ComposerAddAttachment: FC = () => {
   return (
     <ComposerPrimitive.AddAttachment asChild>
       <TooltipIconButton
-        tooltip="Add Attachment"
+        tooltip="图片"
         side="bottom"
         variant="ghost"
         size="icon"
         className="aui-composer-add-attachment text-muted-foreground hover:text-foreground hover:bg-muted-foreground/15 dark:border-muted-foreground/15 dark:hover:bg-muted-foreground/30 size-7 rounded-full active:scale-[0.96] motion-reduce:transition-none"
-        aria-label="Add Attachment"
+        aria-label="图片"
       >
-        <PlusIcon className="aui-attachment-add-icon size-4" />
+        <ImageIcon className="aui-attachment-add-icon size-4" />
       </TooltipIconButton>
     </ComposerPrimitive.AddAttachment>
   );

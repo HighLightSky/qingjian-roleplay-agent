@@ -26,6 +26,12 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiError> invalidJson(HttpMessageNotReadableException exception) {
+        // RequestSizeFilter 在分块读取超限时中断输入流，这里把它恢复成 413。
+        if (exception.getMostSpecificCause() instanceof IOException cause
+                && RequestSizeFilter.REQUEST_TOO_LARGE.equals(cause.getMessage())) {
+            return jsonError(HttpStatus.PAYLOAD_TOO_LARGE,
+                    new ApiError("REQUEST_TOO_LARGE", "请求体不能超过 64 MiB。"));
+        }
         return jsonError(HttpStatus.BAD_REQUEST,
                 new ApiError("BAD_REQUEST", "请求正文缺失或 JSON 格式错误。"));
     }

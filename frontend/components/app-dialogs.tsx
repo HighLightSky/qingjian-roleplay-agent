@@ -7,6 +7,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { ImageGallery } from "@/components/chat/image-gallery";
 import { DownloadIcon, LeafIcon, UploadIcon } from "lucide-react";
 import {
   Dialog,
@@ -384,10 +385,11 @@ function DataSettings({ open }: { open: (state: DialogState) => void }) {
           开启持久存储
         </Button>
       </section>
+      <ImageGallery />
       <section className="border-t pt-5">
         <h3 className="text-sm font-medium">完整备份</h3>
         <p className="mt-2 text-xs leading-5 text-muted-foreground">
-          包含角色、对话、记忆、草稿与外观设置。导出会先停止正在生成的回复。
+          包含角色、对话、图片原件、视觉记录、记忆、草稿与外观设置。导出会先停止正在生成的回复。
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <Button

@@ -7,6 +7,59 @@ createServer(async (request, response) => {
     response.end("ok");
     return;
   }
+  if (request.url === "/api/capabilities") {
+    response.writeHead(200, { "content-type": "application/json" }).end(
+      JSON.stringify({
+        visionSupported: true,
+        mimeTypes: ["image/png", "image/jpeg"],
+        maxImages: 4,
+        maxImageBytes: 10485760,
+        maxPixels: 20000000,
+        maxRequestBytes: 67108864,
+      }),
+    );
+    return;
+  }
+  if (
+    request.url === "/api/context/inspect" ||
+    request.url === "/api/visual/update"
+  ) {
+    let raw = "";
+    for await (const chunk of request) raw += chunk;
+    const data = JSON.parse(raw);
+    const result =
+      request.url === "/api/context/inspect"
+        ? {
+            status: "ready",
+            selectedHistoricalImages: data.input.text.includes("不需要图片")
+              ? []
+              : data.visual.assetCatalog.slice(0, 1).map((a) => ({
+                  assetId: a.assetId,
+                  purpose: "核对地图细节",
+                })),
+            candidateAssetIds: [],
+            message: "",
+            contextFingerprint: "test-fixture",
+          }
+        : {
+            observations: data.context.visual.imagePayloads.map((p) => ({
+              assetId: p.assetId,
+              summary: "地图参考",
+              visibleDetails: ["红色标记"],
+              extractedText: [],
+              uncertainDetails: ["细字未辨认"],
+              sourceMessageIds: [data.userMessageId],
+              version:
+                (data.context.visual.assetCatalog.find(
+                  (a) => a.assetId === p.assetId,
+                )?.observation?.version ?? 0) + 1,
+            })),
+          };
+    response
+      .writeHead(200, { "content-type": "application/json" })
+      .end(JSON.stringify(result));
+    return;
+  }
   if (request.url !== "/api/chat" || request.method !== "POST") {
     response.writeHead(404).end();
     return;
@@ -15,14 +68,12 @@ createServer(async (request, response) => {
   for await (const chunk of request) raw += chunk;
   const body = JSON.parse(raw);
   if (body.input.text.includes("接口失败")) {
-    response
-      .writeHead(502, { "content-type": "application/json" })
-      .end(
-        JSON.stringify({
-          code: "MODEL_UNAVAILABLE",
-          message: "测试模型暂不可用",
-        }),
-      );
+    response.writeHead(502, { "content-type": "application/json" }).end(
+      JSON.stringify({
+        code: "MODEL_UNAVAILABLE",
+        message: "测试模型暂不可用",
+      }),
+    );
     return;
   }
   response.writeHead(200, {

@@ -1,3 +1,5 @@
+import type { ContentPart, VisualContext } from "../images/types";
+import { imageIds } from "../images/types";
 import {
   plainText,
   type Character,
@@ -14,16 +16,19 @@ export function chatContext(
   messages: Message[],
   input: string,
   interactionSettings: InteractionSettings,
+  parts?: ContentPart[],
 ) {
   const history = messages
     .filter(
       (message) =>
         !["pending", "streaming"].includes(message.status) &&
-        plainText(message),
+        (plainText(message) || imageIds(message.parts).length > 0),
     )
     .map((message) => ({
       role: message.role,
       seq: message.seq,
+      id: message.id,
+      parts: message.parts,
       text:
         plainText(message) +
         (message.status === "complete" ? "" : "\n（该回复未完成。）"),
@@ -57,8 +62,16 @@ export function chatContext(
     ]
       .filter(Boolean)
       .join("\n\n"),
-    history: recent.map(({ role, text }) => ({ role, text })),
-    input: { text: input, image: null },
+    history: recent.map(({ role, text, id, parts }) => ({
+      role,
+      text,
+      ...(parts ? { id, parts } : {}),
+    })),
+    input: { text: input, image: null, ...(parts ? { parts } : {}) },
     interactionSettings: { ...interactionSettings },
   };
 }
+
+export type ChatContext = ReturnType<typeof chatContext> & {
+  visual?: VisualContext;
+};

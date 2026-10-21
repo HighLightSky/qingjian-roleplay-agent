@@ -2,6 +2,13 @@
 
 import { create } from "zustand";
 import * as db from "@/lib/db";
+import {
+  prepareImageContext,
+  resumePendingTasks,
+  saveCompletedVisualTask,
+  runVisualTask,
+} from "@/lib/images/coordinator";
+import { imageIds, type ContentPart } from "@/lib/images/types";
 import { chatContext } from "@/lib/chat/context";
 import { streamChat } from "@/lib/chat/sse";
 import {
@@ -41,6 +48,7 @@ type AppState = {
   themeMode: ThemeMode;
   interactionSettings: InteractionSettings;
   activeSessionId: string | null;
+  preparingInput: boolean;
   memoryOpen: boolean;
 };
 export const useAppStore = create<AppState>(() => ({
@@ -62,6 +70,7 @@ export const useAppStore = create<AppState>(() => ({
   themeMode: "system",
   interactionSettings: { ...DEFAULT_INTERACTION_SETTINGS },
   activeSessionId: null,
+  preparingInput: false,
   memoryOpen: false,
 }));
 const get = useAppStore.getState;
@@ -147,6 +156,7 @@ export function initialize() {
         if (character)
           await selectCharacter(character.id, saved.get("sessionId"));
         set({ ready: true, bootError: "" });
+        void recoverVisualTasks().catch(report);
       } catch (error) {
         set({ bootError: `无法打开本地数据：${errorText(error)}` });
         initPromise = undefined;
@@ -262,9 +272,12 @@ export async function flushDrafts() {
     const tx = database.transaction(["drafts", "sessions"], "readwrite");
     for (const [sessionId, draft] of buffered)
       if (await tx.objectStore("sessions").get(sessionId))
-        await tx
-          .objectStore("drafts")
-          .put({ sessionId, text: draft.text, updatedAt: now() });
+        await tx.objectStore("drafts").put({
+          ...(await tx.objectStore("drafts").get(sessionId)),
+          sessionId,
+          text: draft.text,
+          updatedAt: now(),
+        });
     await tx.done;
   });
 }
@@ -426,15 +439,19 @@ export async function updateInteractionSettings(
   });
 }
 
-export async function sendMessage(text: string) {
+export async function sendMessage(
+  text: string,
+  parts?: ContentPart[],
+  retryUserId?: string,
+) {
   if (get().activeSessionId)
     throw new Error("已有一段对话正在回复，请稍候或先停止。");
   const { sessionId, characterId, readOnly } = get();
   if (!sessionId || !characterId || readOnly)
     throw new Error("当前会话不可发送。");
-  if (!text.trim() || text.length > 2000)
-    throw new Error("请输入 1–2000 个字符。");
-  set({ activeSessionId: sessionId, error: "" });
+  if ((!text.trim() && !imageIds(parts).length) || text.length > 2000)
+    throw new Error("请输入文字或选择图片，文字最多 2000 个字符。");
+  set({ activeSessionId: sessionId, preparingInput: true, error: "" });
   const runController = new AbortController();
   controller = runController;
   let reply: Message | undefined;
@@ -467,6 +484,7 @@ export async function sendMessage(text: string) {
     try {
       await flushDrafts();
       await writes;
+      await resumePendingTasks(sessionId, runController.signal, write);
       const interactionSettings = { ...get().interactionSettings };
       const database = await db.database();
       const [character, session, memories] = await Promise.all([
@@ -481,22 +499,66 @@ export async function sendMessage(text: string) {
         session.summaryThroughSeq,
         Math.max(0, session.nextMessageSeq - 21),
       );
-      const history = await db.allMessages(sessionId, after);
-      const body = chatContext(
+      const allHistory = await db.allMessages(sessionId);
+      const retryUser = retryUserId
+        ? allHistory.find((m) => m.id === retryUserId && m.role === "user")
+        : undefined;
+      if (
+        retryUserId &&
+        (!retryUser ||
+          retryUser.seq !==
+            allHistory.filter((m) => m.role === "user").at(-1)?.seq)
+      )
+        throw new Error("仅支持重试最近一条用户消息。");
+      const beforeInput = retryUser
+        ? allHistory.filter((m) => m.seq < retryUser.seq)
+        : allHistory;
+      const history = beforeInput.filter((m) => m.seq > after);
+      const baseContext = chatContext(
         character,
         session,
         memories,
         history,
         text,
         interactionSettings,
+        parts,
       );
-      if (runController.signal.aborted) return;
-      const turn = await write(() => db.beginTurn(sessionId, text));
+      const body = await prepareImageContext(
+        baseContext,
+        sessionId,
+        beforeInput,
+        runController.signal,
+      );
+      runController.signal.throwIfAborted();
+      const turn = await write(async () => {
+        if (!retryUser) return db.beginTurn(sessionId, text, parts);
+        const previous = allHistory.find(
+          (m) => m.role === "assistant" && m.replyToMessageId === retryUser.id,
+        );
+        if (!previous || previous.status === "complete")
+          throw new Error("这条消息无需重试。");
+        const assistant: Message = {
+          ...previous,
+          segments: [],
+          status: "pending",
+          error: undefined,
+          finishReason: undefined,
+          checkpointVersion: previous.checkpointVersion + 1,
+          updatedAt: now(),
+        };
+        await database.put("messages", assistant);
+        return { user: retryUser, assistant, session };
+      });
+      set({ preparingInput: false });
       reply = turn.assistant;
       liveReply = reply;
       if (get().sessionId === sessionId)
         set((state) => ({
-          messages: [...state.messages, turn.user, turn.assistant],
+          messages: retryUser
+            ? state.messages.map((m) =>
+                m.id === turn.assistant.id ? turn.assistant : m,
+              )
+            : [...state.messages, turn.user, turn.assistant],
           draft: "",
         }));
       await refreshMetadata();
@@ -518,7 +580,7 @@ export async function sendMessage(text: string) {
       });
       reply = {
         ...reply,
-        status: reason === "stop" ? "complete" : "error",
+        status: reason === "stop" && plainText(reply) ? "complete" : "error",
         finishReason: reason,
         error:
           reason === "stop"
@@ -531,9 +593,25 @@ export async function sendMessage(text: string) {
         checkpointVersion: reply.checkpointVersion + 1,
         updatedAt: now(),
       };
+      if (reason === "stop" && plainText(reply)) {
+        const task = await write(() =>
+          saveCompletedVisualTask(body, turn.user, reply!),
+        );
+        if (task) {
+          publish();
+          try {
+            await runVisualTask(task, runController.signal, write);
+          } catch (error) {
+            if (!runController.signal.aborted)
+              report(
+                new Error(`正文已保存，视觉整理待重试：${errorText(error)}`),
+              );
+          }
+        }
+      }
     } catch (error) {
       const cancelled = runController.signal.aborted && !storageError;
-      if (!reply && !cancelled) preparationError = error;
+      if (!reply) preparationError = error;
       if (reply)
         reply = {
           ...reply,
@@ -559,7 +637,7 @@ export async function sendMessage(text: string) {
       }
       if (controller === runController) controller = null;
       liveReply = null;
-      set({ activeSessionId: null });
+      set({ activeSessionId: null, preparingInput: false });
     }
   };
   const currentRun = run();
@@ -570,6 +648,42 @@ export async function sendMessage(text: string) {
     if (generation === currentRun) generation = null;
   }
   if (preparationError) throw preparationError;
+}
+// Recovery uses the same run lock and cancellation path as a normal send.
+export async function recoverVisualTasks() {
+  const sessionId = get().sessionId;
+  if (!sessionId || get().readOnly || get().activeSessionId) return;
+  const tasks = await (
+    await db.database()
+  ).getAllFromIndex("visualTasks", "session", sessionId);
+  if (!tasks.length || get().activeSessionId || get().sessionId !== sessionId)
+    return;
+  const runController = new AbortController();
+  controller = runController;
+  set({ activeSessionId: sessionId });
+  const currentRun = resumePendingTasks(sessionId, runController.signal, write)
+    .catch((error) => {
+      if (!runController.signal.aborted)
+        report(new Error(`视觉整理待重试：${errorText(error)}`));
+    })
+    .finally(() => {
+      if (controller === runController) controller = null;
+      set({ activeSessionId: null, preparingInput: false });
+    });
+  generation = currentRun;
+  try {
+    await currentRun;
+  } finally {
+    if (generation === currentRun) generation = null;
+  }
+}
+export async function retryLastMessage() {
+  const sessionId = get().sessionId;
+  if (!sessionId) return;
+  const messages = await db.allMessages(sessionId);
+  const user = messages.filter((m) => m.role === "user").at(-1);
+  if (!user) return;
+  return sendMessage(user.text ?? "", user.parts, user.id);
 }
 export async function cancelGeneration() {
   controller?.abort();

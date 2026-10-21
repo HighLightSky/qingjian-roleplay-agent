@@ -2,15 +2,22 @@
 
 import {
   AssistantRuntimeProvider,
+  MessageNotSentError,
   useAssistantDataUI,
   useExternalStoreRuntime,
   type AssistantRuntime,
   type DataMessagePartComponent,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { plainText, type Message } from "@/lib/domain";
+import { database, TABLES, collectUnreferenced } from "@/lib/db";
+import { imageIds, type ContentPart } from "@/lib/images/types";
+import {
+  attachmentAssetId,
+  createImageAttachmentAdapter,
+} from "@/lib/images/attachment-adapter";
+import { plainText, now, type Message } from "@/lib/domain";
 import {
   cancelGeneration,
   flushDrafts,
@@ -22,6 +29,8 @@ import {
   scheduleDraft,
   selectSession,
   sendMessage,
+  write,
+  retryLastMessage,
   useAppStore,
 } from "@/stores/use-app-store";
 
@@ -37,6 +46,18 @@ function convertMessage(message: Message): ThreadMessageLike {
     id: message.id,
     role: message.role,
     createdAt: new Date(message.createdAt),
+    ...(message.role === "user"
+      ? {
+          attachments: imageIds(message.parts).map((assetId, index) => ({
+            id: `${message.id}:image:${index}`,
+            type: "image",
+            name: `图片 ${index + 1}`,
+            contentType: "image/png",
+            status: { type: "complete" as const },
+            content: [{ type: "image" as const, image: `asset:${assetId}` }],
+          })),
+        }
+      : {}),
     content:
       message.role === "user"
         ? [{ type: "text", text }]
@@ -90,28 +111,104 @@ const Note: DataMessagePartComponent<{ text: string }> = ({ data }) => (
   </p>
 );
 
-function RuntimeBindings({ runtime }: { runtime: AssistantRuntime }) {
+function RuntimeBindings({
+  runtime,
+  onPreparing,
+}: {
+  runtime: AssistantRuntime;
+  onPreparing: (value: boolean) => void;
+}) {
   useAssistantDataUI({ name: "dialogue", render: Dialogue });
   useAssistantDataUI({ name: "narration", render: Narration });
   useAssistantDataUI({ name: "note", render: Note });
   const loading = useAppStore((state) => state.loadingMessages);
   const sessionId = useAppStore((state) => state.sessionId);
   useEffect(() => {
+    const update = () =>
+      onPreparing(
+        runtime.thread.composer
+          .getState()
+          .attachments.some(
+            (a) =>
+              a.status.type === "running" || a.status.type === "incomplete",
+          ),
+      );
+    update();
+    return runtime.thread.composer.subscribe(update);
+  }, [runtime, onPreparing]);
+  useEffect(() => {
     if (!sessionId || loading) return;
     // Restore only when a session finishes loading, never after a draft save.
     runtime.thread.composer.setText(useAppStore.getState().draft);
+    let restoring = true;
+    let previousAttachmentIds = "";
+    void database()
+      .then(async (db) => {
+        const draft = await db.get("drafts", sessionId);
+        for (const assetId of imageIds(draft?.parts)) {
+          if (disposed) return;
+          const asset = await db.get("assets", assetId);
+          if (disposed) return;
+          if (!asset)
+            report(new Error("草稿图片原件缺失，可以移除附件或恢复备份。"));
+          await runtime.thread.composer.addAttachment({
+            id: assetId,
+            type: "image",
+            name: asset?.displayName ?? "图片原件缺失",
+            contentType: asset?.mimeType ?? "image/png",
+            content: [{ type: "image", image: `asset:${assetId}` }],
+          });
+        }
+        previousAttachmentIds = imageIds(draft?.parts).join(",");
+        restoring = false;
+      })
+      .catch(report);
     let previousText = runtime.thread.composer.getState().text;
     let composing = false;
     let disposed = false;
     const syncDraft = (force = false) => {
       if (disposed || composing) return;
       const composer = runtime.thread.composer.getState();
-      if (!composer.text && composer.submission) return;
+      if (
+        composer.submission ||
+        composer.inTransit?.length ||
+        restoring ||
+        useAppStore.getState().preparingInput
+      )
+        return;
+      const assetIds = composer.attachments
+        .map(attachmentAssetId)
+        .filter((value): value is string => !!value);
+      const nextAttachmentIds = assetIds.join(",");
+      if (nextAttachmentIds !== previousAttachmentIds) {
+        previousAttachmentIds = nextAttachmentIds;
+        void write(async () => {
+          const db = await database();
+          const tx = db.transaction(TABLES, "readwrite");
+          const draft = await tx.objectStore("drafts").get(sessionId);
+          if (draft)
+            await tx.objectStore("drafts").put({
+              ...draft,
+              parts: assetIds.map((assetId) => ({ type: "image", assetId })),
+              updatedAt: now(),
+            });
+          await collectUnreferenced(tx);
+          await tx.done;
+        }).catch(report);
+      }
       if (!force && composer.text === previousText) return;
       previousText = composer.text;
       scheduleDraft(sessionId, composer.text);
     };
-    const unsubscribe = runtime.thread.composer.subscribe(syncDraft);
+    // assistant-ui detaches a ready draft just before calling onNew. Defer reading
+    // until that synchronous handoff completes, so assets cannot be collected mid-send.
+    const unsubscribe = runtime.thread.composer.subscribe(() =>
+      queueMicrotask(() => syncDraft()),
+    );
+    const unsubscribeError = runtime.thread.composer.unstable_on(
+      "attachmentAddError",
+      (event) => report(new Error(event.message)),
+    );
     const isComposer = (event: Event) =>
       event.target instanceof HTMLTextAreaElement &&
       event.target.hasAttribute("data-roleplay-composer");
@@ -140,6 +237,7 @@ function RuntimeBindings({ runtime }: { runtime: AssistantRuntime }) {
     document.addEventListener("visibilitychange", flush);
     return () => {
       unsubscribe();
+      unsubscribeError();
       disposed = true;
       void flushDrafts().catch(report);
       document.removeEventListener("compositionstart", compositionStart, true);
@@ -152,6 +250,10 @@ function RuntimeBindings({ runtime }: { runtime: AssistantRuntime }) {
   return null;
 }
 export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
+  const sessionId = useAppStore((state) => state.sessionId);
+  return <SessionRuntime key={sessionId ?? "empty"}>{children}</SessionRuntime>;
+}
+function SessionRuntime({ children }: { children: ReactNode }) {
   const state = useAppStore(
     useShallow((state) => ({
       messages: state.messages,
@@ -176,12 +278,18 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
       })),
     [state.sessions],
   );
+  const [preparingImages, setPreparingImages] = useState(false);
+  const attachmentAdapter = useMemo(
+    () => createImageAttachmentAdapter(state.sessionId ?? "", write),
+    [state.sessionId],
+  );
   const runtime = useExternalStoreRuntime<Message>({
     messages: state.messages,
     convertMessage,
     isLoading: state.loadingMessages,
     isDisabled: state.readOnly || !state.sessionId || state.archived,
     isSendDisabled:
+      preparingImages ||
       state.busy ||
       (!!state.activeSessionId && state.activeSessionId !== state.sessionId),
     isRunning:
@@ -194,14 +302,32 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
         .map((part) => part.text)
         .join("\n");
       try {
-        await sendMessage(text);
+        const assetIds = (message.attachments ?? []).map(attachmentAssetId);
+        if (assetIds.some((assetId) => !assetId))
+          throw new Error("附件尚未准备完成。");
+        const parts: ContentPart[] | undefined = assetIds.length
+          ? [
+              ...(text ? [{ type: "text" as const, text }] : []),
+              ...assetIds.map((assetId) => ({
+                type: "image" as const,
+                assetId: assetId!,
+              })),
+            ]
+          : undefined;
+        await sendMessage(text, parts);
       } catch (error) {
         report(error);
-        throw error;
+        throw new MessageNotSentError(
+          error instanceof Error ? error.message : "发送前准备失败。",
+        );
       }
     },
     onCancel: cancelGeneration,
+    onReload: async () => {
+      await retryLastMessage();
+    },
     adapters: {
+      attachments: attachmentAdapter,
       threadList: {
         threadId: state.sessionId ?? undefined,
         threads,
@@ -218,7 +344,7 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
   });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <RuntimeBindings runtime={runtime} />
+      <RuntimeBindings runtime={runtime} onPreparing={setPreparingImages} />
       {children}
     </AssistantRuntimeProvider>
   );

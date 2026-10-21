@@ -23,27 +23,29 @@ public class ChatService {
 
     private final PromptBuilder promptBuilder;
     private final LLMClient llmClient;
+    private final ImageValidationService images;
+    private final VisualSelectionService selection;
 
-    // 由 Spring 注入已有的提示词构建器和模型客户端。
-    public ChatService(PromptBuilder promptBuilder, LLMClient llmClient) {
+    public ChatService(PromptBuilder promptBuilder, LLMClient llmClient, ImageValidationService images,
+            VisualSelectionService selection) {
         this.promptBuilder = promptBuilder;
         this.llmClient = llmClient;
+        this.images = images;
+        this.selection = selection;
     }
 
     /**
      * 同步执行一次流式聊天，期间通过 onDelta 持续输出台词或描写。
      *
-     * @param request 前端提交的完整上下文，当前仅支持纯文字输入
+     * @param request 已由入口调用 {@link #validateRequest} 校验的完整上下文
      * @param onDelta 解析出正文时执行的回调，由 Controller 负责发送 SSE
      * @return 模型返回的结束原因，供 Controller 构造 done 事件
-     * @throws IllegalArgumentException 输入不合法或携带当前尚不支持的图片
      * @throws IOException 模型请求或响应读取失败
      * @throws InterruptedException 当前模型请求被中断
      */
     public String chatStream(ChatApiRequest request, Consumer<SegmentDelta> onDelta)
             throws IOException, InterruptedException {
         Objects.requireNonNull(onDelta, "onDelta 不能为空");
-        validateRequest(request);
 
         ChatRequest chatRequest = promptBuilder.build(request);
         // 解析器有当前行的状态，因此每次请求都要新建，不能放在成员字段中共享。
@@ -93,8 +95,8 @@ public class ChatService {
             if (!"user".equals(message.role()) && !"assistant".equals(message.role())) {
                 throw new IllegalArgumentException("历史消息的 role 只能是 user 或 assistant");
             }
-            if (message.text() == null) {
-                throw new IllegalArgumentException("历史消息的 text 不能为 null");
+            if (message.parts() == null && message.text() == null) {
+                throw new IllegalArgumentException("历史消息必须提供 text 或 parts");
             }
         }
 
@@ -102,16 +104,15 @@ public class ChatService {
         if (input == null) {
             throw new IllegalArgumentException("本轮输入不能为空");
         }
-        // 当前 Message 只支持文本；图片功能接入前明确拒绝，避免图片被静默忽略。
-        if (input.image() != null) {
-            throw new IllegalArgumentException("当前尚不支持图片输入，请先发送纯文字");
-        }
-        if (input.text() == null || input.text().isBlank()) {
+        images.validateReferences(request);
+        String text = input.textOf();
+        if (text.isBlank() && ImageValidationService.newIds(request).isEmpty()) {
             throw new IllegalArgumentException("用户输入不能为空");
         }
-        if (input.text().length() > MAX_INPUT_CHARS) {
+        if (text.length() > MAX_INPUT_CHARS) {
             throw new IllegalArgumentException("用户输入不能超过 " + MAX_INPUT_CHARS + " 字符");
         }
+        images.validatePayloads(request, selection.validatePlan(request));
     }
 
     private void validateInteractionSettings(InteractionSettingsDto settings) {

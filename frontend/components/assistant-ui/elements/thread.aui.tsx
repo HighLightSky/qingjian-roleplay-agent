@@ -499,6 +499,7 @@ const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
           data-slot="aui_composer-shell"
           className="border-foreground/10 focus-within:border-foreground/25 data-[dragging=true]:border-ring flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
         >
+          <ComposerAttachments />
           <ComposerPrimitive.Input
             data-roleplay-composer
             placeholder="写下你想说的话…"
@@ -508,7 +509,7 @@ const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
             enterKeyHint="enter"
             maxLength={2000}
             unstable_insertNewlineOnTouchEnter
-            addAttachmentOnPaste={false}
+            addAttachmentOnPaste={true}
             aria-label="消息内容"
           />
           <ComposerAction />
@@ -524,6 +525,7 @@ const ComposerAction: FC = () => {
   return (
     <div className="aui-composer-action-wrapper flex items-center justify-between gap-2 px-1">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <ComposerAddAttachment />
         {ComposerControls && <ComposerControls />}
         <span className="text-xs text-muted-foreground">
           {length ? `${length} / 2000` : "让故事继续"}
@@ -706,6 +708,17 @@ const AssistantActionBar: FC = () => {
           </AuiIf>
         </TooltipIconButton>
       </ActionBarPrimitive.Copy>
+      <AuiIf
+        condition={(state) =>
+          state.message.isLast && state.message.status?.type === "incomplete"
+        }
+      >
+        <ActionBarPrimitive.Reload asChild>
+          <TooltipIconButton tooltip="重试回复" aria-label="重试回复">
+            <RefreshCwIcon />
+          </TooltipIconButton>
+        </ActionBarPrimitive.Reload>
+      </AuiIf>
       {MessageActions && <MessageActions />}
     </ActionBarPrimitive.Root>
   );

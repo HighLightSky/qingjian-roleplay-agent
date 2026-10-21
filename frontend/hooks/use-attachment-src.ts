@@ -1,5 +1,6 @@
 "use client";
 
+import { useImageUrl } from "./use-image-url";
 import { useEffect, useState } from "react";
 import { useAuiState } from "@assistant-ui/react";
 import { useShallow } from "zustand/react/shallow";
@@ -42,5 +43,8 @@ export const useAttachmentSrc = () => {
     }),
   );
 
-  return useFileSrc(file) ?? src;
+  const local = useImageUrl(
+    src?.startsWith("asset:") ? src.slice(6) : undefined,
+  );
+  return useFileSrc(file) ?? (src?.startsWith("asset:") ? local : src);
 };

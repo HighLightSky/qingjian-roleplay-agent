@@ -167,11 +167,26 @@ public class OpenAiClient implements LLMClient {
         for (Message message : request.getMessages()) {
             Objects.requireNonNull(message, "messages must not contain null entries");
             Objects.requireNonNull(message.getRole(), "message role must not be null");
-            Objects.requireNonNull(message.getContent(), "message content must not be null");
+            if (message.getContent() == null && message.getParts() == null)
+                throw new IllegalArgumentException("message content must not be null");
 
             ObjectNode item = messages.addObject();
             item.put("role", message.getRole());
-            item.put("content", message.getContent());
+            if (message.getParts() == null) {
+                item.put("content", message.getContent());
+            } else {
+                ArrayNode content = item.putArray("content");
+                for (Message.Part part : message.getParts()) {
+                    ObjectNode block = content.addObject();
+                    block.put("type", part.type());
+                    if ("text".equals(part.type()))
+                        block.put("text", part.text());
+                    else if ("image_url".equals(part.type()))
+                        block.putObject("image_url").put("url", part.imageUrl());
+                    else
+                        throw new IllegalArgumentException("未知模型内容块");
+                }
+            }
         }
 
         if (request.getMaxTokens() != null) {

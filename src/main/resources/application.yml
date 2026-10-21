@@ -9,3 +9,10 @@ roleplay:
     temperature: 0.8
     max-tokens: 8192
     timeout-seconds: 120
+
+  vision:
+    supported: ${ROLEPLAY_VISION_SUPPORTED:true}
+    max-images: 4
+    max-image-bytes: 10485760
+    max-pixels: 20000000
+    planning-input-chars: 48000

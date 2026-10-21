@@ -1,3 +1,11 @@
+import type {
+  ImageAsset,
+  VisualObservation,
+  ImageUsage,
+  VisualTask,
+  ContentPart,
+} from "./images/types";
+import { imageIds } from "./images/types";
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import {
   id,
@@ -14,6 +22,14 @@ import {
 } from "./domain";
 
 export interface RoleplayDB extends DBSchema {
+  assets: { key: string; value: ImageAsset; indexes: { sha256: string } };
+  visualObservations: {
+    key: string;
+    value: VisualObservation;
+    indexes: { session: string };
+  };
+  imageUsages: { key: string; value: ImageUsage; indexes: { session: string } };
+  visualTasks: { key: string; value: VisualTask; indexes: { session: string } };
   characters: { key: string; value: Character };
   sessions: { key: string; value: Session; indexes: { character: string } };
   messages: {
@@ -32,28 +48,50 @@ export const TABLES = [
   "memories",
   "drafts",
   "settings",
+  "assets",
+  "visualObservations",
+  "imageUsages",
+  "visualTasks",
 ] as const;
 let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
-    connection = openDB<RoleplayDB>("roleplay-agent", 1, {
-      upgrade(db) {
-        db.createObjectStore("characters", { keyPath: "id" });
-        db.createObjectStore("sessions", { keyPath: "id" }).createIndex(
-          "character",
-          "characterId",
-        );
-        const messages = db.createObjectStore("messages", { keyPath: "id" });
-        messages.createIndex("sequence", ["sessionId", "seq"], {
-          unique: true,
-        });
-        messages.createIndex("status", "status");
-        db.createObjectStore("memories", { keyPath: "id" }).createIndex(
-          "character",
-          "characterId",
-        );
-        db.createObjectStore("drafts", { keyPath: "sessionId" });
-        db.createObjectStore("settings", { keyPath: "key" });
+    connection = openDB<RoleplayDB>("roleplay-agent", 2, {
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
+          db.createObjectStore("characters", { keyPath: "id" });
+          db.createObjectStore("sessions", { keyPath: "id" }).createIndex(
+            "character",
+            "characterId",
+          );
+          const messages = db.createObjectStore("messages", { keyPath: "id" });
+          messages.createIndex("sequence", ["sessionId", "seq"], {
+            unique: true,
+          });
+          messages.createIndex("status", "status");
+          db.createObjectStore("memories", { keyPath: "id" }).createIndex(
+            "character",
+            "characterId",
+          );
+          db.createObjectStore("drafts", { keyPath: "sessionId" });
+          db.createObjectStore("settings", { keyPath: "key" });
+        }
+        if (oldVersion < 2) {
+          db.createObjectStore("assets", { keyPath: "id" }).createIndex(
+            "sha256",
+            "sha256",
+            { unique: true },
+          );
+          for (const name of [
+            "visualObservations",
+            "imageUsages",
+            "visualTasks",
+          ] as const)
+            db.createObjectStore(name, { keyPath: "id" }).createIndex(
+              "session",
+              "sessionId",
+            );
+        }
       },
       blocked() {
         window.dispatchEvent(new CustomEvent("roleplay-db-blocked"));
@@ -193,7 +231,11 @@ export async function createSession(characterId: string) {
   await tx.done;
   return session;
 }
-export async function beginTurn(sessionId: string, text: string) {
+export async function beginTurn(
+  sessionId: string,
+  text: string,
+  parts?: ContentPart[],
+) {
   const db = await database();
   const tx = db.transaction(["sessions", "messages", "drafts"], "readwrite");
   const session = await tx.objectStore("sessions").get(sessionId);
@@ -208,6 +250,7 @@ export async function beginTurn(sessionId: string, text: string) {
     seq: session.nextMessageSeq,
     role: "user",
     text,
+    ...(parts ? { parts } : {}),
     status: "complete",
     checkpointVersion: 0,
     createdAt: now(),
@@ -230,7 +273,10 @@ export async function beginTurn(sessionId: string, text: string) {
     nextMessageSeq: session.nextMessageSeq + 2,
     updatedAt: now(),
     ...(session.titleSource === "default"
-      ? { title: titleFrom(text), titleSource: "first-message" as const }
+      ? {
+          title: titleFrom(text) || "图片对话",
+          titleSource: "first-message" as const,
+        }
       : {}),
   };
   await tx.objectStore("messages").put(user);
@@ -256,10 +302,18 @@ export async function checkpoint(message: Message) {
 }
 export async function deleteSession(sessionId: string) {
   const db = await database();
-  const tx = db.transaction(
-    ["sessions", "messages", "drafts", "settings"],
-    "readwrite",
-  );
+  const tx = db.transaction(TABLES, "readwrite");
+  for (const table of [
+    "visualObservations",
+    "imageUsages",
+    "visualTasks",
+  ] as const) {
+    for (const row of await tx
+      .objectStore(table)
+      .index("session")
+      .getAll(sessionId))
+      await tx.objectStore(table).delete(row.id);
+  }
   let cursor = await tx
     .objectStore("messages")
     .index("sequence")
@@ -274,7 +328,27 @@ export async function deleteSession(sessionId: string) {
   await tx.objectStore("drafts").delete(sessionId);
   if ((await tx.objectStore("settings").get("sessionId"))?.value === sessionId)
     await tx.objectStore("settings").delete("sessionId");
+  await collectUnreferenced(tx);
   await tx.done;
+}
+export async function collectUnreferenced(
+  tx: import("idb").IDBPTransaction<RoleplayDB, typeof TABLES, "readwrite">,
+) {
+  const used = new Set<string>();
+  for (const row of await tx.objectStore("messages").getAll())
+    imageIds(row.parts).forEach((assetId) => used.add(assetId));
+  for (const row of await tx.objectStore("drafts").getAll())
+    imageIds(row.parts).forEach((assetId) => used.add(assetId));
+  for (const row of await tx.objectStore("visualObservations").getAll())
+    used.add(row.assetId);
+  for (const row of await tx.objectStore("imageUsages").getAll())
+    used.add(row.assetId);
+  for (const row of await tx.objectStore("visualTasks").getAll()) {
+    imageIds(row.context.input.parts).forEach((assetId) => used.add(assetId));
+    row.context.visual?.assetCatalog.forEach((a) => used.add(a.assetId));
+  }
+  for (const asset of await tx.objectStore("assets").getAll())
+    if (!used.has(asset.id)) await tx.objectStore("assets").delete(asset.id);
 }
 export async function putMemory(
   characterId: string,

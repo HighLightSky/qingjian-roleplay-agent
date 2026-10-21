@@ -1,3 +1,5 @@
+import type { ContentPart } from "./images/types";
+
 export type CharacterProfile = {
   name: string;
   description: string;
@@ -34,6 +36,7 @@ export type Message = {
   seq: number;
   role: "user" | "assistant";
   text?: string;
+  parts?: ContentPart[];
   segments?: Segment[];
   status:
     | "pending"
@@ -58,7 +61,12 @@ export type Memory = {
   createdAt: string;
   updatedAt: string;
 };
-export type Draft = { sessionId: string; text: string; updatedAt: string };
+export type Draft = {
+  sessionId: string;
+  text: string;
+  parts?: ContentPart[];
+  updatedAt: string;
+};
 export type ThemeMode = "system" | "light" | "dark";
 export type Setting = { key: string; value: string };
 export type ReplyLength = "short" | "standard" | "detailed";

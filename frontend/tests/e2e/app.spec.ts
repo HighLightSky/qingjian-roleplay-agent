@@ -573,3 +573,171 @@ test("closing and reopening a browser profile restores committed data and drafts
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("image drafts, first send, history selection and settings gallery survive reload", async ({
+  page,
+}) => {
+  const calls: { path: string; body: any }[] = [];
+  page.on("request", (request) => {
+    if (
+      ["/api/chat", "/api/context/inspect", "/api/visual/update"].some((p) =>
+        request.url().endsWith(p),
+      )
+    )
+      calls.push({
+        path: new URL(request.url()).pathname,
+        body: request.postDataJSON(),
+      });
+  });
+  await createRole(page);
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "图片", exact: true }).click();
+  await (
+    await chooser
+  ).setFiles({
+    name: "map.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB0gX7h/C5SAAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  });
+  await expect(
+    page.getByRole("button", { name: "移除 map.png", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".aui-attachment-tile-uploading")).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(".aui-composer-attachments img")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect
+    .poll(() => calls.filter((c) => c.path === "/api/visual/update").length)
+    .toBe(1);
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeVisible();
+  expect(calls.filter((c) => c.path === "/api/context/inspect")).toHaveLength(
+    0,
+  );
+  expect(
+    calls.find((c) => c.path === "/api/chat")!.body.visual.imagePayloads,
+  ).toHaveLength(1);
+  await send(page, "看看地图里的标记");
+  await expect
+    .poll(() => calls.filter((c) => c.path === "/api/visual/update").length)
+    .toBe(2);
+  expect(calls.filter((c) => c.path === "/api/context/inspect")).toHaveLength(
+    1,
+  );
+  expect(
+    calls.filter((c) => c.path === "/api/chat").at(-1)!.body.visual
+      .imagePayloads,
+  ).toHaveLength(1);
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeVisible();
+  await send(page, "不需要图片");
+  await expect
+    .poll(() => calls.filter((c) => c.path === "/api/chat").length)
+    .toBe(3);
+  expect(calls.filter((c) => c.path === "/api/context/inspect")).toHaveLength(
+    2,
+  );
+  expect(
+    calls.filter((c) => c.path === "/api/chat").at(-1)!.body.visual
+      .imagePayloads,
+  ).toHaveLength(0);
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeVisible();
+  await nav(page);
+  await page.getByRole("button", { name: "设置与数据", exact: true }).click();
+  await page.getByRole("button", { name: "查看 map.png", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "map.png", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("3 × 2", { exact: false })).toBeVisible();
+});
+
+test("ambiguous image selection returns the input to the composer without losing its original", async ({
+  page,
+}) => {
+  await createRole(page);
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "图片", exact: true }).click();
+  await (
+    await chooser
+  ).setFiles({
+    name: "map.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB0gX7h/C5SAAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  });
+  await expect(
+    page.getByRole("button", { name: "移除 map.png", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".aui-attachment-tile-uploading")).toHaveCount(0);
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect(
+    page.getByText("“欢迎回来，旅人。”", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeVisible();
+  await page.route("**/api/context/inspect", async (route) => {
+    const context = route.request().postDataJSON();
+    await route.fulfill({
+      json: {
+        status: "ambiguous",
+        selectedHistoricalImages: [],
+        candidateAssetIds: context.visual.assetCatalog.map(
+          (a: any) => a.assetId,
+        ),
+        message: "请说明你指哪张图片。",
+        contextFingerprint: "fixture",
+      },
+    });
+  });
+  await send(page, "再看一下之前那张");
+  await expect(
+    page.getByText("请说明你指哪张图片。", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "消息内容" })).toHaveValue(
+    "再看一下之前那张",
+  );
+  await expect(page.locator('[data-role="user"]')).toHaveCount(1);
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "消息内容" })).toHaveValue(
+    "再看一下之前那张",
+  );
+  await expect(page.locator('[data-role="user"] img')).toBeVisible();
+});
+
+test("retrying a failed reply keeps one saved user input", async ({ page }) => {
+  await createRole(page);
+  let fail = true;
+  await page.route("**/api/chat", async (route) => {
+    if (fail) {
+      await route.fulfill({
+        status: 502,
+        json: { code: "MODEL_ERROR", message: "临时失败，可重试" },
+      });
+    } else await route.continue();
+  });
+  await send(page, "重试这条消息");
+  await expect(
+    page.getByRole("button", { name: "重试回复", exact: true }),
+  ).toBeVisible();
+  fail = false;
+  await page.getByRole("button", { name: "重试回复", exact: true }).click();
+  await expect(
+    page.getByText("“欢迎回来，旅人。”", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('[data-role="user"]')).toHaveCount(1);
+  await page.reload();
+  await expect(page.locator('[data-role="user"]')).toHaveCount(1);
+});

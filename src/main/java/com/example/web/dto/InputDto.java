@@ -1,12 +1,17 @@
 package com.example.web.dto;
 
-/**
- * 用户本轮输入，支持纯文字、纯图片或图文组合。
- *
- * @param text 本轮文字，可为 null 或空字符串；文字上限为 2000 字符
- * @param image 本轮附带的单张图片，无图片时为 null；不能与文字同时为空
- */
-public record InputDto(
-        String text,
-        ImageDto image
-) {}
+import java.util.List;
+import java.util.stream.Collectors;
+
+/** 用户输入：有序文字和图片引用；parts 存在时以 parts 为准。 */
+public record InputDto(String text, List<ContentPartDto> parts) {
+    public List<ContentPartDto> content() {
+        return parts != null ? parts : List.of(ContentPartDto.text(text == null ? "" : text));
+    }
+
+    /** 本轮文字，供长度校验和模型请求使用。 */
+    public String textOf() {
+        return content().stream().filter(p -> "text".equals(p.type())).map(ContentPartDto::text)
+                .collect(Collectors.joining("\n"));
+    }
+}
