@@ -25,6 +25,11 @@ import {
 } from "@/lib/state/types";
 import { useImageUrl } from "@/hooks/use-image-url";
 import { Button } from "@/components/ui/button";
+import {
+  messageSourceIds,
+  photoSources,
+  type VisualSource,
+} from "@/lib/images/types";
 import type { CompactionResult } from "@/lib/context/types";
 
 function Picture({ id }: { id: string }) {
@@ -127,10 +132,22 @@ function SelectionDetails({ result }: { result: SelectionResult }) {
                 (s) => s.assetId === asset.assetId,
               )?.purpose ?? "待澄清候选图片"}
             </p>
-            <SourceLinks ids={asset.sources.map((s) => s.messageId)} />
+            <VisualSources sources={asset.sources} />
           </article>
         ))}
     </div>
+  );
+}
+function VisualSources({ sources }: { sources: VisualSource[] }) {
+  return (
+    <>
+      {photoSources(sources).map((s) => (
+        <p key={s.characterId} className="text-xs text-muted-foreground">
+          角色形象照片 · 资料 v{s.profileVersion}
+        </p>
+      ))}
+      <SourceLinks ids={messageSourceIds(sources)} />
+    </>
   );
 }
 function StateDetails({ result }: { result: StateResult }) {
@@ -154,7 +171,7 @@ function StateDetails({ result }: { result: StateResult }) {
             <p>可见细节：{o.visibleDetails.join("；") || "无新增"}</p>
             <p>图片文字：{o.extractedText.join("；") || "无"}</p>
             <p>不确定项：{o.uncertainDetails.join("；") || "无"}</p>
-            <SourceLinks ids={o.sourceMessageIds} />
+            <VisualSources sources={o.sources} />
           </article>
         ))}
       </section>

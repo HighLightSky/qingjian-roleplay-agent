@@ -1,5 +1,6 @@
 package com.example.service;
 
+import com.example.web.dto.VisualDtos.MessageSource;
 import java.io.IOException;
 import java.util.*;
 import org.springframework.stereotype.Service;
@@ -56,7 +57,7 @@ public class ContextCompactionService {
         int through = batch.getLast().seq();
         if (context.visual() != null) {
             for (var asset : context.visual().assetCatalog()) {
-                if (asset.sources().stream().anyMatch(s -> s.seq() <= through) && asset.observation() == null)
+                if (asset.sources().stream().anyMatch(s -> s instanceof MessageSource m && m.seq() <= through) && asset.observation() == null)
                     throw new IllegalArgumentException("压缩前需先完成图片观察：" + asset.assetId());
             }
         }
@@ -110,7 +111,7 @@ public class ContextCompactionService {
             throw new IOException("摘要超过配置的 token 上限");
         if (context.visual() != null) {
             for (var asset : context.visual().assetCatalog()) {
-                if (asset.sources().stream().anyMatch(s -> s.seq() <= through) && !text.contains(asset.assetId()))
+                if (asset.sources().stream().anyMatch(s -> s instanceof MessageSource m && m.seq() <= through) && !text.contains(asset.assetId()))
                     throw new IOException("摘要遗漏图片来源引用：" + asset.assetId());
             }
         }

@@ -121,10 +121,35 @@ createServer(async (request, response) => {
                 visibleDetails: ["红色标记"],
                 extractedText: [],
                 uncertainDetails: ["细字未辨认"],
-                sourceMessageIds: data.messages
-                  .filter((m) => m.role === "user")
-                  .slice(-1)
-                  .map((m) => m.id),
+                sources: data.context.visual.assetCatalog.find(
+                  (a) => a.assetId === p.assetId,
+                )?.sources ?? [
+                  {
+                    type: "message",
+                    messageId: data.messages
+                      .filter((m) => m.role === "user")
+                      .at(-1).id,
+                    seq: data.messages.filter((m) => m.role === "user").at(-1)
+                      .seq,
+                    text: data.context.input.text,
+                    imageIndex:
+                      data.context.input.parts
+                        .filter((p) => p.type === "image")
+                        .findIndex((part) => part.assetId === p.assetId) + 1,
+                    uploadIndex:
+                      Math.max(
+                        0,
+                        ...data.context.visual.assetCatalog
+                          .flatMap((a) => a.sources)
+                          .filter((s) => s.type === "message")
+                          .map((s) => s.uploadIndex),
+                      ) +
+                      data.context.input.parts
+                        .filter((p) => p.type === "image")
+                        .findIndex((part) => part.assetId === p.assetId) +
+                      1,
+                  },
+                ],
                 version:
                   (data.context.visual.assetCatalog.find(
                     (a) => a.assetId === p.assetId,

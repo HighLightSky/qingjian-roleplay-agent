@@ -359,7 +359,7 @@ class ChatControllerTest {
 
     private String validJson() {
         return """
-                {"character":{"name":"林溪","identity":"老板","description":"好奇，说话简短，生活在山城。"},
+                {"character":{"profileVersion":1,"name":"林溪","identity":"老板","description":"好奇，说话简短，生活在山城。"},
                 "operationId":"operation","state":{"sessionId":"session","characterId":"character","sessionVersion":0,"memoryVersion":0,"processedThroughSeq":0,
                 "story":{"location":"","storyTime":"","characterState":"","userState":"","presentCharacters":[],"relationships":[],"items":[],"openThreads":[]},"memories":[],"goals":[]},"summary":{"text":"","throughSeq":0,"version":0},"history":[],"input":{"text":"你好"},
                 "interactionSettings":{"replyLength":"standard","narrativeMode":"scene"}}

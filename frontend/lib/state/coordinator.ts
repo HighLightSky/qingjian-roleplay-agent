@@ -58,7 +58,10 @@ export async function saveCompletedStateTask(
         purpose:
           context.visual?.plan?.selectedHistoricalImages.find(
             (s) => s.assetId === p.assetId,
-          )?.purpose ?? "本轮用户图片",
+          )?.purpose ??
+          (context.character.appearancePhotoAssetId === p.assetId
+            ? "角色形象参考"
+            : "本轮用户图片"),
         createdAt: now(),
       });
     }

@@ -5,6 +5,7 @@ import type { ChatContext } from "../chat/context";
 import { capabilities, dataUrl, getOriginal } from "./repository";
 import {
   imageIds,
+  requiredImageIds,
   type CatalogAsset,
   type ImagePlan,
   type ImagePayload,
@@ -34,11 +35,53 @@ export async function buildCatalog(
   messages: Message[],
 ): Promise<CatalogAsset[]> {
   const db = await database();
-  const [observations, usages] = await Promise.all([
+  const [observations, usages, session] = await Promise.all([
     db.getAllFromIndex("visualObservations", "session", sessionId),
     db.getAllFromIndex("imageUsages", "session", sessionId),
+    db.get("sessions", sessionId),
   ]);
   const catalog = new Map<string, CatalogAsset>();
+  if (!session) throw new Error("图片目录的会话不存在。");
+  async function entry(assetId: string) {
+    if (!catalog.has(assetId)) {
+      const asset = await db.get("assets", assetId);
+      if (!asset) throw new Error("图片原件缺失，请恢复备份。");
+      const observation = observations.find((o) => o.assetId === assetId);
+      catalog.set(assetId, {
+        assetId,
+        sha256: asset.sha256,
+        mimeType: asset.mimeType,
+        byteSize: asset.byteSize,
+        width: asset.width,
+        height: asset.height,
+        sources: [],
+        observation: observation
+          ? {
+              assetId,
+              summary: observation.summary,
+              visibleDetails: observation.visibleDetails,
+              extractedText: observation.extractedText,
+              uncertainDetails: observation.uncertainDetails,
+              sources: observation.sources,
+              version: observation.version,
+            }
+          : null,
+        recentUses: usages
+          .filter((u) => u.assetId === assetId)
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          .slice(-10)
+          .map((u) => ({ messageId: u.messageId, purpose: u.purpose })),
+      });
+    }
+    return catalog.get(assetId)!;
+  }
+  const photoId = session.characterSnapshot.appearancePhotoAssetId;
+  if (photoId)
+    (await entry(photoId)).sources.push({
+      type: "character_photo",
+      characterId: session.characterId,
+      profileVersion: session.profileVersion,
+    });
   let uploadIndex = 0;
   for (const message of messages) {
     if (message.role !== "user") continue;
@@ -46,37 +89,8 @@ export async function buildCatalog(
     for (const assetId of imageIds(message.parts)) {
       imageIndex++;
       uploadIndex++;
-      if (!catalog.has(assetId)) {
-        const asset = await db.get("assets", assetId);
-        if (!asset) throw new Error("历史图片原件缺失，请恢复备份。");
-        const observation = observations.find((o) => o.assetId === assetId);
-        catalog.set(assetId, {
-          assetId,
-          sha256: asset.sha256,
-          mimeType: asset.mimeType,
-          byteSize: asset.byteSize,
-          width: asset.width,
-          height: asset.height,
-          sources: [],
-          observation: observation
-            ? {
-                assetId,
-                summary: observation.summary,
-                visibleDetails: observation.visibleDetails,
-                extractedText: observation.extractedText,
-                uncertainDetails: observation.uncertainDetails,
-                sourceMessageIds: observation.sourceMessageIds,
-                version: observation.version,
-              }
-            : null,
-          recentUses: usages
-            .filter((u) => u.assetId === assetId)
-            .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-            .slice(-10)
-            .map((u) => ({ messageId: u.messageId, purpose: u.purpose })),
-        });
-      }
-      catalog.get(assetId)!.sources.push({
+      (await entry(assetId)).sources.push({
+        type: "message",
         messageId: message.id,
         seq: message.seq,
         text: plainText(message),
@@ -93,7 +107,7 @@ export async function loadPayloads(
 ): Promise<ImagePayload[]> {
   const ids = [
     ...new Set([
-      ...imageIds(context.input.parts),
+      ...requiredImageIds(context),
       ...(context.visual?.plan?.selectedHistoricalImages ?? []).map(
         (s) => s.assetId,
       ),
@@ -135,7 +149,11 @@ export async function prepareImageContext(
     ...context,
     visual: { sessionId, assetCatalog: catalog, plan: null, imagePayloads: [] },
   };
-  if (catalog.length) {
+  if (
+    catalog.some(
+      (a) => a.observation || a.sources.some((s) => s.type === "message"),
+    )
+  ) {
     let operation: Operation = {
       id: context.operationId,
       sessionId,

@@ -26,6 +26,7 @@ test("v4升级保留原文、图片和待办，冻结的较早原文还原为结
   });
   await old.put("sessions", {
     id: "session",
+    profileVersion: 1,
     story: EMPTY_STORY,
     stateVersion: 3,
   });
@@ -55,6 +56,7 @@ test("v4升级保留原文、图片和待办，冻结的较早原文还原为结
     assistantMessageId: "message-26",
     automaticAttempts: 1,
     context: {
+      character: { name: "林溪", identity: "", description: "" },
       earlierHistory: "问题1和回复2等较早原文",
       history: [],
       input: { text: "问题25" },
@@ -86,7 +88,7 @@ test("v4升级保留原文、图片和待办，冻结的较早原文还原为结
   assert.equal(rolledBack.objectStoreNames.contains("compactionTasks"), false);
   rolledBack.close();
   const upgraded = await database();
-  assert.equal(upgraded.version, 5);
+  assert.equal(upgraded.version, 6);
   assert.equal(await upgraded.count("messages"), 26);
   const session = (await upgraded.get("sessions", "session"))!;
   assert.deepEqual(session.summary, { text: "", throughSeq: 0, version: 0 });

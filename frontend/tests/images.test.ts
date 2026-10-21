@@ -216,7 +216,11 @@ test("catalog retains archived images and never imports another session's refere
   const catalog = await buildCatalog(session.id, await allMessages(session.id));
   assert.equal(catalog.length, 1);
   assert.equal(catalog[0].sources.length, 1);
-  assert.equal(catalog[0].sources[0].seq, 1);
+  assert.equal(catalog[0].sources[0].type, "message");
+  assert.equal(
+    catalog[0].sources[0].type === "message" && catalog[0].sources[0].seq,
+    1,
+  );
   await deleteSession(session.id);
   assert.ok(await (await database()).get("assets", "image"));
   await deleteSession(other.id);
@@ -284,14 +288,14 @@ test("v5 backup restores original bytes and rejects damaged originals before rep
   const a = await asset();
   await beginTurn(session.id, "", [{ type: "image", assetId: a.id }]);
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 6);
+  assert.equal(backup.formatVersion, 7);
   await restoreSnapshot(backup);
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
   const invalid = structuredClone(backup);
   invalid.data.assets[0].base64 = "AAAA";
   await assert.rejects(restoreSnapshot(invalid));
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
-  for (const formatVersion of [1, 2, 3, 4, 5])
+  for (const formatVersion of [1, 2, 3, 4, 5, 6])
     assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
 });
 test("ambiguous selection and cancellation preserve submitted input and never generate a reply", async () => {
@@ -398,6 +402,364 @@ test("background visual calls do not block local draft writes", async () => {
   } finally {
     release();
     await run;
+    restore();
+  }
+});
+
+async function setupPhoto() {
+  const { character } = await setup();
+  await asset("photo");
+  const updated = await saveCharacter(
+    { ...character, appearancePhotoAssetId: "photo" },
+    character,
+  );
+  const session = await createSession(updated.id);
+  useAppStore.setState({ sessionId: session.id, characterId: updated.id });
+  return { character: updated, session };
+}
+
+test("角色照片首次随正文直传，观察独立保存，纯文字后续可零选择或重读原图", async () => {
+  const { character, session } = await setupPhoto();
+  const restore = mockFetch();
+  try {
+    await sendMessage("你好");
+    assert.equal(
+      calls.filter((c) => c.path === "/api/context/inspect").length,
+      0,
+    );
+    const first = calls.find((c) => c.path === "/api/chat")!.body;
+    assert.equal(first.visual.imagePayloads[0].assetId, "photo");
+    assert.equal(first.character.profileVersion, character.profileVersion);
+    assert.deepEqual(first.visual.assetCatalog[0].sources, [
+      {
+        type: "character_photo",
+        characterId: character.id,
+        profileVersion: character.profileVersion,
+      },
+    ]);
+    const db = await database();
+    const observation = (await db.getAll("visualObservations"))[0];
+    assert.deepEqual(observation.sources, first.visual.assetCatalog[0].sources);
+    assert.equal("sourceMessageIds" in observation, false);
+    assert.equal(
+      (await db.get("characters", character.id))!.description,
+      "老板",
+    );
+    assert.equal(await db.count("memories"), 0);
+    assert.equal((await db.getAll("imageUsages"))[0].purpose, "角色形象参考");
+
+    await sendMessage("不需要图片");
+    assert.equal(
+      calls.filter((c) => c.path === "/api/context/inspect").length,
+      1,
+    );
+    assert.equal(
+      calls.filter((c) => c.path === "/api/chat").at(-1)!.body.visual
+        .imagePayloads.length,
+      0,
+    );
+    await sendMessage("她的耳环上刻了什么？");
+    assert.equal(
+      calls.filter((c) => c.path === "/api/chat").at(-1)!.body.visual
+        .imagePayloads[0].assetId,
+      "photo",
+    );
+    const other = await createSession(character.id);
+    const catalog = await buildCatalog(other.id, []);
+    assert.equal(catalog[0].observation, null);
+    const original = await buildCatalog(
+      session.id,
+      await allMessages(session.id),
+    );
+    assert.equal(original[0].observation!.version, 2);
+  } finally {
+    restore();
+  }
+});
+
+test("首次照片整理失败保留原图任务，备份恢复后先整理再选图", async () => {
+  const { session } = await setupPhoto();
+  const restore = mockFetch();
+  try {
+    failVisual = true;
+    await sendMessage("你好");
+    const db = await database();
+    assert.equal((await allMessages(session.id)).at(-1)!.status, "complete");
+    assert.equal(await db.count("visualObservations"), 0);
+    const backup = await takeSnapshot();
+    assert.equal(backup.data.assets.length, 1);
+    assert.equal(backup.data.stateTasks.length, 1);
+    await restoreSnapshot(backup);
+    const prepared = await prepareImageContext(
+      backup.data.stateTasks[0].context,
+      session.id,
+      [],
+      new AbortController().signal,
+      "anchor",
+      async () => {},
+    );
+    assert.equal(prepared.visual!.imagePayloads[0].assetId, "photo");
+    failVisual = false;
+    calls = [];
+    await sendMessage("不需要图片");
+    assert.ok(
+      calls.findIndex((c) => c.path === "/api/state/update") <
+        calls.findIndex((c) => c.path === "/api/context/inspect"),
+    );
+    assert.equal(await db.count("stateTasks"), 0);
+    assert.equal(
+      (await db.getAll("visualObservations"))[0].sources[0].type,
+      "character_photo",
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("照片修改和移除只影响新会话，旧快照与角色草稿保护原件，备份校验所有照片引用", async () => {
+  const { character, session } = await setupPhoto();
+  const db = await database();
+  const { saveCharacterDraft, discardCharacterDraft } =
+    await import("../lib/db");
+  const key = "characterDraft:copy";
+  await saveCharacterDraft(key, { ...character, name: "副本草稿" });
+  const { appearancePhotoAssetId, ...text } = character;
+  const updated = await saveCharacter(text, character);
+  const next = await createSession(character.id);
+  assert.equal(updated.profileVersion, character.profileVersion + 1);
+  assert.equal(next.characterSnapshot.appearancePhotoAssetId, undefined);
+  assert.equal((await buildCatalog(session.id, []))[0].assetId, "photo");
+  const backup = await takeSnapshot();
+  await restoreSnapshot(backup);
+  const invalid = structuredClone(backup);
+  invalid.data.sessions.find(
+    (s) => s.id === session.id,
+  )!.characterSnapshot.appearancePhotoAssetId = "missing";
+  await assert.rejects(restoreSnapshot(invalid), /照片原件缺失/);
+  assert.ok(await db.get("assets", "photo"));
+  await deleteSession(session.id);
+  assert.ok(await db.get("assets", "photo"));
+  await discardCharacterDraft(key);
+  assert.equal(await db.get("assets", "photo"), undefined);
+});
+
+test("同一原图兼作角色照片与聊天上传时只传一次，保留两种来源且上传编号从一开始", async () => {
+  const { session } = await setupPhoto();
+  const restore = mockFetch();
+  try {
+    await sendMessage("这张参考图", [
+      { type: "text", text: "这张参考图" },
+      { type: "image", assetId: "photo" },
+    ]);
+    const body = calls.find((c) => c.path === "/api/chat")!.body;
+    assert.equal(body.visual.imagePayloads.length, 1);
+    const catalog = await buildCatalog(
+      session.id,
+      await allMessages(session.id),
+    );
+    assert.equal(catalog.length, 1);
+    assert.equal(catalog[0].sources[0].type, "character_photo");
+    const source = catalog[0].sources[1];
+    assert.equal(source.type, "message");
+    if (source.type === "message") assert.equal(source.uploadIndex, 1);
+    const backup = await takeSnapshot();
+    validateBackup(backup);
+    const missingPhotoSource = structuredClone(backup);
+    missingPhotoSource.data.visualObservations[0].sources =
+      missingPhotoSource.data.visualObservations[0].sources.filter(
+        (s) => s.type === "message",
+      );
+    assert.throws(() => validateBackup(missingPhotoSource), /缺少角色资料来源/);
+    const invalid = structuredClone(backup);
+    const photo = invalid.data.visualObservations[0].sources.find(
+      (s) => s.type === "character_photo",
+    )!;
+    photo.profileVersion++;
+    assert.throws(() => validateBackup(invalid), /快照不一致/);
+  } finally {
+    restore();
+  }
+});
+
+test("照片准备复用图片校验与去重，草稿引用原子交接，取消不留下无引用资产", async () => {
+  const { prepareCharacterPhoto } = await import("../lib/images/repository");
+  const { saveCharacterDraft, discardCharacterDraft } =
+    await import("../lib/db");
+  const db = await database();
+  const restore = mockFetch();
+  const key = "characterDraft:new";
+  const commit = <T>(task: () => Promise<T>) => task();
+  try {
+    await saveCharacterDraft(key, { ...EMPTY_PROFILE, name: "照片角色" });
+    const file = new File([png], "photo.png", { type: "image/png" });
+    const prepared = await prepareCharacterPhoto(
+      file,
+      key,
+      commit,
+      new AbortController().signal,
+    );
+    assert.equal(await db.count("assets"), 1);
+    await saveCharacterDraft("characterDraft:copy", prepared);
+    const repeated = await prepareCharacterPhoto(
+      file,
+      key,
+      commit,
+      new AbortController().signal,
+    );
+    assert.equal(
+      repeated.appearancePhotoAssetId,
+      prepared.appearancePhotoAssetId,
+    );
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      prepareCharacterPhoto(file, key, commit, controller.signal),
+      { name: "AbortError" },
+    );
+    await assert.rejects(
+      prepareCharacterPhoto(
+        new File(["bad"], "bad.png", { type: "image/png" }),
+        key,
+        commit,
+        new AbortController().signal,
+      ),
+      /有效/,
+    );
+    const character = await saveCharacter(prepared, undefined, key);
+    assert.equal(await db.get("settings", key), undefined);
+    await discardCharacterDraft("characterDraft:copy");
+    assert.ok(await db.get("assets", character.appearancePhotoAssetId!));
+  } finally {
+    restore();
+  }
+});
+
+test("缺失原图、视觉关闭和必需照片名额不足均停止生成", async () => {
+  const { character, session } = await setupPhoto();
+  const restore = mockFetch();
+  const mocked = globalThis.fetch;
+  try {
+    const context = chatContext(
+      character,
+      session,
+      [],
+      [],
+      "继续",
+      DEFAULT_INTERACTION_SETTINGS,
+    );
+    const { loadPayloads } = await import("../lib/images/coordinator");
+    const base = {
+      ...context,
+      visual: {
+        sessionId: session.id,
+        assetCatalog: await buildCatalog(session.id, []),
+        plan: null,
+        imagePayloads: [],
+      },
+    };
+    globalThis.fetch = async (input, init) =>
+      String(input) === "/api/capabilities"
+        ? json({
+            ...DEFAULT_LIMITS,
+            visionSupported: false,
+            mimeTypes: ["image/png"],
+          })
+        : mocked(input, init);
+    await assert.rejects(
+      loadPayloads(base, new AbortController().signal),
+      /不支持视觉/,
+    );
+    globalThis.fetch = mocked;
+    await assert.rejects(
+      loadPayloads(
+        {
+          ...base,
+          input: {
+            text: "",
+            parts: ["a", "b", "c", "d"].map((assetId) => ({
+              type: "image",
+              assetId,
+            })),
+          },
+        },
+        new AbortController().signal,
+      ),
+      /数量超限/,
+    );
+    await (await database()).delete("assets", "photo");
+    await assert.rejects(
+      loadPayloads(base, new AbortController().signal),
+      /原图缺失/,
+    );
+    assert.equal(
+      calls.some((c) => c.path === "/api/chat"),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("替换照片的保存失败原子回滚，成功后新旧会话分别持有原件", async () => {
+  const { character, session } = await setupPhoto();
+  const { prepareCharacterPhoto } = await import("../lib/images/repository");
+  const { saveCharacterDraft } = await import("../lib/db");
+  const key = `characterDraft:${character.id}`;
+  await saveCharacterDraft(key, character);
+  const restore = mockFetch();
+  try {
+    const replacement = new File(
+      [
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB0gX7h/C5SAAAAABJRU5ErkJggg==",
+          "base64",
+        ),
+      ],
+      "replacement.png",
+      { type: "image/png" },
+    );
+    const profile = await prepareCharacterPhoto(
+      replacement,
+      key,
+      (task) => task(),
+      new AbortController().signal,
+    );
+    assert.notEqual(profile.appearancePhotoAssetId, "photo");
+    const remove = IDBObjectStore.prototype.delete;
+    IDBObjectStore.prototype.delete = function (
+      ...args: Parameters<typeof remove>
+    ) {
+      if (this.name === "settings" && args[0] === key)
+        throw new Error("草稿交接失败");
+      return remove.apply(this, args);
+    };
+    try {
+      await assert.rejects(
+        saveCharacter(profile, character, key),
+        /草稿交接失败/,
+      );
+    } finally {
+      IDBObjectStore.prototype.delete = remove;
+    }
+    const db = await database();
+    assert.equal(
+      (await db.get("characters", character.id))!.appearancePhotoAssetId,
+      "photo",
+    );
+    assert.ok(await db.get("settings", key));
+    assert.equal(await db.count("assets"), 2);
+    const updated = await saveCharacter(profile, character, key);
+    const next = await createSession(character.id);
+    assert.equal(
+      next.characterSnapshot.appearancePhotoAssetId,
+      updated.appearancePhotoAssetId,
+    );
+    assert.equal((await buildCatalog(session.id, []))[0].assetId, "photo");
+    await restoreSnapshot(await takeSnapshot());
+    await deleteSession(session.id);
+    assert.equal(await db.get("assets", "photo"), undefined);
+    assert.ok(await db.get("assets", updated.appearancePhotoAssetId!));
+  } finally {
     restore();
   }
 });

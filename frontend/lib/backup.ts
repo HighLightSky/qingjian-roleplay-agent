@@ -12,6 +12,7 @@ import {
   validateSnapshot,
   validateStory,
   validateStateResult,
+  validateVisualSources,
   validateMemoryValue,
   sourceIds,
   validateGoalValue,
@@ -19,6 +20,7 @@ import {
 import { sha256 } from "./images/hash";
 import {
   inspectImage,
+  DEFAULT_LIMITS,
   validateImageBlob,
   fileBytes,
 } from "./images/repository";
@@ -60,7 +62,7 @@ export type Snapshot = {
 };
 export type Backup = {
   format: "roleplay-agent-backup";
-  formatVersion: 6;
+  formatVersion: 7;
   exportedAt: string;
   data: Snapshot;
 };
@@ -73,7 +75,7 @@ export function validateBackup(value: unknown): Backup {
   object(value);
   if (new Blob([JSON.stringify(value)]).size > 50 * 1024 * 1024)
     throw new Error("备份不能超过 50 MiB。");
-  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 6)
+  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 7)
     throw new Error("不支持此备份格式或版本，请选择本应用导出的文件。");
   date(value.exportedAt);
   object(value.data);
@@ -254,7 +256,7 @@ export function validateBackup(value: unknown): Backup {
   validateImages(snapshot);
   return {
     format: "roleplay-agent-backup",
-    formatVersion: 6,
+    formatVersion: 7,
     exportedAt: value.exportedAt as string,
     data: snapshot,
   };
@@ -280,8 +282,8 @@ function validateImages(snapshot: Snapshot) {
     integer(a.width, 1);
     integer(a.height, 1);
     if (
-      a.byteSize > 10 * 1024 * 1024 ||
-      a.width * a.height > 20_000_000 ||
+      a.byteSize > DEFAULT_LIMITS.maxImageBytes ||
+      a.width * a.height > DEFAULT_LIMITS.maxPixels ||
       hashes.has(a.sha256)
     )
       throw new Error("备份原图超限或重复。");
@@ -313,7 +315,7 @@ function validateImages(snapshot: Snapshot) {
         ids.add(part.assetId);
       } else throw new Error("图片内容块类型无效。");
     }
-    if (texts.join("\n") !== text || ids.size > 4)
+    if (texts.join("\n") !== text || ids.size > DEFAULT_LIMITS.maxImages)
       throw new Error("图片消息的文字或数量不一致。");
   };
   for (const m of snapshot.messages)
@@ -323,16 +325,132 @@ function validateImages(snapshot: Snapshot) {
       m.role === "user",
     );
   for (const d of snapshot.drafts) {
-    // Draft parts contain attachment references; text is stored independently for IME-safe autosaving.
+    // 草稿内容块只保存附件引用，文字独立保存，避免干扰输入法。
     checkParts(d.parts, "");
   }
   const sessionHasAsset = (sessionId: string, assetId: string) =>
+    (assets.has(assetId) &&
+      snapshot.sessions.some(
+        (s) =>
+          s.id === sessionId &&
+          s.characterSnapshot.appearancePhotoAssetId === assetId,
+      )) ||
     snapshot.messages.some(
       (m) =>
         m.sessionId === sessionId &&
         m.role === "user" &&
         imageIds(m.parts).includes(assetId),
     );
+  const checkPhoto = (profile: import("./domain").CharacterProfile) => {
+    if (
+      profile.appearancePhotoAssetId &&
+      !assets.has(profile.appearancePhotoAssetId)
+    )
+      throw new Error("角色形象照片原件缺失。");
+  };
+  snapshot.characters.forEach(checkPhoto);
+  snapshot.sessions.forEach((s) => checkPhoto(s.characterSnapshot));
+  for (const setting of snapshot.settings)
+    if (setting.key.startsWith("characterDraft:"))
+      checkPhoto(JSON.parse(setting.value));
+  const checkSources = (value: unknown, sessionId: string, assetId: string) => {
+    validateVisualSources(value);
+    const session = snapshot.sessions.find((s) => s.id === sessionId);
+    if (!session || !assets.has(assetId))
+      throw new Error("视觉来源会话或原图缺失。");
+    for (const source of value) {
+      if (source.type === "character_photo") {
+        if (
+          source.characterId !== session.characterId ||
+          source.profileVersion !== session.profileVersion ||
+          assetId !== session.characterSnapshot.appearancePhotoAssetId
+        )
+          throw new Error("角色照片来源与会话快照不一致。");
+      } else {
+        const message = messages.get(source.messageId);
+        const ordered = snapshot.messages
+          .filter((m) => m.sessionId === sessionId && m.role === "user")
+          .sort((a, b) => a.seq - b.seq);
+        const uploads = ordered
+          .filter((m) => m.seq < source.seq)
+          .reduce((n, m) => n + imageIds(m.parts).length, 0);
+        if (
+          !message ||
+          message.sessionId !== sessionId ||
+          message.role !== "user" ||
+          message.seq !== source.seq ||
+          message.text !== source.text ||
+          imageIds(message.parts)[source.imageIndex - 1] !== assetId ||
+          source.uploadIndex !== uploads + source.imageIndex
+        )
+          throw new Error("视觉消息来源与上传位置不一致。");
+      }
+    }
+    if (
+      assetId === session.characterSnapshot.appearancePhotoAssetId &&
+      !value.some((s) => s.type === "character_photo")
+    )
+      throw new Error("照片视觉记录缺少角色资料来源。");
+  };
+  const checkCatalog = (
+    catalog: import("./images/types").CatalogAsset[],
+    sessionId: string,
+  ) => {
+    if (!Array.isArray(catalog)) throw new Error("图片目录无效。");
+    const ids = new Set<string>();
+    for (const a of catalog) {
+      object(a);
+      const original = assets.get(a.assetId);
+      if (
+        !original ||
+        ids.has(a.assetId) ||
+        !sessionHasAsset(sessionId, a.assetId)
+      )
+        throw new Error("图片目录引用缺失、重复或不属于当前会话。");
+      ids.add(a.assetId);
+      for (const field of [
+        "sha256",
+        "mimeType",
+        "byteSize",
+        "width",
+        "height",
+      ] as const)
+        if (a[field] !== original[field])
+          throw new Error("图片目录与原件元信息不一致。");
+      checkSources(a.sources, sessionId, a.assetId);
+      if (a.observation) {
+        if (a.observation.assetId !== a.assetId)
+          throw new Error("目录观察引用无效。");
+        integer(a.observation.version, 1);
+        checkSources(a.observation.sources, sessionId, a.assetId);
+      }
+    }
+  };
+  const checkContextPhoto = (
+    context: import("./chat/context").ChatContext,
+    sessionId: string,
+  ) => {
+    const session = snapshot.sessions.find((s) => s.id === sessionId)!;
+    if (
+      (
+        ["name", "identity", "description", "appearancePhotoAssetId"] as const
+      ).some(
+        (field) =>
+          context.character[field] !== session.characterSnapshot[field],
+      ) ||
+      context.character.profileVersion !== session.profileVersion ||
+      context.state.characterId !== session.characterId
+    )
+      throw new Error("冻结角色快照与会话版本不一致。");
+    if (context.visual) checkCatalog(context.visual.assetCatalog, sessionId);
+    const photoSources = (context.visual?.assetCatalog ?? [])
+      .flatMap((a) => a.sources)
+      .filter((s) => s.type === "character_photo");
+    if (
+      photoSources.length !== (context.character.appearancePhotoAssetId ? 1 : 0)
+    )
+      throw new Error("冻结上下文缺少角色照片目录来源。");
+  };
   for (const o of snapshot.visualObservations) {
     if (
       !sessions.has(o.sessionId) ||
@@ -351,14 +469,7 @@ function validateImages(snapshot: Snapshot) {
         throw new Error("视觉观察列表无效。");
       field.forEach((v) => string(v, 300));
     }
-    if (
-      !Array.isArray(o.sourceMessageIds) ||
-      !o.sourceMessageIds.length ||
-      o.sourceMessageIds.some(
-        (id) => messages.get(id)?.sessionId !== o.sessionId,
-      )
-    )
-      throw new Error("视觉观察消息来源无效。");
+    checkSources(o.sources, o.sessionId, o.assetId);
   }
   for (const u of snapshot.imageUsages) {
     if (
@@ -485,13 +596,9 @@ function validateImages(snapshot: Snapshot) {
             throw new Error("整理结果修改了无关目标。");
         }
         for (const observation of op.result.visualObservations) {
-          if (
-            !sessionHasAsset(op.sessionId, observation.assetId) ||
-            observation.sourceMessageIds.some(
-              (id) => messages.get(id)?.sessionId !== op.sessionId,
-            )
-          )
-            throw new Error("整理结果的视觉来源无效。");
+          if (!sessionHasAsset(op.sessionId, observation.assetId))
+            throw new Error("整理结果的视觉引用无效。");
+          checkSources(observation.sources, op.sessionId, observation.assetId);
         }
       } else {
         const selection: unknown = op.result;
@@ -517,21 +624,12 @@ function validateImages(snapshot: Snapshot) {
           catalogIds.add(a.assetId);
           if (!sessionHasAsset(op.sessionId, a.assetId as string))
             throw new Error("选图结果包含其他会话图片。");
-          if (!Array.isArray(a.sources) || !a.sources.length)
-            throw new Error("选图结果缺少图片来源。");
-          for (const source of a.sources) {
-            object(source);
-            string(source.messageId, 200);
-            const message = messages.get(source.messageId);
-            if (
-              !message ||
-              message.sessionId !== op.sessionId ||
-              message.seq !== source.seq ||
-              !imageIds(message.parts).includes(a.assetId)
-            )
-              throw new Error("选图结果的消息来源无效。");
-          }
         }
+        checkCatalog(
+          selection.catalog as import("./images/types").CatalogAsset[],
+          op.sessionId,
+        );
+
         const selectedIds = new Set<string>();
         for (const selected of plan.selectedHistoricalImages) {
           object(selected);
@@ -572,14 +670,8 @@ function validateImages(snapshot: Snapshot) {
     )
       throw new Error("整理任务来源无效。");
     integer(task.automaticAttempts);
-    object(task.context);
-    validateSnapshot(task.context.state);
-    parseCharacterProfile(task.context.character);
-    parseInteractionSettings(task.context.interactionSettings);
     validateFrozenContext(task.context, task.sessionId, messages);
-    object(task.context.input);
-    if (task.context.state.sessionId !== task.sessionId)
-      throw new Error("整理任务会话无效。");
+    checkContextPhoto(task.context, task.sessionId);
     const user = messages.get(assistant.replyToMessageId!);
     if (!user || user.role !== "user" || user.sessionId !== task.sessionId)
       throw new Error("整理输入来源缺失。");
@@ -598,15 +690,6 @@ function validateImages(snapshot: Snapshot) {
         !Array.isArray(visual.assetCatalog)
       )
         throw new Error("整理任务图片上下文无效。");
-      for (const a of visual.assetCatalog) {
-        if (
-          !sessionHasAsset(task.sessionId, a.assetId) ||
-          a.sources.some(
-            (s) => messages.get(s.messageId)?.sessionId !== task.sessionId,
-          )
-        )
-          throw new Error("整理任务图片来源无效。");
-      }
       if (
         visual.plan &&
         (visual.plan.status !== "ready" ||
@@ -632,6 +715,7 @@ function validateImages(snapshot: Snapshot) {
       throw new Error("压缩待办的锚点或操作来源无效。");
     integer(task.automaticAttempts);
     validateFrozenContext(task.context, task.sessionId, messages);
+    checkContextPhoto(task.context, task.sessionId);
     if (task.context.visual?.imagePayloads.length)
       throw new Error("压缩待办不应保存原图载荷。");
     for (const asset of task.context.visual?.assetCatalog ?? [])
@@ -703,7 +787,7 @@ export async function takeSnapshot(): Promise<Backup> {
   }
   const backup: Backup = {
     format: "roleplay-agent-backup",
-    formatVersion: 6,
+    formatVersion: 7,
     exportedAt: new Date().toISOString(),
     data: { ...data, assets: serialized },
   };

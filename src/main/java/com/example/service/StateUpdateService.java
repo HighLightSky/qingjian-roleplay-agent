@@ -90,7 +90,7 @@ public class StateUpdateService {
         if (mapper.valueToTree(r.messages()).toString().length() > ContextLimits.CONTEXT_CHARS)
             throw new IllegalArgumentException("待整理消息超过请求材料字符上限");
         images.validateReferences(r.context());
-        Set<String> required = new HashSet<>(ImageValidationService.newIds(r.context()));
+        Set<String> required = new HashSet<>(ImageValidationService.requiredIds(r.context()));
         if (r.context().visual() != null && r.context().visual().plan() != null) {
             for (Selected selected : r.context().visual().plan().selectedHistoricalImages()) {
                 if (ImageValidationService.catalog(r.context()).stream()
@@ -232,20 +232,20 @@ public class StateUpdateService {
         for (Observation o : values) {
             if (o == null || !expected.contains(o.assetId()) || !seen.add(o.assetId()))
                 throw new IOException("视觉观察来源无效");
-            StateValidation.nonblank(o.summary(), 600);
-            for (var list : List.of(o.visibleDetails(), o.extractedText(), o.uncertainDetails())) {
-                if (list.size() > 20)
-                    throw new IOException("视觉观察数量超限");
-                for (String text : list)
-                    StateValidation.nonblank(text, 300);
-            }
+            StateValidation.visualContent(o);
             var previous = ImageValidationService.catalog(r.context()).stream()
                     .filter(a -> a.assetId().equals(o.assetId())).findFirst();
             int version = previous.map(Asset::observation).map(Observation::version).orElse(0) + 1;
-            LinkedHashSet<String> sources = new LinkedHashSet<>();
-            previous.ifPresent(a -> a.sources().forEach(s -> sources.add(s.messageId())));
-            r.messages().stream().filter(m -> "user".equals(m.role())).reduce((a, b) -> b)
-                    .ifPresent(m -> sources.add(m.id()));
+            List<Source> sources = new ArrayList<>(previous.map(Asset::sources).orElse(List.of()));
+            int index = ImageValidationService.newIds(r.context()).indexOf(o.assetId()) + 1;
+            if (index > 0) {
+                var user = r.messages().stream().filter(m -> "user".equals(m.role())).reduce((a, b) -> b)
+                        .orElseThrow(() -> new IllegalArgumentException("新图片缺少上传消息"));
+                int uploads = ImageValidationService.catalog(r.context()).stream().flatMap(a -> a.sources().stream())
+                        .filter(s -> s instanceof MessageSource).mapToInt(s -> ((MessageSource) s).uploadIndex())
+                        .max().orElse(0);
+                sources.add(new MessageSource(user.id(), user.seq(), r.context().input().textOf(), index, uploads + index));
+            }
             result.add(new Observation(o.assetId(), o.summary(), o.visibleDetails(), o.extractedText(),
                     o.uncertainDetails(), List.copyOf(sources), version));
         }

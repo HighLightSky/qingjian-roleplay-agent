@@ -7,6 +7,7 @@ export type CharacterProfile = {
   name: string;
   identity: string;
   description: string;
+  appearancePhotoAssetId?: string;
 };
 export const PROFILE_LIMITS = {
   name: 60,
@@ -27,7 +28,7 @@ export function parseCharacterProfile(
   };
   for (const field of Object.keys(
     PROFILE_LIMITS,
-  ) as (keyof CharacterProfile)[]) {
+  ) as (keyof typeof PROFILE_LIMITS)[]) {
     if (typeof profile[field] !== "string")
       throw new Error(`${labels[field]}必须是字符串，无内容时请填空字符串。`);
     if (profile[field].length > PROFILE_LIMITS[field])
@@ -35,12 +36,22 @@ export function parseCharacterProfile(
         `${labels[field]}不能超过 ${PROFILE_LIMITS[field]} 字符。`,
       );
   }
+  if (
+    profile.appearancePhotoAssetId !== undefined &&
+    (typeof profile.appearancePhotoAssetId !== "string" ||
+      !profile.appearancePhotoAssetId.trim() ||
+      profile.appearancePhotoAssetId.length > 200)
+  )
+    throw new Error("角色形象照片引用无效。");
   const name = (profile.name as string).trim();
   if (!allowEmptyName && !name) throw new Error("请填写角色名称。");
   return {
     name: allowEmptyName ? (profile.name as string) : name,
     identity: profile.identity as string,
     description: profile.description as string,
+    ...(profile.appearancePhotoAssetId !== undefined
+      ? { appearancePhotoAssetId: profile.appearancePhotoAssetId as string }
+      : {}),
   };
 }
 export type Character = CharacterProfile & {
@@ -167,6 +178,9 @@ export function profileOf(character: Character): CharacterProfile {
     name: character.name,
     identity: character.identity,
     description: character.description,
+    ...(character.appearancePhotoAssetId
+      ? { appearancePhotoAssetId: character.appearancePhotoAssetId }
+      : {}),
   };
 }
 export function plainText(message: Message): string {

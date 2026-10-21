@@ -1,25 +1,39 @@
 package com.example.web.dto;
 
 import java.util.List;
+import com.fasterxml.jackson.annotation.JsonSubTypes;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
 /** 图片字节仅在请求内存在；catalog 和 observations 是浏览器持有的来源记录。 */
 public final class VisualDtos {
         private VisualDtos() {
         }
 
-        /** 图片首次或再次上传的消息位置，imageIndex 从 1 开始。 */
-        public record Source(String messageId, int seq, String text, int imageIndex, int uploadIndex) {
+        @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
+        @JsonSubTypes({
+                @JsonSubTypes.Type(value = MessageSource.class, name = "message"),
+                @JsonSubTypes.Type(value = CharacterPhotoSource.class, name = "character_photo")
+        })
+        public sealed interface Source permits MessageSource, CharacterPhotoSource {
+        }
+
+        /** 聊天上传顺序独立于角色照片，序号从 1 开始。 */
+        public record MessageSource(String messageId, int seq, String text, int imageIndex, int uploadIndex)
+                        implements Source {
+        }
+
+        public record CharacterPhotoSource(String characterId, int profileVersion) implements Source {
         }
 
         /** 有损视觉观察，不等于原图全部细节；版本由服务端基于旧观察推进。 */
         public record Observation(String assetId, String summary, List<String> visibleDetails,
-                        List<String> extractedText, List<String> uncertainDetails, List<String> sourceMessageIds,
+                        List<String> extractedText, List<String> uncertainDetails, List<Source> sources,
                         int version) {
                 public Observation {
                         visibleDetails = visibleDetails == null ? List.of() : List.copyOf(visibleDetails);
                         extractedText = extractedText == null ? List.of() : List.copyOf(extractedText);
                         uncertainDetails = uncertainDetails == null ? List.of() : List.copyOf(uncertainDetails);
-                        sourceMessageIds = sourceMessageIds == null ? List.of() : List.copyOf(sourceMessageIds);
+                        sources = sources == null ? List.of() : List.copyOf(sources);
                 }
         }
 

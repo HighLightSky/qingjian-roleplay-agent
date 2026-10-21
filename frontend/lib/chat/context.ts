@@ -68,7 +68,10 @@ export function chatContext(
     messages.filter((m) => m.seq > session.summary.throughSeq),
   );
   return {
-    character: session.characterSnapshot,
+    character: {
+      ...session.characterSnapshot,
+      profileVersion: session.profileVersion,
+    },
     state: stateSnapshot(character, session, memories, goals),
     summary: { ...session.summary },
     history,

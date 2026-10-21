@@ -199,6 +199,6 @@ class ChatServiceTest {
     }
 
     private ChatApiRequest validRequest() {
-        return new ChatApiRequest(new CharacterDto("林溪", "旅馆老板，也是我的旧友", "好奇，说话简短，生活在山城。"), com.example.TestRequests.state(List.of()), com.example.TestRequests.summary(), List.of(new HistoryMessageDto("assistant", "欢迎。", "history", null, 1, "complete", 0)), new InputDto("你好", null), SETTINGS, null, "operation");
+        return new ChatApiRequest(new CharacterDto("林溪", "旅馆老板，也是我的旧友", "好奇，说话简短，生活在山城。", null, 1), com.example.TestRequests.state(List.of()), com.example.TestRequests.summary(), List.of(new HistoryMessageDto("assistant", "欢迎。", "history", null, 1, "complete", 0)), new InputDto("你好", null), SETTINGS, null, "operation");
     }
 }

@@ -7,6 +7,8 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { useImageUrl } from "@/hooks/use-image-url";
+import { prepareCharacterPhoto } from "@/lib/images/repository";
 import { ImageGallery } from "@/components/chat/image-gallery";
 import { DownloadIcon, LeafIcon, UploadIcon } from "lucide-react";
 import {
@@ -19,7 +21,13 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { database, setting, TABLES } from "@/lib/db";
+import {
+  database,
+  setting,
+  saveCharacterDraft,
+  discardCharacterDraft,
+  TABLES,
+} from "@/lib/db";
 import { validateBackup, type Backup } from "@/lib/backup";
 import {
   EMPTY_PROFILE,
@@ -98,61 +106,72 @@ function ProfileForm({
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const saved = useRef(false);
-  const draft = useRef({ profile, loaded });
-  useEffect(() => {
-    draft.current = { profile, loaded };
-  }, [profile, loaded]);
-  useEffect(
-    () => () => {
-      if (draft.current.loaded && !saved.current)
-        void write(() =>
-          setting(key, JSON.stringify(draft.current.profile)),
-        ).catch(report);
-    },
-    [key],
-  );
+  const [preparing, setPreparing] = useState(false);
+  const draft = useRef(profile);
+  const preparation = useRef<AbortController | null>(null);
+  useEffect(() => () => preparation.current?.abort(), []);
+  const photoUrl = useImageUrl(profile.appearancePhotoAssetId);
   useEffect(() => {
     let active = true;
-    void database()
-      .then((db) => db.get("settings", key))
-      .then((saved) => {
-        if (active && saved)
-          setProfile(parseCharacterProfile(JSON.parse(saved.value), true));
-        if (active) setLoaded(true);
-      })
-      .catch((error) => setError(errorText(error)));
+    void write(async () => {
+      const db = await database();
+      const saved = await db.get("settings", key);
+      const initial = saved
+        ? parseCharacterProfile(JSON.parse(saved.value), true)
+        : draft.current;
+      if (!saved) await saveCharacterDraft(key, initial);
+      if (active) {
+        draft.current = initial;
+        setProfile(initial);
+        setLoaded(true);
+      }
+    }).catch((error) => {
+      if (active) setError(errorText(error));
+    });
     return () => {
       active = false;
     };
   }, [key]);
-  useEffect(() => {
-    if (!loaded || saving) return;
-    const timer = setTimeout(() => {
-      void write(() => setting(key, JSON.stringify(profile))).catch(report);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [key, profile, loaded, saving]);
+  function updateProfile(next: CharacterProfile) {
+    draft.current = next;
+    setProfile(next);
+    void write(() => saveCharacterDraft(key, next)).catch((error) =>
+      setError(errorText(error)),
+    );
+  }
+  async function uploadPhoto(file: File) {
+    setPreparing(true);
+    setError("");
+    try {
+      const controller = new AbortController();
+      preparation.current = controller;
+      const next = await prepareCharacterPhoto(
+        file,
+        key,
+        write,
+        controller.signal,
+      );
+      draft.current = next;
+      setProfile(next);
+    } catch (error) {
+      setError(errorText(error));
+    } finally {
+      setPreparing(false);
+    }
+  }
   async function submit(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
     setError("");
     try {
-      await saveProfile(profile, character);
-      await write(async () => {
-        const db = await database();
-        const tx = db.transaction("settings", "readwrite");
-        await tx.store.delete(key);
-        await tx.done;
-      });
-      saved.current = true;
+      await saveProfile(profile, character, key);
       close();
     } catch (error) {
       setError(errorText(error));
       setSaving(false);
     }
   }
-  const fields: [keyof CharacterProfile, string, string][] = [
+  const fields: [keyof typeof PROFILE_LIMITS, string, string][] = [
     ["name", "角色名称", "你想如何称呼这个角色？"],
     ["identity", "身份（与我的关系）", "角色是谁，以及与我的关系？"],
     ["description", "角色描述", "自由描述经历、性格、说话方式和世界背景"],
@@ -176,41 +195,136 @@ function ProfileForm({
           {field === "name" ? (
             <input
               className="app-input"
+              disabled={!loaded || preparing || saving}
               value={profile[field]}
               maxLength={PROFILE_LIMITS.name}
               required
               placeholder={placeholder}
               onChange={(event) =>
-                setProfile({ ...profile, [field]: event.target.value })
+                updateProfile({ ...profile, [field]: event.target.value })
               }
             />
           ) : (
             <Textarea
+              disabled={!loaded || preparing || saving}
               value={profile[field]}
               maxLength={PROFILE_LIMITS[field]}
               rows={field === "description" ? 6 : 2}
               placeholder={placeholder}
               onChange={(event) =>
-                setProfile({ ...profile, [field]: event.target.value })
+                updateProfile({ ...profile, [field]: event.target.value })
               }
             />
           )}
         </Field>
       ))}
+      <section className="grid gap-3 border-t pt-4">
+        <h3 className="text-sm font-medium">形象照片（可选）</h3>
+        <p className="text-xs leading-5 text-muted-foreground">
+          选择一张静态 JPEG 或 PNG
+          作为外观参考。原图保存在当前浏览器，保存角色不会调用模型或改写角色描述。
+        </p>
+        {profile.appearancePhotoAssetId && (
+          <a
+            href={photoUrl}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="查看角色形象原图"
+          >
+            <img
+              src={photoUrl}
+              alt="角色形象照片"
+              className="max-h-56 max-w-full rounded-md border object-contain"
+            />
+          </a>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="sm">
+            <label
+              className={
+                !loaded || preparing || saving
+                  ? "pointer-events-none opacity-50"
+                  : "cursor-pointer"
+              }
+            >
+              {preparing
+                ? "正在准备照片…"
+                : profile.appearancePhotoAssetId
+                  ? "替换照片"
+                  : "选择照片"}
+              <input
+                type="file"
+                accept="image/jpeg,image/png"
+                aria-label="选择角色形象照片"
+                className="sr-only"
+                disabled={!loaded || preparing || saving}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void uploadPhoto(file);
+                }}
+              />
+            </label>
+          </Button>
+          {profile.appearancePhotoAssetId && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={!loaded || preparing || saving}
+              onClick={() => {
+                const { appearancePhotoAssetId, ...text } = profile;
+                updateProfile(text);
+              }}
+            >
+              移除照片
+            </Button>
+          )}
+        </div>
+      </section>
       {error && (
         <p role="alert" className="text-sm text-destructive">
           {error}
         </p>
       )}
       <DialogFooter>
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={saving || preparing || !loaded}
+          onClick={() => {
+            void write(() => discardCharacterDraft(key))
+              .then(close)
+              .catch((error) => setError(errorText(error)));
+          }}
+        >
+          丢弃草稿
+        </Button>
         <Button type="button" variant="ghost" onClick={close}>
           暂时关闭
         </Button>
-        <Button disabled={saving || !loaded}>
+        <Button disabled={saving || preparing || !loaded}>
           {saving ? "保存中…" : "保存角色"}
         </Button>
       </DialogFooter>
     </form>
+  );
+}
+function SnapshotPhoto({ assetId }: { assetId: string }) {
+  const src = useImageUrl(assetId);
+  return (
+    <div>
+      <dt className="text-muted-foreground">创建时的形象照片</dt>
+      <dd className="mt-2">
+        <a href={src} target="_blank" rel="noreferrer">
+          <img
+            src={src}
+            alt="会话角色形象照片"
+            className="max-h-56 rounded border object-contain"
+          />
+        </a>
+      </dd>
+    </div>
   );
 }
 function DataSettings({ open }: { open: (state: DialogState) => void }) {
@@ -549,6 +663,11 @@ export function AppDialogs({
               {state.session.characterSnapshot.identity}
             </dd>
           </div>
+          {state.session.characterSnapshot.appearancePhotoAssetId && (
+            <SnapshotPhoto
+              assetId={state.session.characterSnapshot.appearancePhotoAssetId}
+            />
+          )}
           <div>
             <dt className="text-muted-foreground">创建时的角色描述</dt>
             <dd className="mt-1 whitespace-pre-wrap leading-6">

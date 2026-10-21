@@ -1,4 +1,5 @@
 import { migrateV4 } from "./state/migrate-v4";
+import { migrateV6 } from "./images/migrate-v6";
 import { migrateV5 } from "./context/migrate-v5";
 import {
   emptySummary,
@@ -82,18 +83,20 @@ let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
     let upgradeError: unknown;
-    connection = openDB<RoleplayDB>("roleplay-agent", 5, {
+    connection = openDB<RoleplayDB>("roleplay-agent", 6, {
       upgrade(db, oldVersion, _newVersion, tx) {
         void tx.done.catch((error: unknown) => {
           upgradeError ??= error;
         });
-        if (oldVersion === 3 || oldVersion === 4) {
-          db.createObjectStore("compactionTasks", {
-            keyPath: "id",
-          }).createIndex("session", "sessionId");
+        if (oldVersion >= 3 && oldVersion <= 5) {
+          if (oldVersion < 5)
+            db.createObjectStore("compactionTasks", {
+              keyPath: "id",
+            }).createIndex("session", "sessionId");
           void (async () => {
             if (oldVersion === 3) await migrateV4(tx);
-            await migrateV5(tx);
+            if (oldVersion < 5) await migrateV5(tx);
+            await migrateV6(tx);
           })().catch((error: unknown) => {
             upgradeError = error;
             tx.abort();
@@ -221,24 +224,65 @@ export async function recoverInterrupted() {
 export async function saveCharacter(
   profile: CharacterProfile,
   existing?: Character,
+  draftKey?: string,
 ) {
   const validated = parseCharacterProfile(profile);
   const db = await database();
-  const tx = db.transaction("characters", "readwrite");
-  const current = existing ? await tx.store.get(existing.id) : undefined;
-  if (existing && !current) throw new Error("角色不存在。");
-  const character: Character = {
-    ...validated,
-    id: existing?.id ?? id(),
-    archived: current?.archived ?? false,
-    profileVersion: (current?.profileVersion ?? 0) + 1,
-    memoryVersion: current?.memoryVersion ?? 0,
-    createdAt: current?.createdAt ?? now(),
-    updatedAt: now(),
-  };
-  await tx.store.put(character);
-  await tx.done;
-  return character;
+  const tx = db.transaction(TABLES, "readwrite");
+  return atomic(tx, async () => {
+    const current = existing
+      ? await tx.objectStore("characters").get(existing.id)
+      : undefined;
+    if (existing && !current) throw new Error("角色不存在。");
+    const character: Character = {
+      ...validated,
+      id: existing?.id ?? id(),
+      archived: current?.archived ?? false,
+      profileVersion: (current?.profileVersion ?? 0) + 1,
+      memoryVersion: current?.memoryVersion ?? 0,
+      createdAt: current?.createdAt ?? now(),
+      updatedAt: now(),
+    };
+    if (
+      validated.appearancePhotoAssetId &&
+      !(await tx.objectStore("assets").get(validated.appearancePhotoAssetId))
+    )
+      throw new Error("角色形象照片原件缺失，请重新选择或恢复备份。");
+    await tx.objectStore("characters").put(character);
+    if (draftKey) await tx.objectStore("settings").delete(draftKey);
+    await collectUnreferenced(tx);
+    return character;
+  });
+}
+export async function saveCharacterDraft(key: string, value: CharacterProfile) {
+  const profile = parseCharacterProfile(value, true);
+  const db = await database();
+  const tx = db.transaction(TABLES, "readwrite");
+  await atomic(tx, async () => {
+    if (
+      profile.appearancePhotoAssetId &&
+      !(await tx.objectStore("assets").get(profile.appearancePhotoAssetId))
+    )
+      throw new Error("角色草稿照片原件缺失。");
+    const previous = await tx.objectStore("settings").get(key);
+    const previousPhoto = previous
+      ? parseCharacterProfile(JSON.parse(previous.value), true)
+          .appearancePhotoAssetId
+      : undefined;
+    await tx
+      .objectStore("settings")
+      .put({ key, value: JSON.stringify(profile) });
+    if (previousPhoto && previousPhoto !== profile.appearancePhotoAssetId)
+      await collectUnreferenced(tx);
+  });
+}
+export async function discardCharacterDraft(key: string) {
+  const db = await database();
+  const tx = db.transaction(TABLES, "readwrite");
+  await atomic(tx, async () => {
+    await tx.objectStore("settings").delete(key);
+    await collectUnreferenced(tx);
+  });
 }
 export async function createSession(characterId: string) {
   const db = await database();
@@ -394,6 +438,16 @@ export async function collectUnreferenced(
   tx: import("idb").IDBPTransaction<RoleplayDB, typeof TABLES, "readwrite">,
 ) {
   const used = new Set<string>();
+  const photo = (profile: CharacterProfile) => {
+    if (profile.appearancePhotoAssetId)
+      used.add(profile.appearancePhotoAssetId);
+  };
+  for (const row of await tx.objectStore("characters").getAll()) photo(row);
+  for (const row of await tx.objectStore("sessions").getAll())
+    photo(row.characterSnapshot);
+  for (const row of await tx.objectStore("settings").getAll())
+    if (row.key.startsWith("characterDraft:"))
+      photo(parseCharacterProfile(JSON.parse(row.value), true));
   for (const row of await tx.objectStore("messages").getAll())
     imageIds(row.parts).forEach((assetId) => used.add(assetId));
   for (const row of await tx.objectStore("drafts").getAll())
@@ -403,10 +457,12 @@ export async function collectUnreferenced(
   for (const row of await tx.objectStore("imageUsages").getAll())
     used.add(row.assetId);
   for (const row of await tx.objectStore("stateTasks").getAll()) {
+    photo(row.context.character);
     imageIds(row.context.input.parts).forEach((assetId) => used.add(assetId));
     row.context.visual?.assetCatalog.forEach((a) => used.add(a.assetId));
   }
   for (const row of await tx.objectStore("compactionTasks").getAll()) {
+    photo(row.context.character);
     imageIds(row.context.input.parts).forEach((assetId) => used.add(assetId));
     row.context.visual?.assetCatalog.forEach((a) => used.add(a.assetId));
   }

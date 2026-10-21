@@ -327,12 +327,15 @@ export async function newSession() {
 export async function saveProfile(
   profile: CharacterProfile,
   existing?: Character,
+  draftKey?: string,
 ) {
   const preferred =
     existing?.id === get().characterId
       ? (get().sessionId ?? undefined)
       : undefined;
-  const character = await write(() => db.saveCharacter(profile, existing));
+  const character = await write(() =>
+    db.saveCharacter(profile, existing, draftKey),
+  );
   await refreshMetadata();
   await selectCharacter(character.id, preferred);
   return character;

@@ -38,12 +38,21 @@ function Preview({ asset }: { asset: Metadata }) {
     let disposed = false;
     void database()
       .then(async (db) => {
-        const tx = db.transaction(["sessions", "messages", "drafts"]);
-        const [sessions, messages, drafts] = await Promise.all([
-          tx.objectStore("sessions").getAll(),
-          tx.objectStore("messages").getAll(),
-          tx.objectStore("drafts").getAll(),
+        const tx = db.transaction([
+          "sessions",
+          "messages",
+          "drafts",
+          "characters",
+          "settings",
         ]);
+        const [sessions, messages, drafts, characters, settings] =
+          await Promise.all([
+            tx.objectStore("sessions").getAll(),
+            tx.objectStore("messages").getAll(),
+            tx.objectStore("drafts").getAll(),
+            tx.objectStore("characters").getAll(),
+            tx.objectStore("settings").getAll(),
+          ]);
         await tx.done;
         const names = new Map(sessions.map((s) => [s.id, s.title]));
         const result = messages
@@ -54,6 +63,20 @@ function Preview({ asset }: { asset: Metadata }) {
           .forEach((d) =>
             result.push(`${names.get(d.sessionId) ?? "会话"} · 草稿`),
           );
+        for (const c of characters)
+          if (c.appearancePhotoAssetId === asset.id)
+            result.push(`${c.name} · 角色形象照片 v${c.profileVersion}`);
+        for (const session of sessions)
+          if (session.characterSnapshot.appearancePhotoAssetId === asset.id)
+            result.push(
+              `${session.title} · 会话形象照片 v${session.profileVersion}`,
+            );
+        for (const row of settings)
+          if (
+            row.key.startsWith("characterDraft:") &&
+            JSON.parse(row.value).appearancePhotoAssetId === asset.id
+          )
+            result.push("角色编辑草稿 · 形象照片");
         if (!disposed) setSources(result);
       })
       .catch(report);

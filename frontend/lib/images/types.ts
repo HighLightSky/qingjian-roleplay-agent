@@ -12,13 +12,27 @@ export type ImageAsset = {
   thumbnailBlob?: Blob;
   createdAt: string;
 };
+export type VisualSource =
+  | {
+      type: "message";
+      messageId: string;
+      seq: number;
+      text: string;
+      imageIndex: number;
+      uploadIndex: number;
+    }
+  | { type: "character_photo"; characterId: string; profileVersion: number };
+export const messageSourceIds = (sources: VisualSource[]) =>
+  sources.filter((s) => s.type === "message").map((s) => s.messageId);
+export const photoSources = (sources: VisualSource[]) =>
+  sources.filter((s) => s.type === "character_photo");
 export type Observation = {
   assetId: string;
   summary: string;
   visibleDetails: string[];
   extractedText: string[];
   uncertainDetails: string[];
-  sourceMessageIds: string[];
+  sources: VisualSource[];
   version: number;
 };
 export type VisualObservation = Observation & {
@@ -42,13 +56,7 @@ export type CatalogAsset = {
   byteSize: number;
   width: number;
   height: number;
-  sources: {
-    messageId: string;
-    seq: number;
-    text: string;
-    imageIndex: number;
-    uploadIndex: number;
-  }[];
+  sources: VisualSource[];
   observation: Observation | null;
   recentUses: { messageId: string; purpose: string }[];
 };
@@ -90,3 +98,21 @@ export const imageIds = (parts?: readonly ContentPart[]) =>
     .map((p) => p.assetId);
 
 export type Commit = <T>(task: () => Promise<T>) => Promise<T>;
+
+export function requiredImageIds(context: {
+  input: { parts?: ContentPart[] };
+  visual?: VisualContext;
+}) {
+  return [
+    ...new Set([
+      ...imageIds(context.input.parts),
+      ...(context.visual?.assetCatalog ?? [])
+        .filter(
+          (a) =>
+            a.sources.some((s) => s.type === "character_photo") &&
+            !a.observation,
+        )
+        .map((a) => a.assetId),
+    ]),
+  ];
+}

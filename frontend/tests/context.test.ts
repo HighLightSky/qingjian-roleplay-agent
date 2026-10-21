@@ -158,7 +158,7 @@ test("40轮压缩前30轮，最近10轮保持原文，摘要和本轮usage可完
       checkpointVersion: 1,
     });
     const backup = await takeSnapshot();
-    assert.equal(backup.formatVersion, 6);
+    assert.equal(backup.formatVersion, 7);
     validateBackup(backup);
     await restoreSnapshot(backup);
     const restored = await takeSnapshot();

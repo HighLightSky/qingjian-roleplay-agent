@@ -1,7 +1,8 @@
 package com.example.web.dto;
 
 /** 当前会话创建时的角色快照；身份与自由描述可为空字符串，后端不保存。 */
-public record CharacterDto(String name, String identity, String description) {
+public record CharacterDto(String name, String identity, String description, String appearancePhotoAssetId,
+        int profileVersion) {
     public static final int MAX_NAME_CHARS = 60;
     public static final int MAX_IDENTITY_CHARS = 2000;
     public static final int MAX_DESCRIPTION_CHARS = 8000;
@@ -10,6 +11,12 @@ public record CharacterDto(String name, String identity, String description) {
     public static void validate(CharacterDto character) {
         if (character == null) {
             throw new IllegalArgumentException("角色快照不能为空");
+        }
+        if (character.profileVersion() < 1) {
+            throw new IllegalArgumentException("角色快照版本无效");
+        }
+        if (character.appearancePhotoAssetId() != null) {
+            com.example.service.StateValidation.id(character.appearancePhotoAssetId());
         }
         validateField(character.name(), "角色名称", MAX_NAME_CHARS);
         if (character.name().isBlank()) {

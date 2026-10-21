@@ -1,3 +1,4 @@
+import { imageIds, type VisualSource } from "../lib/images/types";
 import type { ChatContext } from "../lib/chat/context";
 import type { SourceMessage, StateResult } from "../lib/state/types";
 export type UpdateBody = {
@@ -23,13 +24,37 @@ export function emptyStateResult(body: UpdateBody): StateResult {
       visibleDetails: ["红色标记"],
       extractedText: [],
       uncertainDetails: ["小字不清"],
-      sourceMessageIds: body.messages
-        .filter((m) => m.role === "user")
-        .slice(-1)
-        .map((m) => m.id),
+      sources: observationSources(body, p.assetId),
       version:
         (body.context.visual!.assetCatalog.find((a) => a.assetId === p.assetId)
           ?.observation?.version ?? 0) + 1,
     })),
   };
+}
+
+function observationSources(body: UpdateBody, assetId: string): VisualSource[] {
+  const catalog = body.context.visual!.assetCatalog;
+  const sources = [
+    ...(catalog.find((a) => a.assetId === assetId)?.sources ?? []),
+  ];
+  const index = imageIds(body.context.input.parts).indexOf(assetId) + 1;
+  if (index) {
+    const user = body.messages.filter((m) => m.role === "user").at(-1)!;
+    const uploads = Math.max(
+      0,
+      ...catalog
+        .flatMap((a) => a.sources)
+        .filter((s) => s.type === "message")
+        .map((s) => s.uploadIndex),
+    );
+    sources.push({
+      type: "message",
+      messageId: user.id,
+      seq: user.seq,
+      text: body.context.input.text,
+      imageIndex: index,
+      uploadIndex: uploads + index,
+    });
+  }
+  return sources;
 }

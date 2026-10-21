@@ -162,7 +162,7 @@ class ContextFlowTest {
         List<HistoryMessageDto> history = new ArrayList<>();
         for (int i = 1; i <= turns * 2; i++) history.add(new HistoryMessageDto(i % 2 == 1 ? "user" : "assistant", text,
                 "message-" + i, null, i, "complete", 0));
-        return new ChatApiRequest(new CharacterDto("林溪", "旧友", "旅馆老板"), TestRequests.state(List.of()), TestRequests.summary(),
+        return new ChatApiRequest(new CharacterDto("林溪", "旧友", "旅馆老板", null, 1), TestRequests.state(List.of()), TestRequests.summary(),
                 history, new InputDto("继续", null), new InteractionSettingsDto(InteractionSettingsDto.ReplyLength.STANDARD,
                         InteractionSettingsDto.NarrativeMode.SCENE), null, "operation");
     }

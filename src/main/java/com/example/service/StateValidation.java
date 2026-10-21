@@ -84,6 +84,16 @@ public final class StateValidation {
         text(v.progressSummary(), ContextLimits.STATE_TEXT_CHARS);
     }
 
+    public static void visualContent(com.example.web.dto.VisualDtos.Observation observation) {
+        nonblank(observation.summary(), 600);
+        for (var list : List.of(observation.visibleDetails(), observation.extractedText(), observation.uncertainDetails())) {
+            if (list.size() > ContextLimits.LIST_ITEMS)
+                throw new IllegalArgumentException("视觉观察数量超限");
+            for (String text : list)
+                nonblank(text, 300);
+        }
+    }
+
     public static void strings(List<String> values) {
         if (values.size() > ContextLimits.LIST_ITEMS)
             throw new IllegalArgumentException("状态列表数量超限");

@@ -44,8 +44,8 @@ public class VisualSelectionService {
     public Plan select(ChatApiRequest request) throws IOException, InterruptedException {
         contexts.validate(request);
         images.validateReferences(request);
-        images.validateLimits(ImageValidationService.newIds(request));
-        List<Asset> catalog = ImageValidationService.catalog(request);
+        images.validateLimits(ImageValidationService.requiredIds(request));
+        List<Asset> catalog = ImageValidationService.selectableCatalog(request);
         if (catalog.isEmpty())
             return new Plan("ready", List.of(), List.of(), "", fingerprint(request), request.operationId());
         int budget = images.properties().getPlanningInputChars();
@@ -66,7 +66,7 @@ public class VisualSelectionService {
         }
         if (!batch.isEmpty())
             batches.add(List.copyOf(batch));
-        int slots = images.properties().getMaxImages() - ImageValidationService.newIds(request).size();
+        int slots = images.properties().getMaxImages() - ImageValidationService.requiredIds(request).size();
         Plan plan;
         if (batches.size() == 1)
             plan = call(request, catalog, slots, false);
@@ -110,7 +110,10 @@ public class VisualSelectionService {
                 if (!"stop".equals(response.getFinishReason()))
                     throw new IllegalArgumentException("选图输出未完成");
                 Plan plan = mapper.readValue(response.getContent(), Plan.class);
-                validateSelection(plan, catalog, slots);
+                validateSelection(plan, catalog, images.properties().getMaxImages());
+                var union = new HashSet<>(ImageValidationService.requiredIds(r));
+                plan.selectedHistoricalImages().forEach(s -> union.add(s.assetId()));
+                if ("ready".equals(plan.status())) images.validateLimits(union);
                 return plan;
             } catch (IOException | IllegalArgumentException e) {
                 correction = phase + "上次输出无效，请纠正并仅返回完整合法 JSON。";
@@ -146,14 +149,14 @@ public class VisualSelectionService {
 
     /** 正文调用前重新验证计划，将本轮必选图与历史选图合并。 */
     public List<String> validatePlan(ChatApiRequest r) {
-        var required = new LinkedHashSet<>(ImageValidationService.newIds(r));
+        var required = new LinkedHashSet<>(ImageValidationService.requiredIds(r));
         List<Asset> catalog = ImageValidationService.catalog(r);
         Plan p = r.visual() == null ? null : r.visual().plan();
         if (p == null) {
-            if (!catalog.isEmpty())
+            if (!ImageValidationService.selectableCatalog(r).isEmpty())
                 throw new IllegalArgumentException("存在图片历史时必须先选图");
         } else {
-            validateSelection(p, catalog, images.properties().getMaxImages() - required.size());
+            validateSelection(p, catalog, images.properties().getMaxImages());
             if (!"ready".equals(p.status()) || !fingerprint(r).equals(p.contextFingerprint()))
                 throw new IllegalArgumentException("选图计划已失效，请重新选图");
             p.selectedHistoricalImages().forEach(s -> required.add(s.assetId()));

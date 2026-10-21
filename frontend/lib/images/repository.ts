@@ -1,6 +1,6 @@
 import type { Commit } from "./types";
-import { database, TABLES, collectUnreferenced } from "../db";
-import { id, now } from "../domain";
+import { database, TABLES, collectUnreferenced, atomic } from "../db";
+import { id, now, parseCharacterProfile } from "../domain";
 import { sha256 } from "./hash";
 import { imageIds, type Capabilities, type ImageAsset } from "./types";
 
@@ -36,7 +36,7 @@ export async function dataUrl(blob: Blob): Promise<string> {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
   return `data:${blob.type};base64,${btoa(binary)}`;
 }
-// Inspect dimensions before allocating decoded pixels. Actual decoding follows in browsers.
+// 分配像素前检查尺寸，浏览器随后执行实际解码。
 export function inspectImage(
   bytes: Uint8Array,
   mime: string,
@@ -91,7 +91,11 @@ export async function validateImageBlob(blob: Blob, limits = DEFAULT_LIMITS) {
     throw new Error("图片像素超过允许范围。");
   let thumbnailBlob: Blob | undefined;
   if (typeof createImageBitmap === "function") {
-    const image = await createImageBitmap(blob);
+    const image = await createImageBitmap(blob).catch((cause: unknown) => {
+      throw new Error("图片无法解码，请选择有效的静态 JPEG 或 PNG。", {
+        cause,
+      });
+    });
     try {
       if (!(
         (image.width === dimensions.width &&
@@ -118,16 +122,37 @@ export async function validateImageBlob(blob: Blob, limits = DEFAULT_LIMITS) {
   }
   return { ...dimensions, sha256: sha256(bytes), thumbnailBlob };
 }
-export async function prepareImage(
-  file: File,
-  sessionId: string,
-  commit: Commit = (task) => task(),
-): Promise<ImageAsset> {
+async function inspectFile(file: File) {
   const caps = await capabilities();
   if (!caps.visionSupported) throw new Error("当前模型尚未启用视觉能力。");
   if (!caps.mimeTypes.includes(file.type))
     throw new Error("请选择静态 JPEG 或 PNG 图片。");
   const info = await validateImageBlob(file, caps);
+  return { caps, info };
+}
+function imageAsset(
+  file: File,
+  info: Awaited<ReturnType<typeof validateImageBlob>>,
+  existing?: ImageAsset,
+): ImageAsset {
+  return (
+    existing ?? {
+      id: id(),
+      ...info,
+      mimeType: file.type,
+      byteSize: file.size,
+      displayName: file.name,
+      originalBlob: file,
+      createdAt: now(),
+    }
+  );
+}
+export async function prepareImage(
+  file: File,
+  sessionId: string,
+  commit: Commit = (task) => task(),
+): Promise<ImageAsset> {
+  const { caps, info } = await inspectFile(file);
   return commit(async () => {
     const db = await database();
     const tx = db.transaction(["assets", "drafts", "sessions"], "readwrite");
@@ -144,15 +169,7 @@ export async function prepareImage(
       .objectStore("assets")
       .index("sha256")
       .get(info.sha256);
-    const asset: ImageAsset = existing ?? {
-      id: id(),
-      ...info,
-      mimeType: file.type,
-      byteSize: file.size,
-      displayName: file.name,
-      originalBlob: file,
-      createdAt: now(),
-    };
+    const asset = imageAsset(file, info, existing);
     if (imageIds(draft.parts).includes(asset.id))
       throw new Error("该图片已经在草稿中。");
     await tx.objectStore("assets").put(asset);
@@ -163,6 +180,40 @@ export async function prepareImage(
     });
     await tx.done;
     return asset;
+  });
+}
+/** 原件与草稿引用在同一事务保存，准备完成后没有无引用窗口。 */
+export async function prepareCharacterPhoto(
+  file: File,
+  draftKey: string,
+  commit: Commit,
+  signal: AbortSignal,
+) {
+  signal.throwIfAborted();
+  const { info } = await inspectFile(file);
+  signal.throwIfAborted();
+  return commit(async () => {
+    signal.throwIfAborted();
+    const db = await database();
+    const tx = db.transaction(TABLES, "readwrite");
+    return atomic(tx, async () => {
+      const draft = await tx.objectStore("settings").get(draftKey);
+      if (!draft) throw new Error("角色草稿已关闭或移除，请重新打开编辑。");
+      const profile = parseCharacterProfile(JSON.parse(draft.value), true);
+      const existing = await tx
+        .objectStore("assets")
+        .index("sha256")
+        .get(info.sha256);
+      const asset = imageAsset(file, info, existing);
+      const updated = { ...profile, appearancePhotoAssetId: asset.id };
+      signal.throwIfAborted();
+      await tx.objectStore("assets").put(asset);
+      await tx
+        .objectStore("settings")
+        .put({ key: draftKey, value: JSON.stringify(updated) });
+      await collectUnreferenced(tx);
+      return updated;
+    });
   });
 }
 export async function removeDraftImage(sessionId: string, assetId: string) {

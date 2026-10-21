@@ -35,7 +35,7 @@ class StateUpdateServiceTest {
     }
 
     private UpdateRequest request(Snapshot state, List<ContentPartDto> parts, List<Payload> payloads) {
-        return new UpdateRequest("operation", new ChatApiRequest(new CharacterDto("林溪", "旧友", "老板"), state, com.example.TestRequests.summary(),
+        return new UpdateRequest("operation", new ChatApiRequest(new CharacterDto("林溪", "旧友", "老板", null, 1), state, com.example.TestRequests.summary(),
                 List.of(), new InputDto("我们到了旅馆", parts),
                 new InteractionSettingsDto(InteractionSettingsDto.ReplyLength.STANDARD, InteractionSettingsDto.NarrativeMode.SCENE),
                 payloads.isEmpty() ? null : new Context("session", List.of(), null, payloads), "operation"), 0, 2,
@@ -196,11 +196,11 @@ class StateUpdateServiceTest {
                 "data:image/png;base64," + Base64.getEncoder().encodeToString(bytes.toByteArray()));
         var r = request(TestRequests.state(List.of()), List.of(new ContentPartDto("text", "我们到了旅馆", null),
                 new ContentPartDto("image", null, "image")), List.of(payload));
-        String observation = "{\"assetId\":\"image\",\"summary\":\"地图\",\"visibleDetails\":[\"红点\"],\"extractedText\":[],\"uncertainDetails\":[\"小字不清\"],\"sourceMessageIds\":[\"invented\"],\"version\":99}";
+        String observation = "{\"assetId\":\"image\",\"summary\":\"地图\",\"visibleDetails\":[\"红点\"],\"extractedText\":[],\"uncertainDetails\":[\"小字不清\"],\"sources\":[],\"version\":99}";
         answer(output("[" + change("location", "\"旅馆\"") + "]", "[]", "[]").replace("\"visualObservations\":[]", "\"visualObservations\":[" + observation + "]"));
         var result = service.update(r);
         assertEquals(1, result.visualObservations().getFirst().version());
-        assertEquals(List.of("user"), result.visualObservations().getFirst().sourceMessageIds());
+        assertEquals("user", ((com.example.web.dto.VisualDtos.MessageSource) result.visualObservations().getFirst().sources().getFirst()).messageId());
         var captured = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(model).chat(captured.capture());
         assertTrue(captured.getValue().getMessages().getLast().getParts().stream().anyMatch(p -> "image_url".equals(p.type())));
@@ -216,4 +216,27 @@ class StateUpdateServiceTest {
         assertThrows(IllegalArgumentException.class, () -> service.update(new UpdateRequest("operation", oversized, 0, 2, r.messages())));
         verifyNoInteractions(model);
     }
+    @Test void photoObservationHasTrueProfileSourceWithoutInventingUploadMessage() throws Exception {
+        var out = new ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(3, 2, BufferedImage.TYPE_INT_RGB), "png", out);
+        byte[] bytes = out.toByteArray();
+        var payload = new Payload("photo", ImageValidationService.sha256(bytes), "data:image/png;base64," + Base64.getEncoder().encodeToString(bytes));
+        var photo = new Asset("photo", payload.sha256(), "image/png", bytes.length, 3, 2,
+                List.of(new CharacterPhotoSource("character", 4)), null, List.of());
+        var base = request();
+        var c = base.context();
+        var context = new ChatApiRequest(new CharacterDto("林溪", "旧友", "银发", "photo", 4), c.state(), c.summary(), c.history(),
+                c.input(), c.interactionSettings(), new Context("session", List.of(photo), null, List.of(payload)), c.operationId());
+        var r = new UpdateRequest(base.operationId(), context, base.fromExclusiveSeq(), base.throughSeq(), base.messages());
+        answer("{\"visualObservations\":[{\"assetId\":\"photo\",\"summary\":\"黑发红斗篷\",\"visibleDetails\":[],\"extractedText\":[],\"uncertainDetails\":[\"饰品模糊\"],\"sources\":[],\"version\":99}],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}");
+        var result = service.update(r);
+        assertEquals(List.of(new CharacterPhotoSource("character", 4)), result.visualObservations().getFirst().sources());
+        assertEquals(1, result.visualObservations().getFirst().version());
+        assertTrue(result.memoryChanges().isEmpty());
+        var captor = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model).chat(captor.capture());
+        assertEquals(payload.dataUrl(), captor.getValue().getMessages().getLast().getParts().stream()
+                .filter(p -> "image_url".equals(p.type())).findFirst().orElseThrow().imageUrl());
+    }
+
 }

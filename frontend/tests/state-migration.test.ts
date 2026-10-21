@@ -58,6 +58,7 @@ test("v3 升级事务一次性转换目标、剧情、待办和缓存结果，�
   };
   await old.put("sessions", {
     id: "session",
+    profileVersion: 1,
     story,
     storySources: {},
     stateVersion: 7,
@@ -88,6 +89,7 @@ test("v3 升级事务一次性转换目标、剧情、待办和缓存结果，�
     sessionId: "session",
     assistantMessageId: "assistant",
     context: {
+      character: { name: "林溪", identity: "", description: "" },
       state,
       earlierHistory: "",
       history: [],
@@ -100,6 +102,7 @@ test("v3 升级事务一次性转换目标、剧情、待办和缓存结果，�
     kind: "state_update",
     status: "computed",
     result: {
+      visualObservations: [],
       goalChanges: [
         {
           id: "goal",
@@ -127,7 +130,7 @@ test("v3 升级事务一次性转换目标、剧情、待办和缓存结果，�
   rolledBack.close();
 
   const upgraded = await database();
-  assert.equal(upgraded.version, 5);
+  assert.equal(upgraded.version, 6);
   const migratedGoal = (await upgraded.get("goals", "goal"))!;
   validateGoalValue(migratedGoal.value);
   assert.deepEqual(Object.keys(migratedGoal.value).sort(), [
@@ -171,7 +174,7 @@ test("v3 升级事务一次性转换目标、剧情、待办和缓存结果，�
     ...migratedGoal,
     value: { ...migratedGoal.value, progressSummary: "升级后继续推进的内容" },
   });
-  const reopened = await openDB("roleplay-agent", 5);
+  const reopened = await openDB("roleplay-agent", 6);
   assert.equal(
     (await reopened.get("goals", "goal")).value.progressSummary,
     "升级后继续推进的内容",

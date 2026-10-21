@@ -1,3 +1,4 @@
+import type { VisualSource } from "../images/types";
 import {
   GOAL_LABELS,
   STORY_LABELS,
@@ -191,8 +192,37 @@ export function validateStateResult(
     text(o.assetId, 200);
     text(o.summary, 600);
     integer(o.version, 1);
-    sourceIds(o.sourceMessageIds);
+    validateVisualSources(o.sources);
     for (const key of ["visibleDetails", "extractedText", "uncertainDetails"])
       strings(o[key], 20, 300);
+  }
+}
+
+export function validateVisualSources(
+  value: unknown,
+): asserts value is VisualSource[] {
+  array(value, 2000);
+  if (!value.length) throw new Error("视觉记录缺少真实来源。");
+  const keys = new Set<string>();
+  for (const source of value) {
+    object(source);
+    if (source.type === "message") {
+      string(source.messageId, 200);
+      if (!source.messageId) throw new Error("视觉消息来源 ID 不能为空。");
+      integer(source.seq, 1);
+      integer(source.imageIndex, 1);
+      integer(source.uploadIndex, 1);
+      string(source.text, 2000);
+    } else if (source.type === "character_photo") {
+      string(source.characterId, 200);
+      if (!source.characterId) throw new Error("角色照片来源 ID 不能为空。");
+      integer(source.profileVersion, 1);
+    } else throw new Error("视觉来源类型无效。");
+    const key =
+      source.type === "message"
+        ? `message:${source.messageId}:${source.imageIndex}`
+        : "character_photo";
+    if (keys.has(key)) throw new Error("视觉来源重复。");
+    keys.add(key);
   }
 }

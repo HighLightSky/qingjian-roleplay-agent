@@ -42,28 +42,67 @@ public class ImageValidationService {
         return r.visual() == null ? List.of() : r.visual().assetCatalog();
     }
 
-    /** 校验当前会话提供的目录及消息来源；同一 Blob 去重不代表跨会话共享。 */
+    /** 首次照片与本轮附件共同占用不同资产名额。 */
+    public static List<String> requiredIds(ChatApiRequest request) {
+        var ids = new LinkedHashSet<>(newIds(request));
+        catalog(request).stream().filter(a -> a.observation() == null && a.sources().stream()
+                .anyMatch(s -> s instanceof CharacterPhotoSource)).forEach(a -> ids.add(a.assetId()));
+        return List.copyOf(ids);
+    }
+
+    public static List<Asset> selectableCatalog(ChatApiRequest request) {
+        return catalog(request).stream().filter(a -> a.observation() != null || a.sources().stream()
+                .anyMatch(s -> s instanceof MessageSource)).toList();
+    }
+
+    /** 校验来源与快照一致；无状态接口不认证浏览器数据库所有权。 */
     public void validateReferences(ChatApiRequest r) {
         Set<String> ids = new HashSet<>();
         int lastSeq = 0;
+        int photoSources = 0;
         for (Asset a : catalog(r)) {
             if (a == null || a.assetId() == null || a.assetId().isBlank() || !ids.add(a.assetId())
                     || a.sha256() == null || !a.sha256().matches("[a-f0-9]{64}")
                     || a.sources() == null || a.sources().isEmpty())
                 throw new IllegalArgumentException("图片目录或来源无效");
             validateMetadata(a.mimeType(), a.byteSize(), a.width(), a.height());
+            int firstSeq = 0;
+            boolean hasPhoto = false;
+            Set<Source> unique = new HashSet<>();
             for (Source source : a.sources()) {
-                if (source == null || source.messageId() == null || source.seq() < 1 || source.imageIndex() < 1
-                        || source.text() == null)
-                    throw new IllegalArgumentException("图片来源无效");
+                if (source == null || !unique.add(source))
+                    throw new IllegalArgumentException("图片来源缺失或重复");
+                if (source instanceof MessageSource m) {
+                    StateValidation.id(m.messageId());
+                    if (m.seq() < 1 || m.imageIndex() < 1 || m.uploadIndex() < 1)
+                        throw new IllegalArgumentException("图片消息来源无效");
+                    StateValidation.text(m.text(), ContextLimits.INPUT_CHARS);
+                    if (firstSeq == 0) firstSeq = m.seq();
+                } else if (source instanceof CharacterPhotoSource photo) {
+                    photoSources++;
+                    hasPhoto = true;
+                    if (!a.assetId().equals(r.character().appearancePhotoAssetId())
+                            || !r.state().characterId().equals(photo.characterId())
+                            || r.character().profileVersion() != photo.profileVersion())
+                        throw new IllegalArgumentException("角色照片与会话快照不一致");
+                }
             }
-            int firstSeq = a.sources().getFirst().seq();
-            if (firstSeq < lastSeq)
-                throw new IllegalArgumentException("图片目录必须按上传顺序排列");
-            lastSeq = firstSeq;
-            if (a.observation() != null && !a.assetId().equals(a.observation().assetId()))
-                throw new IllegalArgumentException("视觉观察引用无效");
+            // 照片目录可提前出现；聊天上传的相对顺序仍保持不变。
+            if (!hasPhoto && firstSeq > 0) {
+                if (firstSeq < lastSeq) throw new IllegalArgumentException("图片目录必须按上传顺序排列");
+                lastSeq = firstSeq;
+            }
+            if (a.observation() != null) {
+                Observation o = a.observation();
+                StateValidation.visualContent(o);
+                if (!a.assetId().equals(o.assetId()) || o.version() < 1
+                        || o.sources().isEmpty() || !a.sources().containsAll(o.sources())
+                        || hasPhoto && o.sources().stream().noneMatch(s -> s instanceof CharacterPhotoSource))
+                    throw new IllegalArgumentException("视觉观察引用或来源无效");
+            }
         }
+        if (photoSources != (r.character().appearancePhotoAssetId() == null ? 0 : 1))
+            throw new IllegalArgumentException("角色快照照片必须恰好有一个目录来源");
         Set<String> inputIds = new HashSet<>();
         for (ContentPartDto p : r.input().content()) {
             if (p == null || !("text".equals(p.type()) || "image".equals(p.type()))
@@ -74,15 +113,27 @@ public class ImageValidationService {
                 throw new IllegalArgumentException("本轮包含重复图片引用");
         }
         for (HistoryMessageDto h : r.history()) {
-            if (h.parts() == null)
-                continue;
             for (ContentPartDto p : h.parts()) {
                 if (p == null || !("text".equals(p.type()) || "image".equals(p.type())))
                     throw new IllegalArgumentException("历史内容块无效");
                 if ("image".equals(p.type()) && (!"user".equals(h.role()) || !ids.contains(p.assetId())
                         || catalog(r).stream().filter(a -> a.assetId().equals(p.assetId()))
-                                .noneMatch(a -> a.sources().stream().anyMatch(s -> s.messageId().equals(h.id())))))
+                                .noneMatch(a -> a.sources().stream().anyMatch(s -> s instanceof MessageSource m && m.messageId().equals(h.id())))))
                     throw new IllegalArgumentException("历史图片来源不一致");
+            }
+        }
+        for (Asset a : catalog(r)) {
+            for (Source source : a.sources()) {
+                if (source instanceof MessageSource m) {
+                    for (HistoryMessageDto h : r.history()) {
+                        if ((h.id().equals(m.messageId()) || h.seq() == m.seq())
+                                && (!h.id().equals(m.messageId()) || h.seq() != m.seq() || !"user".equals(h.role())
+                                || h.parts().stream().filter(p -> "image".equals(p.type()))
+                                    .skip(m.imageIndex() - 1L).findFirst()
+                                    .filter(p -> a.assetId().equals(p.assetId())).isEmpty()))
+                            throw new IllegalArgumentException("图片消息位置与历史不一致");
+                    }
+                }
             }
         }
         if ((!ids.isEmpty() || !inputIds.isEmpty())
@@ -144,7 +195,7 @@ public class ImageValidationService {
                             throw new IllegalArgumentException("图片无法解码");
                         for (Asset a : catalog(r))
                             if (a.assetId().equals(p.assetId()) &&
-                                    (!a.sha256().equals(p.sha256()) || a.width() != width || a.height() != height
+                                    (!a.sha256().equals(p.sha256()) || !a.mimeType().equals(mime) || a.width() != width || a.height() != height
                                             || a.byteSize() != bytes.length))
                                 throw new IllegalArgumentException("原图与目录元信息不一致");
                     } finally {
