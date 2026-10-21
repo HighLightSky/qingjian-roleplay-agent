@@ -3,6 +3,7 @@ package com.example.service;
 import java.io.IOException;
 import java.util.*;
 import com.example.llm.LLMClient;
+import com.example.llm.model.Message;
 import com.example.prompt.StateUpdatePromptBuilder;
 import com.example.web.dto.StateDtos.*;
 import com.example.web.dto.VisualDtos.*;
@@ -33,7 +34,7 @@ public class StateUpdateService {
         validateRequest(r);
         String material = prompts.material(r);
         StateValidation.text(material, ContextLimits.CONTEXT_CHARS);
-        String correction = "";
+        List<Message> correction = List.of();
         for (int attempt = 0; ; attempt++) {
             var modelRequest = prompts.build(r, material, correction);
             budgets.checkModelRequest(modelRequest);
@@ -47,7 +48,10 @@ public class StateUpdateService {
             } catch (IOException e) {
                 if (attempt == 1)
                     throw new IOException("状态整理结果纠正后仍无效：" + e.getMessage(), e);
-                correction = e.getMessage();
+                correction = List.of(new Message("assistant", response.getContent()),
+                        new Message("user", "上次整理结果未通过校验：" + e.getMessage()
+                                + "。请纠正上面的结果，逐项核对本次返回模板中的 assetId 字段，"
+                                + "保留真实原图 ID，重新返回四个数组组成的完整 JSON。"));
             }
         }
     }

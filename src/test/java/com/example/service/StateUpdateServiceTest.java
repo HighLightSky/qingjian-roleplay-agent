@@ -10,6 +10,8 @@ import java.io.IOException;
 import java.util.*;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import com.example.TestRequests;
 import com.example.config.VisionProperties;
 import com.example.llm.LLMClient;
@@ -103,6 +105,8 @@ class StateUpdateServiceTest {
         var material = parts.getFirst().text();
         assertEquals(mapper.createArrayNode(),
                 mapper.readTree(material.substring(material.indexOf('{'))).path("actualImageAssetIds"));
+        String template = parts.getLast().text();
+        assertTrue(mapper.readTree(template.substring(template.indexOf('{'))).path("visualObservations").isEmpty());
         verify(model, never()).chatStream(any(), any());
     }
 
@@ -285,20 +289,57 @@ class StateUpdateServiceTest {
         var captor = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(model, times(2)).chat(captor.capture());
         for (var call : captor.getAllValues()) {
-            var images = call.getMessages().getLast().getParts().stream()
+            var images = call.getMessages().get(1).getParts().stream()
                     .filter(p -> "image_url".equals(p.type())).toList();
             assertEquals(1, images.size());
             assertEquals(r.context().visual().imagePayloads().getFirst().dataUrl(), images.getFirst().imageUrl());
         }
-        String correction = captor.getAllValues().getLast().getMessages().getLast().getParts().getLast().text();
+        String correction = captor.getAllValues().getLast().getMessages().getLast().getContent();
         assertTrue(correction.contains("未传入的原图：character_photo"));
         assertTrue(correction.contains("本次原图 ID：[photo]"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"missing", "null"})
+    void correctsMissingAssetIdUsingRejectedResultAndConcreteTemplate(String invalidId) throws Exception {
+        var r = photoRequest();
+        var invalid = mapper.readTree(observations("photo"));
+        var observation = (com.fasterxml.jackson.databind.node.ObjectNode) invalid.path("visualObservations").get(0);
+        if ("missing".equals(invalidId)) {
+            observation.remove("assetId");
+        } else {
+            observation.putNull("assetId");
+        }
+        String rejected = invalid.toString();
+        when(model.chat(any())).thenReturn(
+                new ChatResponse(rejected, "stop", TokenUsage.unavailable()),
+                new ChatResponse(observations("photo"), "stop", TokenUsage.unavailable()));
+
+        var result = service.update(r);
+
+        assertEquals("photo", result.visualObservations().getFirst().assetId());
+        assertEquals(List.of(new CharacterPhotoSource("character", 4)), result.visualObservations().getFirst().sources());
+        var captor = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model, times(2)).chat(captor.capture());
+        var retry = captor.getAllValues().getLast();
+        assertEquals(List.of("system", "user", "assistant", "user"),
+                retry.getMessages().stream().map(Message::getRole).toList());
+        assertEquals(rejected, retry.getMessages().get(2).getContent());
+        assertTrue(retry.getMessages().getLast().getContent().contains("未传入的原图：null"));
+        var parts = retry.getMessages().get(1).getParts();
+        assertEquals(r.context().visual().imagePayloads().getFirst().dataUrl(), parts.stream()
+                .filter(p -> "image_url".equals(p.type())).findFirst().orElseThrow().imageUrl());
+        String template = parts.getLast().text();
+        assertEquals("photo", mapper.readTree(template.substring(template.indexOf('{')))
+                .path("visualObservations").get(0).path("assetId").asText());
     }
 
     @Test void rejectsPersistentUnknownDuplicateAndMissingImageReferencesWithoutSubstitution() throws Exception {
         var r = photoRequest();
         Map<String, String> invalid = Map.of(
                 observations("foreign-photo"), "未传入的原图：foreign-photo",
+                observations((String) null), "未传入的原图：null",
+                observations("photo").replace("\"assetId\":\"photo\",", ""), "未传入的原图：null",
                 observations("photo", "photo"), "重复返回视觉观察：photo",
                 observations(), "缺少本次原图：[photo]");
         for (var entry : invalid.entrySet()) {
@@ -336,6 +377,11 @@ class StateUpdateServiceTest {
         var material = parts.getFirst().text();
         assertEquals(mapper.valueToTree(List.of("photo", "attachment")),
                 mapper.readTree(material.substring(material.indexOf('{'))).path("actualImageAssetIds"));
+        String template = parts.getLast().text();
+        var templateObservations = mapper.readTree(template.substring(template.indexOf('{'))).path("visualObservations");
+        assertEquals(2, templateObservations.size());
+        assertEquals("photo", templateObservations.get(0).path("assetId").asText());
+        assertEquals("attachment", templateObservations.get(1).path("assetId").asText());
     }
 
     @Test void upstreamFailureDoesNotTriggerOutputCorrection() throws Exception {
