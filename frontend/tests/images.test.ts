@@ -244,6 +244,13 @@ test("visual failures preserve completed text and durable task; next turn recove
       (await db.getAll("visualTasks"))[0].context.visual?.imagePayloads,
       [],
     );
+    const backup = await takeSnapshot();
+    const invalid = structuredClone(backup);
+    invalid.data.visualTasks[0].context.character.identity = "字".repeat(2001);
+    await assert.rejects(restoreSnapshot(invalid), /角色身份/);
+    assert.equal(await db.count("visualTasks"), 1);
+    await restoreSnapshot(backup);
+    assert.equal(await db.count("visualTasks"), 1);
     failVisual = false;
     calls = [];
     await sendMessage("不需要图片");
@@ -279,25 +286,20 @@ test("retry reuses the saved user message instead of appending a second image in
     restore();
   }
 });
-test("v2 backup restores original bytes and rejects damaged originals before replacing data", async () => {
+test("v3 backup restores original bytes and rejects damaged originals before replacing data", async () => {
   const { session } = await setup();
   const a = await asset();
   await beginTurn(session.id, "", [{ type: "image", assetId: a.id }]);
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 2);
+  assert.equal(backup.formatVersion, 3);
   await restoreSnapshot(backup);
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
   const invalid = structuredClone(backup);
   invalid.data.assets[0].base64 = "AAAA";
   await assert.rejects(restoreSnapshot(invalid));
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
-  const old = structuredClone(backup);
-  old.formatVersion = 1;
-  old.data.messages.forEach((m) => {
-    delete m.parts;
-  });
-  old.data.assets = [];
-  assert.equal(validateBackup(old).data.assets.length, 0);
+  for (const formatVersion of [1, 2])
+    assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
 });
 test("ambiguous selection and cancellation preserve draft and never start a reply", async () => {
   const { character, session } = await setup();

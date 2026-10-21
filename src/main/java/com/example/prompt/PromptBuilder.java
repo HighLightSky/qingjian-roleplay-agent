@@ -65,18 +65,12 @@ public class PromptBuilder {
 
                 【角色设定】
                 名字：%s
-                身份与背景：%s
-                性格：%s
-                说话风格：%s
-                世界观：%s
-                开场场景：%s
+                身份（与用户的关系）：%s
+                角色描述：%s
                 """.formatted(
                 character.name(),
-                character.description(),
-                character.personality(),
-                character.speakingStyle(),
-                character.worldSetting(),
-                character.openingScene()));
+                character.identity(),
+                character.description()));
 
         systemPrompt.append("""
 

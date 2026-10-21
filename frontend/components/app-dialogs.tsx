@@ -23,6 +23,8 @@ import { database, setting, TABLES } from "@/lib/db";
 import { validateBackup, type Backup } from "@/lib/backup";
 import {
   EMPTY_PROFILE,
+  PROFILE_LIMITS,
+  parseCharacterProfile,
   errorText,
   now,
   profileOf,
@@ -128,19 +130,8 @@ function ProfileForm({
     void database()
       .then((db) => db.get("settings", key))
       .then((saved) => {
-        if (active && saved) {
-          try {
-            const parsed = JSON.parse(saved.value);
-            if (
-              Object.keys(EMPTY_PROFILE).every(
-                (field) => typeof parsed[field] === "string",
-              )
-            )
-              setProfile(parsed);
-          } catch {
-            /* Preserve valid initial data. */
-          }
-        }
+        if (active && saved)
+          setProfile(parseCharacterProfile(JSON.parse(saved.value), true));
         if (active) setLoaded(true);
       })
       .catch((error) => setError(errorText(error)));
@@ -176,11 +167,8 @@ function ProfileForm({
   }
   const fields: [keyof CharacterProfile, string, string][] = [
     ["name", "角色名称", "你想如何称呼这个角色？"],
-    ["description", "身份与背景", "这个角色是谁，有怎样的经历？"],
-    ["personality", "性格", "例如：温和、好奇，偶尔有点固执"],
-    ["speakingStyle", "说话风格", "例如：自然简短，偶尔带一点幽默"],
-    ["worldSetting", "世界观", "故事发生在怎样的地方？"],
-    ["openingScene", "开场场景", "每段新对话的第一段描写，可留空"],
+    ["identity", "身份（与我的关系）", "角色是谁，以及与我的关系？"],
+    ["description", "角色描述", "自由描述经历、性格、说话方式和世界背景"],
   ];
   return (
     <form onSubmit={submit} className="grid gap-5">
@@ -193,19 +181,16 @@ function ProfileForm({
             ? "修改影响之后的新对话，已有对话保留原设定。角色记忆仍然共享。"
             : state.copy
               ? "只复制设定，新角色拥有独立的记忆与对话。"
-              : "从名字与背景开始，其余设定可以慢慢补充。"}
+              : "只需填写名字，身份与角色描述可以慢慢补充。"}
         </DialogDescription>
       </DialogHeader>
       {fields.map(([field, label, placeholder]) => (
-        <Field
-          key={field}
-          label={`${label}${["name", "description"].includes(field) ? " *" : ""}`}
-        >
+        <Field key={field} label={`${label}${field === "name" ? " *" : ""}`}>
           {field === "name" ? (
             <input
               className="app-input"
               value={profile[field]}
-              maxLength={60}
+              maxLength={PROFILE_LIMITS.name}
               required
               placeholder={placeholder}
               onChange={(event) =>
@@ -215,9 +200,8 @@ function ProfileForm({
           ) : (
             <Textarea
               value={profile[field]}
-              maxLength={8000}
-              required={field === "description"}
-              rows={field === "description" ? 3 : 2}
+              maxLength={PROFILE_LIMITS[field]}
+              rows={field === "description" ? 6 : 2}
               placeholder={placeholder}
               onChange={(event) =>
                 setProfile({ ...profile, [field]: event.target.value })
@@ -522,7 +506,7 @@ export function AppDialogs({
                   )}
                 </span>
                 <span className="mt-1 block truncate text-xs text-muted-foreground">
-                  {character.description}
+                  {character.identity}
                 </span>
               </button>
               <Button
@@ -576,7 +560,15 @@ export function AppDialogs({
             </dd>
           </div>
           <div>
-            <dt className="text-muted-foreground">创建时的身份背景</dt>
+            <dt className="text-muted-foreground">
+              创建时的身份（与我的关系）
+            </dt>
+            <dd className="mt-1 whitespace-pre-wrap leading-6">
+              {state.session.characterSnapshot.identity}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">创建时的角色描述</dt>
             <dd className="mt-1 whitespace-pre-wrap leading-6">
               {state.session.characterSnapshot.description}
             </dd>

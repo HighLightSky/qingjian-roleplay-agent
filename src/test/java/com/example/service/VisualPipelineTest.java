@@ -43,7 +43,7 @@ class VisualPipelineTest {
                 List.of(new Source("source-" + seq, seq, "地图参考", 1, 1)), null, List.of());
     }
     ChatApiRequest request(String text, List<ContentPartDto> parts, List<Asset> catalog, Plan plan, List<Payload> payloads) {
-        return new ChatApiRequest(new CharacterDto("林溪", "老板", "好奇", "简短", "山城", ""), List.of(), "旧消息已摘要", List.of(),
+        return new ChatApiRequest(new CharacterDto("林溪", "老板", "好奇，说话简短，生活在山城。"), List.of(), "旧消息已摘要", List.of(),
                 new InputDto(text, parts), new InteractionSettingsDto(InteractionSettingsDto.ReplyLength.STANDARD, InteractionSettingsDto.NarrativeMode.SCENE),
                 new Context("session", catalog, plan, payloads));
     }
@@ -76,6 +76,19 @@ class VisualPipelineTest {
                 .flatMap(m -> m.getParts().stream()).anyMatch(p -> payloadEquals(p, complete)));
         assertThrows(IllegalArgumentException.class, () -> chat.validateRequest(request("换了输入", null, r.visual().assetCatalog(), plan, List.of(payload("old")))));
         assertThrows(IllegalArgumentException.class, () -> chat.validateRequest(request(r.input().text(), null, r.visual().assetCatalog(), plan, List.of())));
+    }
+    @Test
+    void visualUpdateRejectsInvalidCharacterBeforeCallingModel() throws Exception {
+        var valid = request("参考地图", null, List.of(), null, List.of(payload("new")));
+        var invalid = new ChatApiRequest(
+                new CharacterDto(" ", "", ""), valid.memories(), valid.summary(), valid.history(),
+                new InputDto("参考地图", List.of(new ContentPartDto("image", null, "new"))),
+                valid.interactionSettings(), valid.visual());
+        var updater = new VisualUpdateService(model, mapper, new VisualUpdatePromptBuilder(mapper), chat);
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> updater.update(new UpdateRequest(invalid, "user", "assistant", "回复")));
+        assertTrue(error.getMessage().contains("角色名称"));
+        verifyNoInteractions(model);
     }
     boolean payloadEquals(Message.Part part, ChatApiRequest r) { return "image_url".equals(part.type()) && part.imageUrl().equals(r.visual().imagePayloads().getFirst().dataUrl()); }
     @Test void invalidIdsGetOneCorrectionAndThenFailWithoutGeneratingText() throws Exception {

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import com.example.llm.LLMClient;
 import com.example.llm.model.ChatRequest;
 import com.example.prompt.PromptBuilder;
+import com.example.web.dto.CharacterDto;
 import com.example.web.dto.ChatApiRequest;
 import com.example.web.dto.HistoryMessageDto;
 import com.example.web.dto.InputDto;
@@ -67,9 +68,7 @@ public class ChatService {
         if (request == null) {
             throw new IllegalArgumentException("聊天请求不能为空");
         }
-        if (request.character() == null) {
-            throw new IllegalArgumentException("角色快照不能为空");
-        }
+        CharacterDto.validate(request.character());
         validateInteractionSettings(request.interactionSettings());
         if (request.memories() == null) {
             throw new IllegalArgumentException("重要记忆必须提供，无记忆时请传空列表");

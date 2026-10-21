@@ -33,7 +33,7 @@ class PromptBuilderTest {
     @MethodSource("combinations")
     void appliesIndependentLengthAndNarrativeRulesWithoutChangingTheModelBudget(ReplyLength length, NarrativeMode mode) {
         var request = builder.build(new ChatApiRequest(
-                new CharacterDto("林溪", "旅馆老板", "好奇", "简短", "山城", "雨夜初遇"),
+                new CharacterDto("林溪", "旅馆老板，也是我的旧友", "好奇，说话简短，生活在山城。"),
                 List.of("用户叫阿远"), "用户带来了一张地图。",
                 List.of(new HistoryMessageDto("assistant", "[台词]让我看看。")),
                 new InputDto("我把地图递给她，让她看看", null), new InteractionSettingsDto(length, mode)));
@@ -57,6 +57,12 @@ class PromptBuilderTest {
         assertFalse(system.contains("内容用引号包裹"));
         assertFalse(system.contains("内容用括号包裹"));
         assertFalse(system.contains("示例："));
+        assertTrue(system.contains("名字：林溪"));
+        assertTrue(system.contains("身份（与用户的关系）：旅馆老板，也是我的旧友"));
+        assertTrue(system.contains("角色描述：好奇，说话简短，生活在山城。"));
+        for (String removed : List.of("性格：", "说话风格：", "世界观：", "开场场景：")) {
+            assertFalse(system.contains(removed));
+        }
         assertTrue(system.contains("用户叫阿远"));
         assertTrue(system.contains("用户带来了一张地图。"));
         assertEquals(List.of("system", "assistant", "user"), request.getMessages().stream().map(m -> m.getRole()).toList());

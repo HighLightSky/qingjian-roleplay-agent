@@ -241,6 +241,57 @@ class ChatControllerTest {
         }
     }
 
+    @Test
+    void validatesCharacterAtChatAndSelectionEntriesBeforeCallingModel() throws Exception {
+        List<ObjectNode> invalid = new ArrayList<>();
+        for (String field : List.of("name", "identity", "description")) {
+            ObjectNode missing = (ObjectNode) objectMapper.readTree(validJson());
+            ((ObjectNode) missing.get("character")).remove(field);
+            invalid.add(missing);
+            ObjectNode nullField = (ObjectNode) objectMapper.readTree(validJson());
+            ((ObjectNode) nullField.get("character")).putNull(field);
+            invalid.add(nullField);
+            int length = switch (field) {
+                case "name" -> 61;
+                case "identity" -> 2001;
+                default -> 8001;
+            };
+            ObjectNode oversized = (ObjectNode) objectMapper.readTree(validJson());
+            ((ObjectNode) oversized.get("character")).put(field, "字".repeat(length));
+            invalid.add(oversized);
+        }
+        ObjectNode blank = (ObjectNode) objectMapper.readTree(validJson());
+        ((ObjectNode) blank.get("character")).put("name", " ");
+        invalid.add(blank);
+        try (HttpClient client = HttpClient.newHttpClient()) {
+            for (String path : List.of("/api/chat", "/api/context/inspect")) {
+                for (ObjectNode body : invalid) {
+                    var response = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(body.toString())).build(),
+                            HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                    assertJsonError(response, 400, "BAD_REQUEST");
+                    assertTrue(response.body().contains("角色"));
+                }
+            }
+        }
+        verifyNoInteractions(llmClient);
+    }
+
+    @Test
+    void acceptsNameOnlyAndExactCharacterLimits() throws Exception {
+        doAnswer(invocation -> "stop").when(llmClient).chatStream(any(), any());
+        for (boolean full : List.of(false, true)) {
+            ObjectNode body = (ObjectNode) objectMapper.readTree(validJson());
+            ((ObjectNode) body.get("character")).put("name", "名".repeat(full ? 60 : 1))
+                    .put("identity", full ? "身".repeat(2000) : "")
+                    .put("description", full ? "描".repeat(8000) : "");
+            HttpResponse<String> response = post(body.toString());
+            assertEquals(200, response.statusCode(), response.body());
+            assertTrue(response.body().contains("event:done"));
+        }
+    }
+
     private HttpResponse<String> post(String body) throws Exception {
         try (HttpClient client = HttpClient.newHttpClient()) {
             return client.send(request(body), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -286,8 +337,7 @@ class ChatControllerTest {
 
     private String validJson() {
         return """
-                {"character":{"name":"林溪","description":"老板","personality":"好奇",
-                "speakingStyle":"简短","worldSetting":"山城","openingScene":"雨夜"},
+                {"character":{"name":"林溪","identity":"老板","description":"好奇，说话简短，生活在山城。"},
                 "memories":[],"summary":"","history":[],"input":{"text":"你好"},
                 "interactionSettings":{"replyLength":"standard","narrativeMode":"scene"}}
                 """;

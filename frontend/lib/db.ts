@@ -11,6 +11,7 @@ import {
   id,
   now,
   profileOf,
+  parseCharacterProfile,
   titleFrom,
   type Character,
   type CharacterProfile,
@@ -57,41 +58,37 @@ let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
     connection = openDB<RoleplayDB>("roleplay-agent", 2, {
-      upgrade(db, oldVersion) {
-        if (oldVersion < 1) {
-          db.createObjectStore("characters", { keyPath: "id" });
-          db.createObjectStore("sessions", { keyPath: "id" }).createIndex(
-            "character",
-            "characterId",
+      upgrade(db) {
+        db.createObjectStore("characters", { keyPath: "id" });
+        db.createObjectStore("sessions", { keyPath: "id" }).createIndex(
+          "character",
+          "characterId",
+        );
+        const messages = db.createObjectStore("messages", { keyPath: "id" });
+        messages.createIndex("sequence", ["sessionId", "seq"], {
+          unique: true,
+        });
+        messages.createIndex("status", "status");
+        db.createObjectStore("memories", { keyPath: "id" }).createIndex(
+          "character",
+          "characterId",
+        );
+        db.createObjectStore("drafts", { keyPath: "sessionId" });
+        db.createObjectStore("settings", { keyPath: "key" });
+        db.createObjectStore("assets", { keyPath: "id" }).createIndex(
+          "sha256",
+          "sha256",
+          { unique: true },
+        );
+        for (const name of [
+          "visualObservations",
+          "imageUsages",
+          "visualTasks",
+        ] as const)
+          db.createObjectStore(name, { keyPath: "id" }).createIndex(
+            "session",
+            "sessionId",
           );
-          const messages = db.createObjectStore("messages", { keyPath: "id" });
-          messages.createIndex("sequence", ["sessionId", "seq"], {
-            unique: true,
-          });
-          messages.createIndex("status", "status");
-          db.createObjectStore("memories", { keyPath: "id" }).createIndex(
-            "character",
-            "characterId",
-          );
-          db.createObjectStore("drafts", { keyPath: "sessionId" });
-          db.createObjectStore("settings", { keyPath: "key" });
-        }
-        if (oldVersion < 2) {
-          db.createObjectStore("assets", { keyPath: "id" }).createIndex(
-            "sha256",
-            "sha256",
-            { unique: true },
-          );
-          for (const name of [
-            "visualObservations",
-            "imageUsages",
-            "visualTasks",
-          ] as const)
-            db.createObjectStore(name, { keyPath: "id" }).createIndex(
-              "session",
-              "sessionId",
-            );
-        }
       },
       blocked() {
         window.dispatchEvent(new CustomEvent("roleplay-db-blocked"));
@@ -164,11 +161,8 @@ export async function saveCharacter(
   profile: CharacterProfile,
   existing?: Character,
 ) {
-  if (!profile.name.trim() || !profile.description.trim())
-    throw new Error("请填写角色名称与身份背景。");
   const character: Character = {
-    ...profile,
-    name: profile.name.trim(),
+    ...parseCharacterProfile(profile),
     id: existing?.id ?? id(),
     archived: existing?.archived ?? false,
     profileVersion: (existing?.profileVersion ?? 0) + 1,
@@ -185,7 +179,7 @@ export async function saveCharacter(
 export async function createSession(characterId: string) {
   const db = await database();
   const tx = db.transaction(
-    ["characters", "sessions", "messages", "drafts", "settings"],
+    ["characters", "sessions", "drafts", "settings"],
     "readwrite",
   );
   const character = await tx.objectStore("characters").get(characterId);
@@ -203,24 +197,11 @@ export async function createSession(characterId: string) {
     profileVersion: character.profileVersion,
     summary: "",
     summaryThroughSeq: 0,
-    nextMessageSeq: character.openingScene.trim() ? 2 : 1,
+    nextMessageSeq: 1,
     createdAt: now(),
     updatedAt: now(),
   };
   await tx.objectStore("sessions").put(session);
-  if (character.openingScene.trim())
-    await tx.objectStore("messages").put({
-      id: id(),
-      sessionId: session.id,
-      seq: 1,
-      role: "assistant",
-      segments: [{ kind: "narration", text: character.openingScene }],
-      status: "complete",
-      finishReason: "stop",
-      checkpointVersion: 0,
-      createdAt: now(),
-      updatedAt: now(),
-    });
   await tx
     .objectStore("drafts")
     .put({ sessionId: session.id, text: "", updatedAt: now() });

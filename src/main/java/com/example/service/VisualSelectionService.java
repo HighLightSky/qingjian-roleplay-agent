@@ -40,6 +40,7 @@ public class VisualSelectionService {
     public Plan select(ChatApiRequest request) throws IOException, InterruptedException {
         if (request == null || request.input() == null || request.history() == null)
             throw new IllegalArgumentException("选图上下文缺失");
+        CharacterDto.validate(request.character());
         images.validateReferences(request);
         images.validateLimits(ImageValidationService.newIds(request));
         List<Asset> catalog = ImageValidationService.catalog(request);

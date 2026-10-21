@@ -2,12 +2,44 @@ import type { ContentPart } from "./images/types";
 
 export type CharacterProfile = {
   name: string;
+  identity: string;
   description: string;
-  personality: string;
-  speakingStyle: string;
-  worldSetting: string;
-  openingScene: string;
 };
+export const PROFILE_LIMITS = {
+  name: 60,
+  identity: 2000,
+  description: 8000,
+} as const;
+export function parseCharacterProfile(
+  value: unknown,
+  allowEmptyName = false,
+): CharacterProfile {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("角色资料无效。");
+  const profile = value as Record<string, unknown>;
+  const labels = {
+    name: "角色名称",
+    identity: "角色身份",
+    description: "角色描述",
+  };
+  for (const field of Object.keys(
+    PROFILE_LIMITS,
+  ) as (keyof CharacterProfile)[]) {
+    if (typeof profile[field] !== "string")
+      throw new Error(`${labels[field]}必须是字符串，无内容时请填空字符串。`);
+    if (profile[field].length > PROFILE_LIMITS[field])
+      throw new Error(
+        `${labels[field]}不能超过 ${PROFILE_LIMITS[field]} 字符。`,
+      );
+  }
+  const name = (profile.name as string).trim();
+  if (!allowEmptyName && !name) throw new Error("请填写角色名称。");
+  return {
+    name: allowEmptyName ? (profile.name as string) : name,
+    identity: profile.identity as string,
+    description: profile.description as string,
+  };
+}
 export type Character = CharacterProfile & {
   id: string;
   archived: boolean;
@@ -116,11 +148,8 @@ export function parseInteractionSettings(value: unknown): InteractionSettings {
 }
 export const EMPTY_PROFILE: CharacterProfile = {
   name: "",
+  identity: "",
   description: "",
-  personality: "",
-  speakingStyle: "",
-  worldSetting: "",
-  openingScene: "",
 };
 export const now = () => new Date().toISOString();
 export function id(): string {
@@ -136,12 +165,11 @@ export function id(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 export function profileOf(character: Character): CharacterProfile {
-  return Object.fromEntries(
-    Object.keys(EMPTY_PROFILE).map((key) => [
-      key,
-      character[key as keyof CharacterProfile],
-    ]),
-  ) as CharacterProfile;
+  return {
+    name: character.name,
+    identity: character.identity,
+    description: character.description,
+  };
 }
 export function plainText(message: Message): string {
   return message.role === "user"

@@ -52,11 +52,96 @@ async function setup() {
     ...EMPTY_PROFILE,
     name: "林溪",
     description: "旅馆老板",
-    openingScene: "（她看向门口。）",
+    identity: "旅馆老板，也是我的旧友",
   });
   const session = await createSession(character.id);
   return { character, session };
 }
+test("角色仅需名字，空会话从第一条用户消息开始，编辑保留旧快照", async () => {
+  const original = await saveCharacter({ ...EMPTY_PROFILE, name: " 林溪 " });
+  assert.deepEqual(
+    {
+      name: original.name,
+      identity: original.identity,
+      description: original.description,
+    },
+    { name: "林溪", identity: "", description: "" },
+  );
+  const session = await createSession(original.id);
+  assert.equal(session.nextMessageSeq, 1);
+  assert.deepEqual(await allMessages(session.id), []);
+  const updated = await saveCharacter(
+    {
+      name: "林溪",
+      identity: "旅馆老板，也是我的旧友",
+      description: "谨慎好奇，说话直接。",
+    },
+    original,
+  );
+  const next = await createSession(original.id);
+  assert.deepEqual(session.characterSnapshot, {
+    name: "林溪",
+    identity: "",
+    description: "",
+  });
+  assert.deepEqual(next.characterSnapshot, {
+    name: "林溪",
+    identity: updated.identity,
+    description: updated.description,
+  });
+  assert.equal(next.profileVersion, session.profileVersion + 1);
+  const turn = await beginTurn(session.id, "你好");
+  assert.equal(turn.user.seq, 1);
+  assert.equal(turn.assistant.seq, 2);
+  assert.equal(turn.session.title, "你好");
+  await checkpoint({ ...turn.assistant, status: "complete" });
+  const backup = await takeSnapshot();
+  await restoreSnapshot(backup);
+  assert.deepEqual((await takeSnapshot()).data, backup.data);
+});
+test("保存角色统一检查名字和三字段长度", async () => {
+  for (const profile of [
+    { ...EMPTY_PROFILE, name: "  " },
+    { ...EMPTY_PROFILE, name: "名".repeat(61) },
+    { ...EMPTY_PROFILE, name: "林溪", identity: "身".repeat(2001) },
+    { ...EMPTY_PROFILE, name: "林溪", description: "描".repeat(8001) },
+  ])
+    await assert.rejects(saveCharacter(profile), /角色/);
+  const character = await saveCharacter({
+    name: "名".repeat(60),
+    identity: "身".repeat(2000),
+    description: "描".repeat(8000),
+  });
+  assert.equal(character.identity.length, 2000);
+});
+test("备份拒绝旧版本、无效角色草稿和快照，空名字草稿可以恢复", async () => {
+  await setup();
+  await setting("characterDraft:new", JSON.stringify(EMPTY_PROFILE));
+  const backup = await takeSnapshot();
+  assert.equal(backup.formatVersion, 3);
+  validateBackup(structuredClone(backup));
+  for (const formatVersion of [1, 2])
+    assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
+  for (const field of ["name", "identity", "description"] as const) {
+    const invalid = structuredClone(backup);
+    invalid.data.sessions[0].characterSnapshot[field] = "字".repeat(
+      field === "name" ? 61 : field === "identity" ? 2001 : 8001,
+    );
+    assert.throws(() => validateBackup(invalid), /角色/);
+  }
+  const invalidDraft = structuredClone(backup);
+  invalidDraft.data.settings.find(
+    (s) => s.key === "characterDraft:new",
+  )!.value = JSON.stringify({ name: "未完成" });
+  assert.throws(() => validateBackup(invalidDraft), /角色身份/);
+  const invalidTitle = structuredClone(backup);
+  delete (
+    invalidTitle.data.sessions[0] as Partial<
+      (typeof invalidTitle.data.sessions)[0]
+    >
+  ).titleSource;
+  assert.throws(() => validateBackup(invalidTitle), /标题来源/);
+});
 test("titles normalize whitespace and preserve grapheme clusters", () => {
   assert.equal(titleFrom(" \n 你好\n 阿远  "), "你好 阿远");
   const family = "👨‍👩‍👧‍👦";
@@ -98,7 +183,7 @@ test("completed checkpoints cannot be overwritten by late streaming writes", asy
 test("browser recovery preserves partial segments; pagination has no gaps", async () => {
   const { session } = await setup();
   for (let i = 0; i < 30; i++) await beginTurn(session.id, String(i));
-  const first = (await allMessages(session.id))[2];
+  const first = (await allMessages(session.id))[1];
   await checkpoint(
     appendDelta(first, { kind: "narration", text: "（还没说完" }),
   );
@@ -110,7 +195,7 @@ test("browser recovery preserves partial segments; pagination has no gaps", asyn
   assert.equal(latest.messages.length, 50);
   assert.equal(latest.hasEarlier, true);
   const earlier = await getMessages(session.id, latest.messages[0].seq);
-  assert.equal(earlier.messages.length + latest.messages.length, 61);
+  assert.equal(earlier.messages.length + latest.messages.length, 60);
   assert.equal(earlier.hasEarlier, false);
 });
 test("memories belong to characters and survive session deletion", async () => {
@@ -149,7 +234,7 @@ test("memories belong to characters and survive session deletion", async () => {
 });
 test("multi-turn context restores every assistant line marker without changing visible text", async () => {
   const { character, session } = await setup();
-  const expected = ["[描写]（她看向门口。）"];
+  const expected: string[] = [];
   for (let turn = 0; turn < 4; turn++) {
     const input = `第${turn}轮：\n“[台词]这是用户原文。”`;
     const body = chatContext(
@@ -221,7 +306,7 @@ test("interrupted history retains typed content and marks its completion note as
     body.history
       .filter((message) => message.role === "assistant")
       .map((message) => message.text),
-    ["[描写]（她看向门口。）", "[台词]这条路通往\n[描写]（该回复未完成。）"],
+    ["[台词]这条路通往\n[描写]（该回复未完成。）"],
   );
 });
 test("older history is included as raw context, not silently dropped by the 20-message backend cap", async () => {

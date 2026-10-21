@@ -14,7 +14,7 @@ import {
 } from "./images/types";
 import { database, TABLES } from "./db";
 import {
-  EMPTY_PROFILE,
+  parseCharacterProfile,
   parseInteractionSettings,
   type Character,
   type Draft,
@@ -41,7 +41,7 @@ export type Snapshot = {
 };
 export type Backup = {
   format: "roleplay-agent-backup";
-  formatVersion: 1 | 2;
+  formatVersion: 3;
   exportedAt: string;
   data: Snapshot;
 };
@@ -62,34 +62,15 @@ function date(value: unknown) {
   if (!Number.isFinite(Date.parse(value)))
     throw new Error("备份中的日期无效。");
 }
-function profile(value: unknown) {
-  object(value);
-  for (const key of Object.keys(EMPTY_PROFILE))
-    string(value[key], key === "name" ? 120 : 8000);
-  if (!(value.name as string).trim() || !(value.description as string).trim())
-    throw new Error("备份中的角色资料不完整。");
-}
 export function validateBackup(value: unknown): Backup {
   object(value);
   if (new Blob([JSON.stringify(value)]).size > 50 * 1024 * 1024)
     throw new Error("备份不能超过 50 MiB。");
-  if (
-    value.format !== "roleplay-agent-backup" ||
-    ![1, 2].includes(value.formatVersion as number)
-  )
+  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 3)
     throw new Error("不支持此备份格式或版本，请选择本应用导出的文件。");
   date(value.exportedAt);
   object(value.data);
   const data = value.data;
-  if (value.formatVersion === 1) {
-    for (const table of [
-      "assets",
-      "visualObservations",
-      "imageUsages",
-      "visualTasks",
-    ])
-      data[table] = [];
-  }
   for (const table of TABLES) {
     if (!Array.isArray(data[table]))
       throw new Error(`备份缺少 ${table} 数据。`);
@@ -116,7 +97,7 @@ export function validateBackup(value: unknown): Backup {
   const sequences = new Set<string>();
   const maxSeq = new Map<string, number>();
   for (const character of snapshot.characters) {
-    profile(character);
+    parseCharacterProfile(character);
     date(character.createdAt);
     if (typeof character.archived !== "boolean")
       throw new Error("角色归档状态无效。");
@@ -126,10 +107,9 @@ export function validateBackup(value: unknown): Backup {
   for (const session of snapshot.sessions) {
     if (!characters.has(session.characterId))
       throw new Error("会话引用了不存在的角色。");
-    profile(session.characterSnapshot);
+    parseCharacterProfile(session.characterSnapshot);
     date(session.createdAt);
     string(session.title, 240);
-    if (session.titleSource === undefined) session.titleSource = "manual";
     if (!["default", "first-message", "manual"].includes(session.titleSource))
       throw new Error("会话标题来源无效。");
     integer(session.profileVersion, 1);
@@ -202,6 +182,9 @@ export function validateBackup(value: unknown): Backup {
   }
   for (const setting of snapshot.settings) {
     string(setting.value, 50_000);
+    if (setting.key.startsWith("characterDraft:")) {
+      parseCharacterProfile(JSON.parse(setting.value), true);
+    }
     if (setting.key === "interactionSettings") {
       try {
         parseInteractionSettings(JSON.parse(setting.value));
@@ -218,7 +201,7 @@ export function validateBackup(value: unknown): Backup {
   validateImages(snapshot);
   return {
     format: "roleplay-agent-backup",
-    formatVersion: 2,
+    formatVersion: 3,
     exportedAt: value.exportedAt as string,
     data: snapshot,
   };
@@ -349,6 +332,7 @@ function validateImages(snapshot: Snapshot) {
       throw new Error("视觉任务来源无效。");
     string(task.assistantText);
     object(task.context);
+    parseCharacterProfile(task.context.character);
     object(task.context.input);
     object(task.context.visual);
     if (
@@ -413,7 +397,7 @@ export async function takeSnapshot(): Promise<Backup> {
   }
   const backup: Backup = {
     format: "roleplay-agent-backup",
-    formatVersion: 2,
+    formatVersion: 3,
     exportedAt: new Date().toISOString(),
     data: { ...data, assets: serialized },
   };

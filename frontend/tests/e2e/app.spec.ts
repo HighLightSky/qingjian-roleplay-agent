@@ -8,7 +8,7 @@ async function createRole(page: Page) {
   await page.getByRole("button", { name: "创建第一个角色" }).click();
   await page.getByPlaceholder("你想如何称呼这个角色？").fill("林溪");
   await page
-    .getByPlaceholder("这个角色是谁，有怎样的经历？")
+    .getByPlaceholder("角色是谁，以及与我的关系？")
     .fill("山间旅馆的老板");
   await page.getByRole("button", { name: "保存角色", exact: true }).click();
   await page.getByRole("button", { name: "开始对话", exact: true }).click();
@@ -32,6 +32,96 @@ async function chooseSetting(page: Page, label: string, option: string) {
     page.getByRole("button", { name: `${label}：${option}`, exact: true }),
   ).toBeEnabled();
 }
+
+test("三字段角色支持仅名字创建、草稿恢复、快照隔离与复制", async ({ page }) => {
+  const requests: {
+    character: { name: string; identity: string; description: string };
+  }[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/chat"))
+      requests.push(request.postDataJSON());
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "创建第一个角色" }).click();
+  await expect(page.getByRole("dialog").getByRole("textbox")).toHaveCount(3);
+  await expect(
+    page.getByPlaceholder("角色是谁，以及与我的关系？"),
+  ).toHaveAttribute("maxlength", "2000");
+  await expect(
+    page.getByPlaceholder("自由描述经历、性格、说话方式和世界背景"),
+  ).toHaveAttribute("maxlength", "8000");
+  await page.getByPlaceholder("你想如何称呼这个角色？").fill("林溪");
+  await page.getByRole("button", { name: "保存角色", exact: true }).click();
+  await page.getByRole("button", { name: "开始对话", exact: true }).click();
+  await expect(page.locator('[data-role="assistant"]')).toHaveCount(0);
+
+  async function edit() {
+    await page.getByRole("button", { name: "角色与会话菜单" }).click();
+    await page
+      .getByRole("menuitem", { name: "编辑角色设定", exact: true })
+      .click();
+  }
+  await edit();
+  await page
+    .getByPlaceholder("角色是谁，以及与我的关系？")
+    .fill("旅馆老板，也是我的旧友");
+  await page
+    .getByPlaceholder("自由描述经历、性格、说话方式和世界背景")
+    .fill("谨慎好奇，说话直接。");
+  await page.getByRole("button", { name: "暂时关闭", exact: true }).click();
+  await edit();
+  await expect(page.getByPlaceholder("角色是谁，以及与我的关系？")).toHaveValue(
+    "旅馆老板，也是我的旧友",
+  );
+  await page.reload();
+  await edit();
+  await expect(
+    page.getByPlaceholder("自由描述经历、性格、说话方式和世界背景"),
+  ).toHaveValue("谨慎好奇，说话直接。");
+  await page.getByRole("button", { name: "保存角色", exact: true }).click();
+
+  await send(page, "旧会话仍然使用创建时的设定");
+  await expect(
+    page.getByText("“欢迎回来，旅人。”", { exact: true }),
+  ).toBeVisible();
+  expect(requests.at(-1)!.character).toEqual({
+    name: "林溪",
+    identity: "",
+    description: "",
+  });
+  await nav(page);
+  await page
+    .getByRole("button", { name: "新建对话", exact: true })
+    .filter({ visible: true })
+    .click();
+  await expect(page.locator('[data-role="assistant"]')).toHaveCount(0);
+  await send(page, "新会话使用新设定");
+  await expect(
+    page.getByText("“欢迎回来，旅人。”", { exact: true }),
+  ).toBeVisible();
+  expect(requests.at(-1)!.character).toEqual({
+    name: "林溪",
+    identity: "旅馆老板，也是我的旧友",
+    description: "谨慎好奇，说话直接。",
+  });
+
+  await page.getByRole("button", { name: "角色与会话菜单" }).click();
+  await page
+    .getByRole("menuitem", { name: "复制为新角色", exact: true })
+    .click();
+  await expect(page.getByPlaceholder("你想如何称呼这个角色？")).toHaveValue(
+    "林溪（副本）",
+  );
+  await expect(page.getByPlaceholder("角色是谁，以及与我的关系？")).toHaveValue(
+    "旅馆老板，也是我的旧友",
+  );
+  await expect(
+    page.getByPlaceholder("自由描述经历、性格、说话方式和世界背景"),
+  ).toHaveValue("谨慎好奇，说话直接。");
+  await page.getByRole("button", { name: "保存角色", exact: true }).click();
+  await page.getByRole("button", { name: "开始对话", exact: true }).click();
+  await expect(page.locator('[data-role="assistant"]')).toHaveCount(0);
+});
 
 test("dialogue and narration retain their styles and typed history across turns and reloads", async ({
   page,

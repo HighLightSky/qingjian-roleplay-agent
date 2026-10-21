@@ -200,7 +200,7 @@ class ChatServiceTest {
 
     private ChatApiRequest validRequest() {
         return new ChatApiRequest(
-                new CharacterDto("林溪", "旅馆老板", "好奇", "简短", "山城", "雨夜初遇"),
+                new CharacterDto("林溪", "旅馆老板，也是我的旧友", "好奇，说话简短，生活在山城。"),
                 List.of(), "", List.of(new HistoryMessageDto("assistant", "欢迎。")),
                 new InputDto("你好", null), SETTINGS);
     }
