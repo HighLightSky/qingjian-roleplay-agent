@@ -1,6 +1,8 @@
 "use client";
 import { ContextBudgetIndicator } from "@/components/chat/context-budget";
 import { TurnTokenUsage } from "@/components/chat/turn-token-usage";
+import { ThinkingIndicator } from "@/components/chat/thinking-indicator";
+import { useAppStore } from "@/stores/use-app-store";
 
 import {
   ComposerAddAttachment,
@@ -594,6 +596,14 @@ const AssistantMessage: FC = () => {
   const activity = useAuiState(
     (state) => state.message.metadata.custom.activity === true,
   );
+  const pending = useAuiState(
+    (state) => state.message.metadata.custom.pending === true,
+  );
+  const running = useAuiState(
+    (state) => state.message.status?.type === "running",
+  );
+  const preparing = useAppStore((state) => state.preparingInput);
+  const showFooter = !activity && !running;
   const ACTION_BAR_PT = "pt-1.5";
   // Keep the action bar inside the contained root's paint box, then cancel its reserved space in flow.
   const ACTION_BAR_HEIGHT = `min-h-7.5 ${ACTION_BAR_PT}`;
@@ -603,12 +613,18 @@ const AssistantMessage: FC = () => {
       id={`message:${messageId}`}
       data-slot="aui_assistant-message-root"
       data-role="assistant"
-      className="fade-in slide-in-from-bottom-1 animate-in relative -mb-7.5 pb-7.5 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
+      className={cn(
+        "fade-in slide-in-from-bottom-1 animate-in relative duration-150",
+        showFooter &&
+          "-mb-7.5 pb-7.5 [contain-intrinsic-size:auto_200px] [content-visibility:auto]",
+        pending && preparing && "hidden",
+      )}
     >
       <div
         data-slot="aui_assistant-message-content"
         className="text-foreground px-2 leading-relaxed wrap-break-word"
       >
+        {pending && !preparing && <ThinkingIndicator />}
         <MessagePrimitive.GroupedParts groupBy={groupBy}>
           {({ part, children }) => {
             switch (part.type) {
@@ -673,6 +689,7 @@ const AssistantMessage: FC = () => {
                   </div>
                 );
               case "indicator":
+                if (segmented || activity) return null;
                 return (
                   <span
                     data-slot="aui_assistant-message-indicator"
@@ -690,17 +707,15 @@ const AssistantMessage: FC = () => {
         <MessageError />
       </div>
 
-      <div
-        data-slot="aui_assistant-message-footer"
-        className={cn("ms-2 flex items-center", ACTION_BAR_HEIGHT)}
-      >
-        {!activity && (
-          <>
-            <AssistantActionBar />
-            <TurnTokenUsage />
-          </>
-        )}
-      </div>
+      {showFooter && (
+        <div
+          data-slot="aui_assistant-message-footer"
+          className={cn("ms-2 flex items-center", ACTION_BAR_HEIGHT)}
+        >
+          <AssistantActionBar />
+          <TurnTokenUsage />
+        </div>
+      )}
     </MessagePrimitive.Root>
   );
 };

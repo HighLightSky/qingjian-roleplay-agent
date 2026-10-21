@@ -77,12 +77,7 @@ function convertMessage(message: RuntimeEntry): ThreadMessageLike {
   }
   const text = plainText(message);
   const note =
-    message.error ||
-    (message.status === "pending"
-      ? "等待生成正文…"
-      : message.status === "streaming"
-        ? "正在回复…"
-        : "");
+    message.error || (message.status === "streaming" ? "正在回复…" : "");
   const value: ThreadMessageLike = {
     id: message.id,
     role: message.role,
@@ -128,6 +123,7 @@ function convertMessage(message: RuntimeEntry): ThreadMessageLike {
     metadata: {
       custom: {
         segmented: message.role === "assistant",
+        pending: message.status === "pending",
         sessionId: message.sessionId,
         plainText: text,
       },
