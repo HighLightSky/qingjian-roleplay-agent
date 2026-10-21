@@ -22,7 +22,7 @@ createServer(async (request, response) => {
   }
   if (
     request.url === "/api/context/inspect" ||
-    request.url === "/api/visual/update"
+    request.url === "/api/state/update"
   ) {
     let raw = "";
     for await (const chunk of request) raw += chunk;
@@ -30,6 +30,7 @@ createServer(async (request, response) => {
     const result =
       request.url === "/api/context/inspect"
         ? {
+            operationId: data.operationId,
             status: "ready",
             selectedHistoricalImages: data.input.text.includes("不需要图片")
               ? []
@@ -42,19 +43,79 @@ createServer(async (request, response) => {
             contextFingerprint: "test-fixture",
           }
         : {
-            observations: data.context.visual.imagePayloads.map((p) => ({
-              assetId: p.assetId,
-              summary: "地图参考",
-              visibleDetails: ["红色标记"],
-              extractedText: [],
-              uncertainDetails: ["细字未辨认"],
-              sourceMessageIds: [data.userMessageId],
-              version:
-                (data.context.visual.assetCatalog.find(
-                  (a) => a.assetId === p.assetId,
-                )?.observation?.version ?? 0) + 1,
-            })),
+            operationId: data.operationId,
+            sessionVersion: data.context.state.sessionVersion,
+            memoryVersion: data.context.state.memoryVersion,
+            fromExclusiveSeq: data.fromExclusiveSeq,
+            throughSeq: data.throughSeq,
+            storyChanges: [],
+            memoryChanges: [],
+            goalChanges: [],
+            visualObservations: (data.context.visual?.imagePayloads ?? []).map(
+              (p) => ({
+                assetId: p.assetId,
+                summary: "地图参考",
+                visibleDetails: ["红色标记"],
+                extractedText: [],
+                uncertainDetails: ["细字未辨认"],
+                sourceMessageIds: data.messages
+                  .filter((m) => m.role === "user")
+                  .slice(-1)
+                  .map((m) => m.id),
+                version:
+                  (data.context.visual.assetCatalog.find(
+                    (a) => a.assetId === p.assetId,
+                  )?.observation?.version ?? 0) + 1,
+              }),
+            ),
           };
+    if (request.url === "/api/state/update") {
+      if (data.context.input.text.includes("慢慢整理")) await delay(1800);
+      if (data.context.input.text.includes("自动整理测试")) {
+        const sourceMessageIds = [data.messages.at(-1).id];
+        const base = {
+          action: "create",
+          expectedVersion: 0,
+          before: null,
+          reason: "本轮明确说明",
+          sourceMessageIds,
+        };
+        if (data.context.state.story.location !== "旅馆")
+          result.storyChanges.push({
+            ...base,
+            action: "update",
+            id: "location",
+            expectedVersion: data.context.state.sessionVersion,
+            before: data.context.state.story.location,
+            value: "旅馆",
+          });
+        if (!data.context.state.memories.length)
+          result.memoryChanges.push({
+            ...base,
+            id: `memory:${data.operationId}`,
+            value: {
+              content: "用户希望被称为阿远",
+              scope: "session",
+              kind: "preference",
+              epistemicStatus: "established",
+              status: "active",
+            },
+          });
+        if (!data.context.state.goals.length)
+          result.goalChanges.push({
+            ...base,
+            id: `goal:${data.operationId}`,
+            value: {
+              description: "寻找失踪的哥哥",
+              status: "active",
+              currentFocus: "询问掌柜",
+              clues: ["登记册"],
+              milestones: [{ description: "检查登记册", status: "discovered" }],
+              blockers: [],
+            },
+          });
+      }
+    }
     response
       .writeHead(200, { "content-type": "application/json" })
       .end(JSON.stringify(result));
@@ -92,9 +153,9 @@ createServer(async (request, response) => {
   if (response.destroyed) return;
   event("delta", {
     kind: "dialogue",
-    text: `${body.memories.some((memory) => memory.includes("阿远")) ? "阿远" : "旅人"}。”`,
+    text: `${body.state.memories.some((memory) => memory.value.status === "active" && memory.value.content.includes("阿远")) ? "阿远" : "旅人"}。”`,
   });
   if (!body.input.text.includes("没有结束"))
     event("done", { finishReason: "stop" });
   response.end();
-}).listen(18080, "127.0.0.1");
+}).listen(Number(process.env.ROLEPLAY_E2E_BACKEND_PORT ?? 18080), "127.0.0.1");

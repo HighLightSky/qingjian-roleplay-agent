@@ -1,5 +1,6 @@
+import type { Operation } from "../state/types";
 import { database } from "../db";
-import { now, plainText, type Message } from "../domain";
+import { now, plainText, errorText, type Message } from "../domain";
 import type { ChatContext } from "../chat/context";
 import { capabilities, dataUrl, getOriginal } from "./repository";
 import {
@@ -7,9 +8,6 @@ import {
   type CatalogAsset,
   type ImagePlan,
   type ImagePayload,
-  type Observation,
-  type VisualTask,
-  type Commit,
 } from "./types";
 
 export async function apiJson<T>(
@@ -128,6 +126,8 @@ export async function prepareImageContext(
   sessionId: string,
   history: Message[],
   signal: AbortSignal,
+  anchorMessageId: string,
+  recordOperation: (operation: Operation) => Promise<void>,
 ): Promise<ChatContext> {
   const catalog = await buildCatalog(sessionId, history);
   if (!catalog.length && !imageIds(context.input.parts).length) return context;
@@ -136,151 +136,59 @@ export async function prepareImageContext(
     visual: { sessionId, assetCatalog: catalog, plan: null, imagePayloads: [] },
   };
   if (catalog.length) {
-    const plan = await apiJson<ImagePlan>(
-      "/api/context/inspect",
-      prepared,
-      signal,
-    );
-    if (plan.status !== "ready")
-      throw new Error(
-        plan.message || "无法确定本轮需要参考的图片，请明确说明。",
+    let operation: Operation = {
+      id: context.operationId,
+      sessionId,
+      anchorMessageId,
+      runId: anchorMessageId,
+      placement: "before",
+      kind: "selection",
+      status: "pending",
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    await recordOperation(operation);
+    try {
+      operation = { ...operation, status: "running", updatedAt: now() };
+      await recordOperation(operation);
+      const plan = await apiJson<ImagePlan>(
+        "/api/context/inspect",
+        prepared,
+        signal,
       );
-    if (
-      !Array.isArray(plan.selectedHistoricalImages) ||
-      plan.selectedHistoricalImages.some(
-        (s) => !catalog.some((a) => a.assetId === s.assetId),
+      signal.throwIfAborted();
+      if (
+        plan.operationId !== context.operationId ||
+        !Array.isArray(plan.selectedHistoricalImages) ||
+        plan.selectedHistoricalImages.some(
+          (s) => !catalog.some((a) => a.assetId === s.assetId),
+        )
       )
-    )
-      throw new Error("服务端返回了无效选图计划。");
-    prepared.visual!.plan = plan;
+        throw new Error("服务端返回了无效选图计划。");
+      operation = {
+        ...operation,
+        result: { plan, catalog },
+        status: "computed",
+        updatedAt: now(),
+      };
+      await recordOperation(operation);
+      if (plan.status !== "ready")
+        throw new Error(plan.message || "无法确定本轮参考图片。");
+      operation = { ...operation, status: "committed", updatedAt: now() };
+      await recordOperation(operation);
+      prepared.visual!.plan = plan;
+    } catch (error) {
+      await recordOperation({
+        ...operation,
+        status: signal.aborted ? "cancelled" : "failed",
+        error: errorText(error),
+        updatedAt: now(),
+      });
+      throw error;
+    }
   }
   prepared.visual!.imagePayloads = await loadPayloads(prepared, signal);
   if (new Blob([JSON.stringify(prepared)]).size > 64 * 1024 * 1024)
     throw new Error("请求体不能超过 64 MiB。");
   return prepared;
-}
-export async function saveCompletedVisualTask(
-  context: ChatContext,
-  user: Message,
-  assistant: Message,
-) {
-  if (!context.visual?.imagePayloads.length) return null;
-  const db = await database();
-  const tx = db.transaction(
-    ["messages", "visualTasks", "imageUsages"],
-    "readwrite",
-  );
-  await tx.objectStore("messages").put(assistant);
-  const stored = structuredClone(context);
-  stored.visual!.imagePayloads = [];
-  const task: VisualTask = {
-    id: assistant.id,
-    sessionId: assistant.sessionId,
-    userMessageId: user.id,
-    assistantMessageId: assistant.id,
-    assistantText: plainText(assistant),
-    context: stored,
-    createdAt: now(),
-    updatedAt: now(),
-  };
-  await tx.objectStore("visualTasks").put(task);
-  for (const p of context.visual.imagePayloads) {
-    const selected = context.visual.plan?.selectedHistoricalImages.find(
-      (s) => s.assetId === p.assetId,
-    );
-    await tx.objectStore("imageUsages").put({
-      id: `${assistant.id}:${p.assetId}`,
-      assetId: p.assetId,
-      sessionId: assistant.sessionId,
-      messageId: assistant.id,
-      purpose: selected?.purpose ?? "本轮用户图片",
-      createdAt: now(),
-    });
-  }
-  await tx.done;
-  return task;
-}
-export async function runVisualTask(
-  task: VisualTask,
-  signal: AbortSignal,
-  commit: Commit = (task) => task(),
-) {
-  const payloads = await loadPayloads(task.context, signal);
-  const result = await apiJson<{ observations: Observation[] }>(
-    "/api/visual/update",
-    {
-      context: {
-        ...task.context,
-        visual: { ...task.context.visual!, imagePayloads: payloads },
-      },
-      userMessageId: task.userMessageId,
-      assistantMessageId: task.assistantMessageId,
-      assistantText: task.assistantText,
-    },
-    signal,
-  );
-  signal.throwIfAborted();
-  if (
-    !Array.isArray(result.observations) ||
-    result.observations.length !== payloads.length ||
-    new Set(result.observations.map((o) => o.assetId)).size !==
-      payloads.length ||
-    result.observations.some(
-      (o) => !payloads.some((p) => p.assetId === o.assetId),
-    )
-  )
-    throw new Error("视觉观察来源不完整。");
-  await commit(async () => {
-    signal.throwIfAborted();
-    const db = await database();
-    const tx = db.transaction(
-      ["visualTasks", "visualObservations", "sessions"],
-      "readwrite",
-    );
-    if (
-      !(await tx.objectStore("visualTasks").get(task.id)) ||
-      !(await tx.objectStore("sessions").get(task.sessionId))
-    ) {
-      await tx.done;
-      return;
-    }
-    for (const observation of result.observations) {
-      const key = `${task.sessionId}:${observation.assetId}`;
-      const previous = await tx.objectStore("visualObservations").get(key);
-      const expected =
-        task.context.visual?.assetCatalog.find(
-          (a) => a.assetId === observation.assetId,
-        )?.observation?.version ?? 0;
-      if (
-        (previous?.version ?? 0) !== expected ||
-        observation.version !== expected + 1
-      ) {
-        tx.abort();
-        await tx.done.catch(() => {});
-        throw new Error("视觉记录版本已变化，请重新整理。");
-      }
-      await tx.objectStore("visualObservations").put({
-        ...observation,
-        id: key,
-        sessionId: task.sessionId,
-        createdAt: previous?.createdAt ?? now(),
-        updatedAt: now(),
-      });
-    }
-    await tx.objectStore("visualTasks").delete(task.id);
-    await tx.done;
-  });
-}
-export async function resumePendingTasks(
-  sessionId: string,
-  signal: AbortSignal,
-  commit?: Commit,
-) {
-  const tasks = await (
-    await database()
-  ).getAllFromIndex("visualTasks", "session", sessionId);
-  for (const task of tasks.sort((a, b) =>
-    a.createdAt.localeCompare(b.createdAt),
-  ))
-    await runVisualTask(task, signal, commit);
 }

@@ -1,0 +1,40 @@
+package com.example.service;
+
+import com.example.web.dto.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.stereotype.Component;
+
+/** 请求材料的共同信任边界；原图字节由图片校验器另行核验。 */
+@Component
+public class ContextValidation {
+    private final ObjectMapper mapper;
+
+    public ContextValidation(ObjectMapper mapper) {
+        this.mapper = mapper;
+    }
+
+    public void validate(ChatApiRequest r) {
+        if (r == null)
+            throw new IllegalArgumentException("上下文不能为空");
+        CharacterDto.validate(r.character());
+        StateValidation.snapshot(r.state());
+        StateValidation.text(r.earlierHistory(), ContextLimits.EARLIER_HISTORY_CHARS);
+        if (r.history() == null || r.input() == null || r.interactionSettings() == null
+                || r.interactionSettings().replyLength() == null || r.interactionSettings().narrativeMode() == null)
+            throw new IllegalArgumentException("历史、输入或交互设置缺失");
+        StateValidation.id(r.operationId());
+        StateValidation.text(r.input().textOf(), ContextLimits.INPUT_CHARS);
+        for (HistoryMessageDto h : r.history()) {
+            if (h == null || h.role() == null || !java.util.Set.of("user", "assistant").contains(h.role())
+                    || h.text() == null)
+                throw new IllegalArgumentException("历史消息的角色或内容无效");
+            StateValidation.id(h.id());
+        }
+        if (r.visual() != null && !r.state().sessionId().equals(r.visual().sessionId()))
+            throw new IllegalArgumentException("图片与领域快照不属于同一会话");
+        var node = mapper.valueToTree(r);
+        ((com.fasterxml.jackson.databind.node.ObjectNode) node).remove("visual");
+        if (node.toString().length() > ContextLimits.CONTEXT_CHARS)
+            throw new IllegalArgumentException("上下文超过字符预算，本版尚未支持自动压缩");
+    }
+}

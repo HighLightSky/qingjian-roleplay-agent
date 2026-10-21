@@ -15,6 +15,12 @@ public final class VisualDtos {
         public record Observation(String assetId, String summary, List<String> visibleDetails,
                         List<String> extractedText, List<String> uncertainDetails, List<String> sourceMessageIds,
                         int version) {
+                public Observation {
+                        visibleDetails = visibleDetails == null ? List.of() : List.copyOf(visibleDetails);
+                        extractedText = extractedText == null ? List.of() : List.copyOf(extractedText);
+                        uncertainDetails = uncertainDetails == null ? List.of() : List.copyOf(uncertainDetails);
+                        sourceMessageIds = sourceMessageIds == null ? List.of() : List.copyOf(sourceMessageIds);
+                }
         }
 
         public record Usage(String messageId, String purpose) {
@@ -35,7 +41,7 @@ public final class VisualDtos {
 
         /** 绑定发送前快照的选图结果；歧义或超限时禁止进入正文生成。 */
         public record Plan(String status, List<Selected> selectedHistoricalImages, List<String> candidateAssetIds,
-                        String message, String contextFingerprint) {
+                        String message, String contextFingerprint, String operationId) {
         }
 
         /** 浏览器负责持有资产，后端从请求接收完整计算材料；缺省集合在此统一归一化。 */
@@ -46,11 +52,4 @@ public final class VisualDtos {
                 }
         }
 
-        /** 正文结束后的独立整理请求，消息 ID 用于生成可追溯的观察。 */
-        public record UpdateRequest(ChatApiRequest context, String userMessageId, String assistantMessageId,
-                        String assistantText) {
-        }
-
-        public record UpdateResponse(List<Observation> observations) {
-        }
 }

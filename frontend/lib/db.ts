@@ -1,8 +1,15 @@
+import { validateMemoryValue } from "./state/validation";
+import {
+  EMPTY_STORY,
+  type StateTask,
+  type Operation,
+  type Goal,
+  type MemoryValue,
+} from "./state/types";
 import type {
   ImageAsset,
   VisualObservation,
   ImageUsage,
-  VisualTask,
   ContentPart,
 } from "./images/types";
 import { imageIds } from "./images/types";
@@ -30,7 +37,9 @@ export interface RoleplayDB extends DBSchema {
     indexes: { session: string };
   };
   imageUsages: { key: string; value: ImageUsage; indexes: { session: string } };
-  visualTasks: { key: string; value: VisualTask; indexes: { session: string } };
+  stateTasks: { key: string; value: StateTask; indexes: { session: string } };
+  operations: { key: string; value: Operation; indexes: { session: string } };
+  goals: { key: string; value: Goal; indexes: { session: string } };
   characters: { key: string; value: Character };
   sessions: { key: string; value: Session; indexes: { character: string } };
   messages: {
@@ -52,13 +61,17 @@ export const TABLES = [
   "assets",
   "visualObservations",
   "imageUsages",
-  "visualTasks",
+  "stateTasks",
+  "operations",
+  "goals",
 ] as const;
 let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
-    connection = openDB<RoleplayDB>("roleplay-agent", 2, {
+    connection = openDB<RoleplayDB>("roleplay-agent", 3, {
       upgrade(db) {
+        for (const name of Array.from(db.objectStoreNames))
+          db.deleteObjectStore(name);
         db.createObjectStore("characters", { keyPath: "id" });
         db.createObjectStore("sessions", { keyPath: "id" }).createIndex(
           "character",
@@ -83,7 +96,9 @@ export function database(): Promise<IDBPDatabase<RoleplayDB>> {
         for (const name of [
           "visualObservations",
           "imageUsages",
-          "visualTasks",
+          "stateTasks",
+          "operations",
+          "goals",
         ] as const)
           db.createObjectStore(name, { keyPath: "id" }).createIndex(
             "session",
@@ -144,14 +159,29 @@ export async function allMessages(sessionId: string, afterSeq = 0) {
 }
 export async function recoverInterrupted() {
   const db = await database();
-  const tx = db.transaction("messages", "readwrite");
+  const tx = db.transaction(["messages", "operations"], "readwrite");
   for (const status of ["pending", "streaming"]) {
-    const messages = await tx.store.index("status").getAll(status);
+    const messages = await tx
+      .objectStore("messages")
+      .index("status")
+      .getAll(status);
     for (const message of messages)
-      await tx.store.put({
+      await tx.objectStore("messages").put({
         ...message,
         status: "interrupted",
         error: "上次生成中断，已保留保存的内容。",
+        updatedAt: now(),
+      });
+  }
+  for (const operation of await tx.objectStore("operations").getAll()) {
+    if (
+      operation.status === "running" ||
+      (operation.status === "pending" && operation.kind === "selection")
+    )
+      await tx.objectStore("operations").put({
+        ...operation,
+        status: "cancelled",
+        error: "上次执行中断，待重试。",
         updatedAt: now(),
       });
   }
@@ -161,17 +191,20 @@ export async function saveCharacter(
   profile: CharacterProfile,
   existing?: Character,
 ) {
-  const character: Character = {
-    ...parseCharacterProfile(profile),
-    id: existing?.id ?? id(),
-    archived: existing?.archived ?? false,
-    profileVersion: (existing?.profileVersion ?? 0) + 1,
-    sharedSummary: existing?.sharedSummary ?? "",
-    createdAt: existing?.createdAt ?? now(),
-    updatedAt: now(),
-  };
+  const validated = parseCharacterProfile(profile);
   const db = await database();
   const tx = db.transaction("characters", "readwrite");
+  const current = existing ? await tx.store.get(existing.id) : undefined;
+  if (existing && !current) throw new Error("角色不存在。");
+  const character: Character = {
+    ...validated,
+    id: existing?.id ?? id(),
+    archived: current?.archived ?? false,
+    profileVersion: (current?.profileVersion ?? 0) + 1,
+    memoryVersion: current?.memoryVersion ?? 0,
+    createdAt: current?.createdAt ?? now(),
+    updatedAt: now(),
+  };
   await tx.store.put(character);
   await tx.done;
   return character;
@@ -195,8 +228,10 @@ export async function createSession(characterId: string) {
     titleSource: "default",
     characterSnapshot: profileOf(character),
     profileVersion: character.profileVersion,
-    summary: "",
-    summaryThroughSeq: 0,
+    story: structuredClone(EMPTY_STORY),
+    storySources: {},
+    stateVersion: 0,
+    stateProcessedThroughSeq: 0,
     nextMessageSeq: 1,
     createdAt: now(),
     updatedAt: now(),
@@ -219,53 +254,56 @@ export async function beginTurn(
 ) {
   const db = await database();
   const tx = db.transaction(["sessions", "messages", "drafts"], "readwrite");
-  const session = await tx.objectStore("sessions").get(sessionId);
-  if (!session) {
-    tx.abort();
-    await tx.done.catch(() => {});
-    throw new Error("会话不存在。");
-  }
-  const user: Message = {
-    id: id(),
-    sessionId,
-    seq: session.nextMessageSeq,
-    role: "user",
-    text,
-    ...(parts ? { parts } : {}),
-    status: "complete",
-    checkpointVersion: 0,
-    createdAt: now(),
-    updatedAt: now(),
-  };
-  const assistant: Message = {
-    id: id(),
-    sessionId,
-    seq: session.nextMessageSeq + 1,
-    role: "assistant",
-    segments: [],
-    replyToMessageId: user.id,
-    status: "pending",
-    checkpointVersion: 0,
-    createdAt: now(),
-    updatedAt: now(),
-  };
-  const updated: Session = {
-    ...session,
-    nextMessageSeq: session.nextMessageSeq + 2,
-    updatedAt: now(),
-    ...(session.titleSource === "default"
-      ? {
-          title: titleFrom(text) || "图片对话",
-          titleSource: "first-message" as const,
-        }
-      : {}),
-  };
-  await tx.objectStore("messages").put(user);
-  await tx.objectStore("messages").put(assistant);
-  await tx.objectStore("sessions").put(updated);
-  await tx.objectStore("drafts").put({ sessionId, text: "", updatedAt: now() });
-  await tx.done;
-  return { user, assistant, session: updated };
+  return atomic(tx, async () => {
+    const session = await tx.objectStore("sessions").get(sessionId);
+    if (!session) {
+      tx.abort();
+      await tx.done.catch(() => {});
+      throw new Error("会话不存在。");
+    }
+    const user: Message = {
+      id: id(),
+      sessionId,
+      seq: session.nextMessageSeq,
+      role: "user",
+      text,
+      ...(parts ? { parts } : {}),
+      status: "complete",
+      checkpointVersion: 0,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    const assistant: Message = {
+      id: id(),
+      sessionId,
+      seq: session.nextMessageSeq + 1,
+      role: "assistant",
+      segments: [],
+      replyToMessageId: user.id,
+      status: "pending",
+      checkpointVersion: 0,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    const updated: Session = {
+      ...session,
+      nextMessageSeq: session.nextMessageSeq + 2,
+      updatedAt: now(),
+      ...(session.titleSource === "default"
+        ? {
+            title: titleFrom(text) || "图片对话",
+            titleSource: "first-message" as const,
+          }
+        : {}),
+    };
+    await tx.objectStore("messages").put(user);
+    await tx.objectStore("messages").put(assistant);
+    await tx.objectStore("sessions").put(updated);
+    await tx
+      .objectStore("drafts")
+      .put({ sessionId, text: "", updatedAt: now() });
+    return { user, assistant, session: updated };
+  });
 }
 export async function checkpoint(message: Message) {
   const db = await database();
@@ -287,7 +325,9 @@ export async function deleteSession(sessionId: string) {
   for (const table of [
     "visualObservations",
     "imageUsages",
-    "visualTasks",
+    "stateTasks",
+    "operations",
+    "goals",
   ] as const) {
     for (const row of await tx
       .objectStore(table)
@@ -304,6 +344,10 @@ export async function deleteSession(sessionId: string) {
   while (cursor) {
     await cursor.delete();
     cursor = await cursor.continue();
+  }
+  for (const memory of await tx.objectStore("memories").getAll()) {
+    if (memory.sessionId === sessionId)
+      await tx.objectStore("memories").delete(memory.id);
   }
   await tx.objectStore("sessions").delete(sessionId);
   await tx.objectStore("drafts").delete(sessionId);
@@ -324,7 +368,7 @@ export async function collectUnreferenced(
     used.add(row.assetId);
   for (const row of await tx.objectStore("imageUsages").getAll())
     used.add(row.assetId);
-  for (const row of await tx.objectStore("visualTasks").getAll()) {
+  for (const row of await tx.objectStore("stateTasks").getAll()) {
     imageIds(row.context.input.parts).forEach((assetId) => used.add(assetId));
     row.context.visual?.assetCatalog.forEach((a) => used.add(a.assetId));
   }
@@ -333,38 +377,76 @@ export async function collectUnreferenced(
 }
 export async function putMemory(
   characterId: string,
-  content: string,
+  sessionId: string,
+  value: MemoryValue,
   existing?: Memory,
-  source?: { sourceSessionId: string; sourceMessageId: string },
 ) {
-  if (!content.trim() || content.length > 300)
-    throw new Error("记忆内容需要在 1–300 个字符之间。");
+  validateMemoryValue(value);
   const db = await database();
-  const tx = db.transaction(["characters", "memories"], "readwrite");
-  if (!(await tx.objectStore("characters").get(characterId))) {
-    tx.abort();
+  const tx = db.transaction(
+    ["characters", "sessions", "memories"],
+    "readwrite",
+  );
+  return atomic(tx, async () => {
+    const character = await tx.objectStore("characters").get(characterId);
+    const session = await tx.objectStore("sessions").get(sessionId);
+    if (!character || !session || session.characterId !== characterId)
+      throw new Error("角色或会话不存在。");
+    const records = await tx
+      .objectStore("memories")
+      .index("character")
+      .getAll(characterId);
+    if (
+      !existing &&
+      records.filter((m) => m.sessionId === null || m.sessionId === sessionId)
+        .length >= 50
+    )
+      throw new Error("当前会话可用记忆已达到 50 条，请修改已有项。");
+    const current = existing
+      ? await tx.objectStore("memories").get(existing.id)
+      : undefined;
+    if (existing && current?.version !== existing.version)
+      throw new Error("记忆已变化，请重新打开编辑。");
+    const memory: Memory = {
+      id: existing?.id ?? id(),
+      characterId,
+      sessionId: value.scope === "character" ? null : sessionId,
+      value: { ...value, content: value.content.trim() },
+      version: (current?.version ?? 0) + 1,
+      origin: "manual",
+      sourceSessionId: sessionId,
+      sourceMessageIds: current?.sourceMessageIds ?? [],
+      createdAt: current?.createdAt ?? now(),
+      updatedAt: now(),
+    };
+    await tx.objectStore("memories").put(memory);
+    if (value.scope === "character" || current?.value.scope === "character")
+      await tx
+        .objectStore("characters")
+        .put({ ...character, memoryVersion: character.memoryVersion + 1 });
+    await tx
+      .objectStore("sessions")
+      .put({ ...session, stateVersion: session.stateVersion + 1 });
+    return memory;
+  });
+}
+
+/** 写入中途的同步错误也要回滚，不能让已排队的部分写入自行提交。 */
+export async function atomic<T>(
+  tx: {
+    readonly error: DOMException | null;
+    abort(): void;
+    readonly done: Promise<void>;
+  },
+  work: () => Promise<T>,
+): Promise<T> {
+  try {
+    const value = await work();
+    await tx.done;
+    return value;
+  } catch (error) {
+    if (!tx.error) tx.abort();
     await tx.done.catch(() => {});
-    throw new Error("角色不存在。");
+    throw error;
   }
-  const memories = tx.objectStore("memories");
-  if (
-    !existing &&
-    (await memories.index("character").count(characterId)) >= 50
-  ) {
-    tx.abort();
-    await tx.done.catch(() => {});
-    throw new Error("每个角色最多 50 条重要事实，请先合并或删除。");
-  }
-  const memory: Memory = {
-    ...existing,
-    ...source,
-    id: existing?.id ?? id(),
-    characterId,
-    content: content.trim(),
-    createdAt: existing?.createdAt ?? now(),
-    updatedAt: now(),
-  };
-  await memories.put(memory);
-  await tx.done;
-  return memory;
 }

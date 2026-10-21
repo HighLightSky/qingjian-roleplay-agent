@@ -1,3 +1,4 @@
+import { emptyStateResult } from "./state-fixture";
 import "fake-indexeddb/auto";
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
@@ -42,6 +43,9 @@ beforeEach(async () => {
   await tx.done;
   useAppStore.setState({
     ready: true,
+    operations: [],
+    goals: [],
+    activeSessionId: null,
     readOnly: false,
     busy: false,
     interactionSettings: { ...DEFAULT_INTERACTION_SETTINGS },
@@ -118,9 +122,9 @@ test("备份拒绝旧版本、无效角色草稿和快照，空名字草稿可�
   await setup();
   await setting("characterDraft:new", JSON.stringify(EMPTY_PROFILE));
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 3);
+  assert.equal(backup.formatVersion, 4);
   validateBackup(structuredClone(backup));
-  for (const formatVersion of [1, 2])
+  for (const formatVersion of [1, 2, 3])
     assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
   for (const field of ["name", "identity", "description"] as const) {
     const invalid = structuredClone(backup);
@@ -200,7 +204,13 @@ test("browser recovery preserves partial segments; pagination has no gaps", asyn
 });
 test("memories belong to characters and survive session deletion", async () => {
   const { character, session } = await setup();
-  await putMemory(character.id, "用户叫阿远");
+  await putMemory(character.id, session.id, {
+    content: "用户叫阿远",
+    scope: "character",
+    kind: "fact",
+    epistemicStatus: "established",
+    status: "active",
+  });
   const other = await createSession(character.id);
   await deleteSession(session.id);
   const db = await database();
@@ -219,7 +229,10 @@ test("memories belong to characters and survive session deletion", async () => {
     "你好",
     DEFAULT_INTERACTION_SETTINGS,
   );
-  assert.deepEqual(body.memories, ["用户叫阿远"]);
+  assert.deepEqual(
+    body.state.memories.map((m) => m.value.content),
+    ["用户叫阿远"],
+  );
   assert.deepEqual(
     chatContext(
       { ...character, id: "other" },
@@ -228,7 +241,7 @@ test("memories belong to characters and survive session deletion", async () => {
       [],
       "你好",
       DEFAULT_INTERACTION_SETTINGS,
-    ).memories,
+    ).state.memories,
     [],
   );
 });
@@ -330,8 +343,8 @@ test("older history is included as raw context, not silently dropped by the 20-m
     DEFAULT_INTERACTION_SETTINGS,
   );
   assert.equal(body.history.length, 20);
-  assert.match(body.summary, /消息0/);
-  assert.match(body.summary, /林溪：\[台词\]回复0/);
+  assert.match(body.earlierHistory, /消息0/);
+  assert.match(body.earlierHistory, /林溪：\[台词\]回复0/);
   assert.equal(body.input.text, "本轮");
   const long = history.map((message) =>
     message.role === "user" ? { ...message, text: "a".repeat(4000) } : message,
@@ -346,12 +359,18 @@ test("older history is included as raw context, not silently dropped by the 20-m
         "本轮",
         DEFAULT_INTERACTION_SETTINGS,
       ),
-    /整理剧情/,
+    /自动压缩/,
   );
 });
 test("backup roundtrip preserves structured messages and invalid import leaves data intact", async () => {
   const { character, session } = await setup();
-  await putMemory(character.id, "用户叫阿远");
+  await putMemory(character.id, session.id, {
+    content: "用户叫阿远",
+    scope: "character",
+    kind: "fact",
+    epistemicStatus: "established",
+    status: "active",
+  });
   const { assistant } = await beginTurn(session.id, "你好");
   await checkpoint(
     appendDelta(assistant, { kind: "dialogue", text: "“欢迎”" }),
@@ -458,6 +477,8 @@ test("sending waits for an already queued settings save", async () => {
   const originalFetch = globalThis.fetch;
   let sentSettings: unknown;
   globalThis.fetch = async (_input, init) => {
+    if (String(_input) === "/api/state/update")
+      return Response.json(emptyStateResult(JSON.parse(String(init?.body))));
     sentSettings = JSON.parse(String(init?.body)).interactionSettings;
     return new Response(
       'event: delta\ndata: {"kind":"dialogue","text":"我来看看。"}\n\nevent: done\ndata: {"finishReason":"stop"}\n\n',

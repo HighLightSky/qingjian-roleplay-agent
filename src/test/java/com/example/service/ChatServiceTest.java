@@ -40,7 +40,7 @@ class ChatServiceTest {
     private final ChatService service = new ChatService(
             new PromptBuilder(new LlmProperties("", "", "", 0.8, 800, 120)), llmClient, images,
             new VisualSelectionService(llmClient, new ObjectMapper(),
-                    new VisualSelectionPromptBuilder(new ObjectMapper()), images));
+                    new VisualSelectionPromptBuilder(new ObjectMapper()), images, new ContextValidation(new ObjectMapper())), new ContextValidation(new ObjectMapper()));
 
     @Test
     void buildsModelRequestAndEmitsDeltasBeforeModelReturns() throws Exception {
@@ -75,11 +75,11 @@ class ChatServiceTest {
         ChatApiRequest valid = validRequest();
         List<ChatApiRequest> invalid = Arrays.asList(
                 null,
-                new ChatApiRequest(null, List.of(), "", List.of(), valid.input(), SETTINGS),
-                new ChatApiRequest(valid.character(), null, "", List.of(), valid.input(), SETTINGS),
-                new ChatApiRequest(valid.character(), List.of(), null, List.of(), valid.input(), SETTINGS),
-                new ChatApiRequest(valid.character(), List.of(), "", null, valid.input(), SETTINGS),
-                new ChatApiRequest(valid.character(), List.of(), "", List.of(), null, SETTINGS));
+                new ChatApiRequest(null, com.example.TestRequests.state(List.of()), "", List.of(), valid.input(), SETTINGS, null, "operation"),
+                new ChatApiRequest(valid.character(), null, "", List.of(), valid.input(), SETTINGS, null, "operation"),
+                new ChatApiRequest(valid.character(), com.example.TestRequests.state(List.of()), null, List.of(), valid.input(), SETTINGS, null, "operation"),
+                new ChatApiRequest(valid.character(), com.example.TestRequests.state(List.of()), "", null, valid.input(), SETTINGS, null, "operation"),
+                new ChatApiRequest(valid.character(), com.example.TestRequests.state(List.of()), "", List.of(), null, SETTINGS, null, "operation"));
         for (ChatApiRequest request : invalid) {
             assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
         }
@@ -93,7 +93,7 @@ class ChatServiceTest {
                 new InputDto(" \n\t", null),
                 new InputDto("字".repeat(2001), null))) {
             ChatApiRequest valid = validRequest();
-            ChatApiRequest request = new ChatApiRequest(valid.character(), List.of(), "", List.of(), input, SETTINGS);
+            ChatApiRequest request = new ChatApiRequest(valid.character(), com.example.TestRequests.state(List.of()), "", List.of(), input, SETTINGS, null, "operation");
             assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
         }
         verifyNoInteractions(llmClient);
@@ -104,14 +104,14 @@ class ChatServiceTest {
         ChatApiRequest valid = validRequest();
         for (List<HistoryMessageDto> history : List.of(
                 Collections.<HistoryMessageDto>singletonList(null),
-                List.of(new HistoryMessageDto("system", "错误角色")),
-                List.of(new HistoryMessageDto(null, "缺少角色")),
-                List.of(new HistoryMessageDto("user", null)))) {
-            ChatApiRequest request = new ChatApiRequest(valid.character(), List.of(), "", history, valid.input(), SETTINGS);
+                List.of(new HistoryMessageDto("system", "错误角色", "history", null)),
+                List.of(new HistoryMessageDto(null, "缺少角色", "history", null)),
+                List.of(new HistoryMessageDto("user", null, "history", null)))) {
+            ChatApiRequest request = new ChatApiRequest(valid.character(), com.example.TestRequests.state(List.of()), "", history, valid.input(), SETTINGS, null, "operation");
             assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
         }
         for (List<String> memories : List.of(Collections.<String>singletonList(null), Collections.nCopies(51, "记忆"))) {
-            ChatApiRequest request = new ChatApiRequest(valid.character(), memories, "", List.of(), valid.input(), SETTINGS);
+            ChatApiRequest request = new ChatApiRequest(valid.character(), com.example.TestRequests.state(memories), "", List.of(), valid.input(), SETTINGS, null, "operation");
             assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
         }
         verifyNoInteractions(llmClient);
@@ -121,8 +121,7 @@ class ChatServiceTest {
     void acceptsInputAndMemoryLimits() throws Exception {
         doAnswer(invocation -> "length").when(llmClient).chatStream(any(), any());
         ChatApiRequest valid = validRequest();
-        ChatApiRequest request = new ChatApiRequest(valid.character(), Collections.nCopies(50, "记忆"),
-                "", List.of(), new InputDto("字".repeat(2000), null), SETTINGS);
+        ChatApiRequest request = new ChatApiRequest(valid.character(), com.example.TestRequests.state(Collections.nCopies(50, "记忆")), "", List.of(), new InputDto("字".repeat(2000), null), SETTINGS, null, "operation");
         assertEquals("length", service.chatStream(request, delta -> {}));
     }
 
@@ -191,17 +190,13 @@ class ChatServiceTest {
                 null,
                 new InteractionSettingsDto(null, NarrativeMode.SCENE),
                 new InteractionSettingsDto(ReplyLength.STANDARD, null))) {
-            ChatApiRequest request = new ChatApiRequest(valid.character(), valid.memories(), valid.summary(),
-                    valid.history(), valid.input(), settings);
+            ChatApiRequest request = new ChatApiRequest(valid.character(), valid.state(), valid.earlierHistory(), valid.history(), valid.input(), settings, null, "operation");
             assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
         }
         verifyNoInteractions(llmClient);
     }
 
     private ChatApiRequest validRequest() {
-        return new ChatApiRequest(
-                new CharacterDto("林溪", "旅馆老板，也是我的旧友", "好奇，说话简短，生活在山城。"),
-                List.of(), "", List.of(new HistoryMessageDto("assistant", "欢迎。")),
-                new InputDto("你好", null), SETTINGS);
+        return new ChatApiRequest(new CharacterDto("林溪", "旅馆老板，也是我的旧友", "好奇，说话简短，生活在山城。"), com.example.TestRequests.state(List.of()), "", List.of(new HistoryMessageDto("assistant", "欢迎。", "history", null)), new InputDto("你好", null), SETTINGS, null, "operation");
     }
 }

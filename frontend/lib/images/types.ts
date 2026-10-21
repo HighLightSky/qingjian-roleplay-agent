@@ -58,6 +58,7 @@ export type ImagePlan = {
   candidateAssetIds: string[];
   message: string;
   contextFingerprint: string;
+  operationId: string;
 };
 export type ImagePayload = { assetId: string; sha256: string; dataUrl: string };
 export type VisualContext = {
@@ -65,16 +66,6 @@ export type VisualContext = {
   assetCatalog: CatalogAsset[];
   plan: ImagePlan | null;
   imagePayloads: ImagePayload[];
-};
-export type VisualTask = {
-  id: string;
-  sessionId: string;
-  userMessageId: string;
-  assistantMessageId: string;
-  assistantText: string;
-  context: import("../chat/context").ChatContext;
-  createdAt: string;
-  updatedAt: string;
 };
 export type Capabilities = {
   visionSupported: boolean;

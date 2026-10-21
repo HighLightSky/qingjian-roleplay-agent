@@ -32,11 +32,7 @@ class PromptBuilderTest {
     @ParameterizedTest
     @MethodSource("combinations")
     void appliesIndependentLengthAndNarrativeRulesWithoutChangingTheModelBudget(ReplyLength length, NarrativeMode mode) {
-        var request = builder.build(new ChatApiRequest(
-                new CharacterDto("林溪", "旅馆老板，也是我的旧友", "好奇，说话简短，生活在山城。"),
-                List.of("用户叫阿远"), "用户带来了一张地图。",
-                List.of(new HistoryMessageDto("assistant", "[台词]让我看看。")),
-                new InputDto("我把地图递给她，让她看看", null), new InteractionSettingsDto(length, mode)));
+        var request = builder.build(new ChatApiRequest(new CharacterDto("林溪", "旅馆老板，也是我的旧友", "好奇，说话简短，生活在山城。"), com.example.TestRequests.state(List.of("用户叫阿远")), "用户带来了一张地图。", List.of(new HistoryMessageDto("assistant", "[台词]让我看看。", "history", null)), new InputDto("我把地图递给她，让她看看", null), new InteractionSettingsDto(length, mode), null, "operation"));
         String system = request.getMessages().getFirst().getContent();
         String expectedRange = switch (length) {
             case SHORT -> "150—300";

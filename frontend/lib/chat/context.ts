@@ -8,9 +8,9 @@ import {
   type Session,
   type InteractionSettings,
 } from "../domain";
+import type { Goal, StateSnapshot } from "../state/types";
 
 function historyText(message: Message): string {
-  // 历史回复也是模型的格式示例；同类增量合并后，每一行仍需恢复标记。
   const text =
     message.role === "user"
       ? plainText(message)
@@ -26,13 +26,33 @@ function historyText(message: Message): string {
           )
           .join("\n");
   return (
-    text +
-    (message.status === "complete"
-      ? ""
-      : `\n${message.role === "assistant" ? "[描写]" : ""}（该回复未完成。）`)
+    text + (message.status === "complete" ? "" : "\n[描写]（该回复未完成。）")
   );
 }
-
+export function stateSnapshot(
+  character: Character,
+  session: Session,
+  memories: Memory[],
+  goals: Goal[],
+): StateSnapshot {
+  return {
+    sessionId: session.id,
+    characterId: character.id,
+    sessionVersion: session.stateVersion,
+    memoryVersion: character.memoryVersion,
+    processedThroughSeq: session.stateProcessedThroughSeq,
+    story: session.story,
+    storySources: session.storySources,
+    memories: memories
+      .filter(
+        (m) =>
+          m.characterId === character.id &&
+          (m.sessionId === null || m.sessionId === session.id),
+      )
+      .map(({ createdAt, ...m }) => m),
+    goals: goals.map(({ createdAt, ...g }) => g),
+  };
+}
 export function chatContext(
   character: Character,
   session: Session,
@@ -41,59 +61,37 @@ export function chatContext(
   input: string,
   interactionSettings: InteractionSettings,
   parts?: ContentPart[],
+  goals: Goal[] = [],
+  operationId = `chat:${session.id}`,
 ) {
   const history = messages
     .filter(
-      (message) =>
-        !["pending", "streaming"].includes(message.status) &&
-        (plainText(message) || imageIds(message.parts).length > 0),
+      (m) =>
+        !["pending", "streaming"].includes(m.status) &&
+        (plainText(m) || imageIds(m.parts).length),
     )
-    .map((message) => ({
-      role: message.role,
-      seq: message.seq,
-      id: message.id,
-      parts: message.parts,
-      text: historyText(message),
+    .map((m) => ({
+      role: m.role,
+      id: m.id,
+      parts: m.parts,
+      text: historyText(m),
     }));
-  const recent = history.slice(-20);
-  const firstRecent = recent[0]?.seq ?? Number.MAX_SAFE_INTEGER;
-  const earlier = history.filter(
-    (message) =>
-      message.seq < firstRecent && message.seq > session.summaryThroughSeq,
-  );
-  const raw = earlier
-    .map(
-      (message) =>
-        `${message.role === "user" ? "用户" : character.name}：${message.text}`,
-    )
+  const earlierHistory = history
+    .slice(0, -20)
+    .map((m) => `${m.role === "user" ? "用户" : character.name}：${m.text}`)
     .join("\n");
-  if (raw.length > 20_000)
-    throw new Error(
-      "较早记录已超过本轮上下文预算。请在会话菜单的「整理剧情」中写下要保留的剧情，再继续聊天。原始记录不会删除。",
-    );
+  if (earlierHistory.length > 20_000)
+    throw new Error("较早原文已超过本轮上下文字符预算，本版尚未支持自动压缩。");
   return {
     character: session.characterSnapshot,
-    memories: memories
-      .filter((memory) => memory.characterId === character.id)
-      .map((memory) => memory.content),
-    summary: [
-      character.sharedSummary &&
-        `【角色共享经历（用户维护）】\n${character.sharedSummary}`,
-      session.summary && `【当前会话剧情（用户维护）】\n${session.summary}`,
-      raw && `【较早聊天原文，尚未摘要】\n${raw}`,
-    ]
-      .filter(Boolean)
-      .join("\n\n"),
-    history: recent.map(({ role, text, id, parts }) => ({
-      role,
-      text,
-      ...(parts ? { id, parts } : {}),
-    })),
-    input: { text: input, image: null, ...(parts ? { parts } : {}) },
+    state: stateSnapshot(character, session, memories, goals),
+    earlierHistory,
+    history: history.slice(-20),
+    input: { text: input, ...(parts ? { parts } : {}) },
     interactionSettings: { ...interactionSettings },
+    operationId,
   };
 }
-
 export type ChatContext = ReturnType<typeof chatContext> & {
   visual?: VisualContext;
 };

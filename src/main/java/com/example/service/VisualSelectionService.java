@@ -17,13 +17,15 @@ public class VisualSelectionService {
     private final ObjectMapper mapper;
     private final VisualSelectionPromptBuilder prompts;
     private final ImageValidationService images;
+    private final ContextValidation contexts;
 
     public VisualSelectionService(LLMClient client, ObjectMapper mapper, VisualSelectionPromptBuilder prompts,
-            ImageValidationService images) {
+            ImageValidationService images, ContextValidation contexts) {
         this.client = client;
         this.mapper = mapper;
         this.prompts = prompts;
         this.images = images;
+        this.contexts = contexts;
     }
 
     /** 绑定发送前上下文及观察版本；排除随后补传的字节和计划自身，便于无状态复核。 */
@@ -38,14 +40,12 @@ public class VisualSelectionService {
 
     /** 按目录顺序分批选候选，再统一决策；无历史图时不调用模型。 */
     public Plan select(ChatApiRequest request) throws IOException, InterruptedException {
-        if (request == null || request.input() == null || request.history() == null)
-            throw new IllegalArgumentException("选图上下文缺失");
-        CharacterDto.validate(request.character());
+        contexts.validate(request);
         images.validateReferences(request);
         images.validateLimits(ImageValidationService.newIds(request));
         List<Asset> catalog = ImageValidationService.catalog(request);
         if (catalog.isEmpty())
-            return new Plan("ready", List.of(), List.of(), "", fingerprint(request));
+            return new Plan("ready", List.of(), List.of(), "", fingerprint(request), request.operationId());
         int budget = images.properties().getPlanningInputChars() - prompts.context(request).length() - 2500;
         if (budget < 1000)
             throw new IllegalArgumentException("选图文字上下文超过规划预算，请先整理剧情");
@@ -82,7 +82,7 @@ public class VisualSelectionService {
             List<Asset> merged = catalog.stream().filter(a -> candidates.contains(a.assetId())).toList();
             if (mapper.writeValueAsString(merged).length() > budget)
                 throw new IllegalArgumentException("合并选图候选超过规划预算，请明确本轮参考图片");
-            plan = merged.isEmpty() ? new Plan("ready", List.of(), List.of(), "", null)
+            plan = merged.isEmpty() ? new Plan("ready", List.of(), List.of(), "", null, request.operationId())
                     : call(request, merged, slots, false);
         }
         return withFingerprint(plan, request);
@@ -94,7 +94,7 @@ public class VisualSelectionService {
                 .flatMap(a -> p.selectedHistoricalImages().stream()
                         .filter(s -> s.assetId().equals(a.assetId())))
                 .toList();
-        return new Plan(p.status(), ordered, p.candidateAssetIds(), p.message(), fingerprint(r));
+        return new Plan(p.status(), ordered, p.candidateAssetIds(), p.message(), fingerprint(r), r.operationId());
     }
 
     /** 格式或引用错误最多纠正一次；不使用规则匹配作为降级选图方案。 */

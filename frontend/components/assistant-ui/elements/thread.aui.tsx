@@ -585,12 +585,17 @@ const AssistantMessage: FC = () => {
     (state) => state.message.metadata.custom.segmented === true,
   );
 
+  const messageId = useAuiState((state) => state.message.id);
+  const activity = useAuiState(
+    (state) => state.message.metadata.custom.activity === true,
+  );
   const ACTION_BAR_PT = "pt-1.5";
   // Keep the action bar inside the contained root's paint box, then cancel its reserved space in flow.
   const ACTION_BAR_HEIGHT = `min-h-7.5 ${ACTION_BAR_PT}`;
 
   return (
     <MessagePrimitive.Root
+      id={`message:${messageId}`}
       data-slot="aui_assistant-message-root"
       data-role="assistant"
       className="fade-in slide-in-from-bottom-1 animate-in relative -mb-7.5 pb-7.5 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
@@ -684,7 +689,7 @@ const AssistantMessage: FC = () => {
         data-slot="aui_assistant-message-footer"
         className={cn("ms-2 flex items-center", ACTION_BAR_HEIGHT)}
       >
-        <AssistantActionBar />
+        {!activity && <AssistantActionBar />}
       </div>
     </MessagePrimitive.Root>
   );
@@ -752,8 +757,10 @@ const UserImagePart: ImageMessagePartComponent = (part) => (
 );
 
 const UserMessage: FC = () => {
+  const messageId = useAuiState((state) => state.message.id);
   return (
     <MessagePrimitive.Root
+      id={`message:${messageId}`}
       data-slot="aui_user-message-root"
       className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
       data-role="user"

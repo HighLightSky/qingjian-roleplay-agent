@@ -30,7 +30,6 @@ import {
   profileOf,
   type Character,
   type CharacterProfile,
-  type Memory,
   type Session,
   type ThemeMode,
 } from "@/lib/domain";
@@ -40,14 +39,10 @@ import {
   clearData,
   exportBackup,
   importBackup,
-  removeMemory,
   removeSession,
   renameSession,
   report,
-  saveMemory,
   saveProfile,
-  saveSessionSummary,
-  saveSharedSummary,
   selectCharacter,
   useAppStore,
   write,
@@ -57,17 +52,9 @@ export type DialogState =
   | { kind: "characters" }
   | { kind: "character"; character?: Character; copy?: boolean }
   | {
-      kind: "memory";
-      memory?: Memory;
-      content?: string;
-      source?: { sourceSessionId: string; sourceMessageId: string };
-    }
-  | { kind: "delete-memory"; memory: Memory }
-  | {
-      kind: "rename" | "delete-session" | "session-summary" | "session-details";
+      kind: "rename" | "delete-session" | "session-details";
       session: Session;
     }
-  | { kind: "shared-summary"; character: Character }
   | { kind: "settings" }
   | { kind: "import"; backup: Backup }
   | { kind: "clear" };
@@ -449,12 +436,7 @@ export function AppDialogs({
   useEffect(() => {
     setError("");
     setWorking(false);
-    if (state?.kind === "memory")
-      setValue(state.memory?.content ?? state.content ?? "");
-    else if (state?.kind === "rename") setValue(state.session.title);
-    else if (state?.kind === "shared-summary")
-      setValue(state.character.sharedSummary);
-    else if (state?.kind === "session-summary") setValue(state.session.summary);
+    if (state?.kind === "rename") setValue(state.session.title);
     else setValue("");
   }, [state]);
   if (!state) return null;
@@ -578,17 +560,6 @@ export function AppDialogs({
     );
   else {
     const config = {
-      memory: {
-        title:
-          state.kind === "memory" && state.memory ? "编辑记忆" : "加入角色记忆",
-        description: "该角色的全部对话共享这条重要事实。",
-        button: "保存记忆",
-      },
-      "delete-memory": {
-        title: "删除这条记忆？",
-        description: "只删除独立记忆，不会改写聊天原文或共享经历中的同一事实。",
-        button: "删除记忆",
-      },
       rename: {
         title: "重命名对话",
         description: "手动命名后，不会再被自动标题覆盖。",
@@ -597,20 +568,8 @@ export function AppDialogs({
       "delete-session": {
         title: "删除这段对话？",
         description:
-          "聊天记录和输入草稿将被删除，已维护的角色记忆与共享经历仍会保留。",
+          "会话内的消息、剧情、记忆、目标与草稿将被删除，角色共享记忆仍会保留。",
         button: "删除对话",
-      },
-      "shared-summary": {
-        title: "维护共享经历",
-        description:
-          "自动摘要尚未接入。可以手动记录关系、约定与重要经历，下次与该角色的任何对话都会携带。",
-        button: "保存共享经历",
-      },
-      "session-summary": {
-        title: "整理剧情",
-        description:
-          "自动摘要尚未接入。请写下需要延续的剧情；较早记录将由此备忘代替，最近 20 条仍发送原文，全部原文保留在本地。",
-        button: "保存剧情备忘",
       },
       import: {
         title: "用备份覆盖本地数据？",
@@ -627,29 +586,14 @@ export function AppDialogs({
         button: "清空全部",
       },
     }[state.kind];
-    const form = [
-      "memory",
-      "rename",
-      "shared-summary",
-      "session-summary",
-    ].includes(state.kind);
-    const destructive = [
-      "delete-memory",
-      "delete-session",
-      "import",
-      "clear",
-    ].includes(state.kind);
+    const form = state.kind === "rename";
+    const destructive = ["delete-session", "import", "clear"].includes(
+      state.kind,
+    );
     async function save() {
       if (!state) return;
-      if (state.kind === "memory")
-        await saveMemory(value, state.memory, state.source);
       if (state.kind === "rename") await renameSession(state.session, value);
-      if (state.kind === "delete-memory") await removeMemory(state.memory);
       if (state.kind === "delete-session") await removeSession(state.session);
-      if (state.kind === "shared-summary")
-        await saveSharedSummary(state.character.id, value);
-      if (state.kind === "session-summary")
-        await saveSessionSummary(state.session.id, value);
       if (state.kind === "import") await importBackup(state.backup);
       if (state.kind === "clear") await clearData();
     }
@@ -666,32 +610,16 @@ export function AppDialogs({
           <DialogDescription>{config.description}</DialogDescription>
         </DialogHeader>
         {form && (
-          <Field label={state.kind === "rename" ? "对话标题" : "内容"}>
-            {state.kind === "rename" ? (
-              <input
-                className="app-input"
-                autoFocus
-                value={value}
-                required
-                maxLength={120}
-                onChange={(event) => setValue(event.target.value)}
-              />
-            ) : (
-              <Textarea
-                aria-label="内容"
-                value={value}
-                rows={state.kind === "memory" ? 4 : 9}
-                maxLength={state.kind === "memory" ? 300 : 8000}
-                required={state.kind !== "shared-summary"}
-                onChange={(event) => setValue(event.target.value)}
-              />
-            )}
+          <Field label="对话标题">
+            <input
+              className="app-input"
+              autoFocus
+              value={value}
+              required
+              maxLength={120}
+              onChange={(event) => setValue(event.target.value)}
+            />
           </Field>
-        )}
-        {state.kind === "delete-memory" && (
-          <p className="whitespace-pre-wrap text-sm leading-6">
-            {state.memory.content}
-          </p>
         )}
         {state.kind === "import" && (
           <Button

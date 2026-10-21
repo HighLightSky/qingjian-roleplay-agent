@@ -30,7 +30,6 @@ import com.example.web.dto.VisualDtos.Selected;
 @Component
 public class PromptBuilder {
 
-    private static final int MAX_HISTORY_MESSAGES = 20;
 
     private final LlmProperties llmProperties;
 
@@ -46,7 +45,7 @@ public class PromptBuilder {
      */
     public ChatRequest build(ChatApiRequest request) {
         StringBuilder systemPrompt = new StringBuilder(buildSystemPrompt(
-                request.character(), request.memories(), request.summary(), request.interactionSettings()));
+                request.character(), request.state(), request.earlierHistory(), request.interactionSettings()));
         List<Message> messages = new ArrayList<>();
         appendVisualContext(systemPrompt, messages, request);
         messages.addFirst(new Message("system", systemPrompt.toString()));
@@ -56,10 +55,10 @@ public class PromptBuilder {
     }
 
     /**
-     * 将角色设定、回复规则、输出格式、重要记忆和摘要拼成一段系统提示词。
+     * 将角色设定、回复规则、输出格式、重要记忆和较早原文拼成一段系统提示词。
      */
     private String buildSystemPrompt(
-            CharacterDto character, List<String> memories, String summary, InteractionSettingsDto settings) {
+            CharacterDto character, com.example.web.dto.StateDtos.Snapshot state, String earlierHistory, InteractionSettingsDto settings) {
         StringBuilder systemPrompt = new StringBuilder("""
                 你正在扮演以下角色，并与用户共同展开故事。
 
@@ -88,22 +87,15 @@ public class PromptBuilder {
         appendNarrativeModeRules(systemPrompt, settings.narrativeMode());
         appendOutputFormatRules(systemPrompt);
 
-        if (memories != null) {
-            boolean hasMemories = false;
-            for (String memory : memories) {
-                if (memory == null || memory.isBlank()) {
-                    continue;
-                }
-                if (!hasMemories) {
-                    systemPrompt.append("\n【重要记忆】\n");
-                    hasMemories = true;
-                }
-                systemPrompt.append("- ").append(memory).append('\n');
-            }
-        }
-
-        if (summary != null && !summary.isBlank()) {
-            systemPrompt.append("\n【历史摘要】\n").append(summary).append('\n');
+        systemPrompt.append("\n【重要记忆：仅使用 active 项，陈述和猜测不等于事实】\n");
+        state.memories().stream().filter(m -> "active".equals(m.value().status()))
+                .forEach(m -> systemPrompt.append(m.value()).append('\n'));
+        systemPrompt.append("\n【当前剧情】\n").append(state.story()).append('\n');
+        systemPrompt.append("\n【当前目标：不得替用户承诺，已结束目标仅作经历】\n");
+        state.goals().stream().filter(g -> !"dismissed".equals(g.value().status()))
+                .forEach(g -> systemPrompt.append(g.value()).append('\n'));
+        if (!earlierHistory.isBlank()) {
+            systemPrompt.append("\n【较早聊天原文，未经摘要】\n").append(earlierHistory).append('\n');
         }
         return systemPrompt.toString();
     }
@@ -150,7 +142,7 @@ public class PromptBuilder {
                 """);
     }
 
-    /** 原图仅放入选中的来源消息；已摘要的图片作为历史参考重新提供。 */
+    /** 原图仅放入选中的来源消息；较早消息中的图片作为历史参考重新提供。 */
     private void appendVisualContext(StringBuilder systemPrompt, List<Message> messages, ChatApiRequest request) {
         List<Asset> catalog = request.visual() == null ? List.of() : request.visual().assetCatalog();
         Map<String, Asset> assetsById = catalog.stream().collect(Collectors.toMap(Asset::assetId, a -> a));
@@ -183,7 +175,7 @@ public class PromptBuilder {
         }
         Set<String> sent = new HashSet<>();
         List<HistoryMessageDto> history = request.history();
-        for (HistoryMessageDto h : history.subList(Math.max(0, history.size() - MAX_HISTORY_MESSAGES), history.size())) {
+        for (HistoryMessageDto h : history) {
             List<Message.Part> parts = new ArrayList<>();
             if (h.parts() == null) {
                 parts.add(Message.Part.text(h.text()));

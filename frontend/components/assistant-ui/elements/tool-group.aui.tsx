@@ -94,15 +94,15 @@ function ToolGroupRoot({
 
 function ToolGroupTrigger({
   count,
+  label = `${count} 项操作`,
   active = false,
   className,
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
   count: number;
+  label?: string;
   active?: boolean;
 }) {
-  const label = `${count} tool ${count === 1 ? "call" : "calls"}`;
-
   return (
     <CollapsibleTrigger
       data-slot="tool-group-trigger"
@@ -118,7 +118,7 @@ function ToolGroupTrigger({
       {active && (
         <LoaderIcon
           data-slot="tool-group-trigger-loader"
-          className="aui-tool-group-trigger-loader size-3 shrink-0 animate-spin [animation-duration:0.6s]"
+          className="aui-tool-group-trigger-loader size-3 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:0.6s]"
         />
       )}
       <span

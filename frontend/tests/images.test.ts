@@ -1,3 +1,4 @@
+import { emptyStateResult } from "./state-fixture";
 import "fake-indexeddb/auto";
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
@@ -104,6 +105,7 @@ function mockFetch() {
     if (path === "/api/context/inspect")
       return json({
         status: "ready",
+        operationId: body.operationId,
         selectedHistoricalImages:
           body.input.text === "不需要图片"
             ? []
@@ -115,26 +117,14 @@ function mockFetch() {
         message: "",
         contextFingerprint: "fixture",
       });
-    if (path === "/api/visual/update") {
+    if (path === "/api/state/update") {
       if (failVisual)
         return new Response(JSON.stringify({ message: "整理失败" }), {
           status: 502,
         });
-      return json({
-        observations: body.context.visual.imagePayloads.map((p: any) => ({
-          assetId: p.assetId,
-          summary: "地图",
-          visibleDetails: ["红色标记"],
-          extractedText: [],
-          uncertainDetails: ["小字不清"],
-          sourceMessageIds: [body.userMessageId],
-          version:
-            (body.context.visual.assetCatalog.find(
-              (a: any) => a.assetId === p.assetId,
-            )?.observation?.version ?? 0) + 1,
-        })),
-      });
+      return json(emptyStateResult(body));
     }
+
     if (failChat)
       return new Response(JSON.stringify({ message: "模型失败" }), {
         status: 502,
@@ -238,27 +228,27 @@ test("visual failures preserve completed text and durable task; next turn recove
     await sendMessage("", [{ type: "image", assetId: "image" }]);
     const db = await database();
     assert.equal((await allMessages(session.id)).at(-1)?.status, "complete");
-    assert.equal(await db.count("visualTasks"), 1);
+    assert.equal(await db.count("stateTasks"), 1);
     assert.equal(await db.count("visualObservations"), 0);
     assert.deepEqual(
-      (await db.getAll("visualTasks"))[0].context.visual?.imagePayloads,
+      (await db.getAll("stateTasks"))[0].context.visual?.imagePayloads,
       [],
     );
     const backup = await takeSnapshot();
     const invalid = structuredClone(backup);
-    invalid.data.visualTasks[0].context.character.identity = "字".repeat(2001);
+    invalid.data.stateTasks[0].context.character.identity = "字".repeat(2001);
     await assert.rejects(restoreSnapshot(invalid), /角色身份/);
-    assert.equal(await db.count("visualTasks"), 1);
+    assert.equal(await db.count("stateTasks"), 1);
     await restoreSnapshot(backup);
-    assert.equal(await db.count("visualTasks"), 1);
+    assert.equal(await db.count("stateTasks"), 1);
     failVisual = false;
     calls = [];
     await sendMessage("不需要图片");
     assert.ok(
-      calls.findIndex((c) => c.path === "/api/visual/update") <
+      calls.findIndex((c) => c.path === "/api/state/update") <
         calls.findIndex((c) => c.path === "/api/context/inspect"),
     );
-    assert.equal(await db.count("visualTasks"), 0);
+    assert.equal(await db.count("stateTasks"), 0);
     assert.equal(await db.count("visualObservations"), 1);
   } finally {
     restore();
@@ -286,22 +276,22 @@ test("retry reuses the saved user message instead of appending a second image in
     restore();
   }
 });
-test("v3 backup restores original bytes and rejects damaged originals before replacing data", async () => {
+test("v4 backup restores original bytes and rejects damaged originals before replacing data", async () => {
   const { session } = await setup();
   const a = await asset();
   await beginTurn(session.id, "", [{ type: "image", assetId: a.id }]);
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 3);
+  assert.equal(backup.formatVersion, 4);
   await restoreSnapshot(backup);
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
   const invalid = structuredClone(backup);
   invalid.data.assets[0].base64 = "AAAA";
   await assert.rejects(restoreSnapshot(invalid));
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
-  for (const formatVersion of [1, 2])
+  for (const formatVersion of [1, 2, 3])
     assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
 });
-test("ambiguous selection and cancellation preserve draft and never start a reply", async () => {
+test("ambiguous selection and cancellation preserve submitted input and never generate a reply", async () => {
   const { character, session } = await setup();
   await asset();
   await beginTurn(session.id, "地图", [
@@ -320,6 +310,7 @@ test("ambiguous selection and cancellation preserve draft and never start a repl
   try {
     globalThis.fetch = async () =>
       json({
+        operationId: base.operationId,
         status: "ambiguous",
         selectedHistoricalImages: [],
         candidateAssetIds: ["image"],
@@ -331,6 +322,8 @@ test("ambiguous selection and cancellation preserve draft and never start a repl
         session.id,
         await allMessages(session.id),
         new AbortController().signal,
+        "test-anchor",
+        async () => {},
       ),
       /你指哪张/,
     );
@@ -351,7 +344,8 @@ test("ambiguous selection and cancellation preserve draft and never start a repl
     await pending;
     await cancelGeneration();
     await send;
-    assert.equal(await (await database()).count("messages"), count);
+    assert.equal(await (await database()).count("messages"), count + 2);
+    assert.equal((await allMessages(session.id)).at(-1)?.status, "cancelled");
   } finally {
     globalThis.fetch = original;
   }
@@ -370,7 +364,7 @@ test("background visual calls do not block local draft writes", async () => {
     release = resolve;
   });
   globalThis.fetch = async (input, init) => {
-    if (String(input) === "/api/visual/update") {
+    if (String(input) === "/api/state/update") {
       started();
       await gate;
     }

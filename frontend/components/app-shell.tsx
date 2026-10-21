@@ -1,6 +1,12 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type PropsWithChildren,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   ThreadListPrimitive,
@@ -10,7 +16,6 @@ import {
 import { DropdownMenu } from "radix-ui";
 import {
   BookOpenIcon,
-  BookmarkPlusIcon,
   ChevronDownIcon,
   LeafIcon,
   MenuIcon,
@@ -21,7 +26,6 @@ import {
   XIcon,
 } from "lucide-react";
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
-import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -29,6 +33,8 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { StatePanel } from "@/components/chat/state-panel";
+import { OperationTool } from "@/components/chat/operation-tool";
 import { ChatRuntimeProvider } from "@/components/chat/runtime-provider";
 import { InteractionSettingsControls } from "@/components/chat/interaction-settings";
 import { AppDialogs, type DialogState } from "@/components/app-dialogs";
@@ -44,33 +50,9 @@ import { cn } from "@/lib/utils";
 
 const OpenDialog = createContext<(state: DialogState) => void>(() => {});
 const SessionSearch = createContext("");
-function RememberAction() {
-  const open = useContext(OpenDialog);
-  const message = useAuiState((state) => state.message);
-  const readOnly = useAppStore((state) => state.readOnly);
-  const content = message.metadata.custom.plainText as string;
-  return (
-    <TooltipIconButton
-      tooltip="加入角色记忆"
-      aria-label="加入角色记忆"
-      disabled={readOnly || !content}
-      onClick={() =>
-        open({
-          kind: "memory",
-          content: content.slice(0, 300),
-          source: {
-            sourceSessionId: message.metadata.custom.sessionId as string,
-            sourceMessageId: message.id,
-          },
-        })
-      }
-    >
-      <BookmarkPlusIcon />
-    </TooltipIconButton>
-  );
-}
 const THREAD_COMPONENTS = {
-  MessageActions: RememberAction,
+  ToolFallback: OperationTool,
+  ToolGroup: ({ children }: PropsWithChildren) => <>{children}</>,
   ComposerControls: InteractionSettingsControls,
 };
 function MoreMenu({
@@ -173,7 +155,7 @@ function Navigation() {
             {character
               ? character.archived
                 ? "已归档 · 可阅读已有对话"
-                : "每段故事，共享同一份记忆"
+                : "每段故事，都有自己的经历"
               : "开启一个新的故事"}
           </span>
         </span>
@@ -232,120 +214,6 @@ function Navigation() {
           <SettingsIcon />
           设置与数据
         </Button>
-      </div>
-    </div>
-  );
-}
-function MemoryPanel() {
-  const app = useAppStore();
-  const open = useContext(OpenDialog);
-  const character = app.characters.find((item) => item.id === app.characterId);
-  if (!character) return null;
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex items-start justify-between border-b px-5 py-5">
-        <div>
-          <h2 className="font-medium">{character.name}的记忆</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            该角色的全部对话共享
-          </p>
-        </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="-mr-2 -mt-2 size-11"
-          aria-label="关闭记忆"
-          onClick={() => useAppStore.setState({ memoryOpen: false })}
-        >
-          <XIcon />
-        </Button>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-sm font-medium">
-            重要事实{" "}
-            <span className="ml-1 text-xs font-normal text-muted-foreground">
-              {app.memories.length}/50
-            </span>
-          </h3>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={app.readOnly}
-            onClick={() => open({ kind: "memory" })}
-          >
-            <PlusIcon />
-            新增
-          </Button>
-        </div>
-        <div className="divide-y">
-          {app.memories.map((memory) => {
-            const source = app.sessions.find(
-              (session) => session.id === memory.sourceSessionId,
-            );
-            return (
-              <article key={memory.id} className="py-4">
-                <p className="whitespace-pre-wrap break-words text-sm leading-6">
-                  {memory.content}
-                </p>
-                {memory.sourceSessionId && (
-                  <button
-                    className="mt-2 block max-w-full truncate text-left text-xs text-muted-foreground hover:text-primary disabled:cursor-default"
-                    disabled={!source}
-                    onClick={() => {
-                      void selectSession(source!.id).catch(report);
-                    }}
-                  >
-                    {source ? `来源：${source.title} ↗` : "来源对话已删除"}
-                  </button>
-                )}
-                <div className="mt-2 flex gap-3">
-                  <button
-                    className="text-xs text-muted-foreground hover:text-primary disabled:opacity-40"
-                    disabled={app.readOnly}
-                    onClick={() => open({ kind: "memory", memory })}
-                  >
-                    编辑
-                  </button>
-                  <button
-                    className="text-xs text-muted-foreground hover:text-destructive disabled:opacity-40"
-                    disabled={app.readOnly}
-                    onClick={() => open({ kind: "delete-memory", memory })}
-                  >
-                    删除
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-        {!app.memories.length && (
-          <p className="py-4 text-sm leading-6 text-muted-foreground">
-            喜欢的称呼、共同的约定…
-            <br />
-            把希望角色记住的事放在这里。
-          </p>
-        )}
-        <section className="mt-5 border-t pt-5">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium">共享经历</h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={app.readOnly}
-              onClick={() => open({ kind: "shared-summary", character })}
-            >
-              维护
-            </Button>
-          </div>
-          <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">
-            {character.sharedSummary ||
-              "暂未记录共享经历。可以手动维护关系与故事的重要进展。"}
-          </p>
-          <p className="mt-5 text-xs leading-5 text-muted-foreground">
-            自动摘要尚未接入。人工记忆与共享经历会在下一次发送时使用。
-          </p>
-        </section>
       </div>
     </div>
   );
@@ -483,11 +351,11 @@ export function AppShell() {
                     onClick={() =>
                       useAppStore.setState({ memoryOpen: !app.memoryOpen })
                     }
-                    aria-label="打开角色记忆"
+                    aria-label="打开剧情与记忆"
                     aria-expanded={app.memoryOpen}
                   >
                     <BookOpenIcon />
-                    <span className="hidden sm:inline">角色记忆</span>
+                    <span className="hidden sm:inline">剧情与记忆</span>
                   </Button>
                   <MoreMenu
                     label="角色与会话菜单"
@@ -499,12 +367,6 @@ export function AppShell() {
                               action: () =>
                                 setDialog({ kind: "rename", session }),
                               disabled: app.readOnly,
-                            },
-                            {
-                              label: "整理剧情",
-                              action: () =>
-                                setDialog({ kind: "session-summary", session }),
-                              disabled: app.readOnly || !!app.activeSessionId,
                             },
                             {
                               label: "对话详情",
@@ -606,12 +468,12 @@ export function AppShell() {
                 <div className="max-w-md text-center">
                   <LeafIcon className="mx-auto mb-6 size-10 stroke-[1.2] text-primary" />
                   <h2 className="text-2xl font-medium tracking-wide">
-                    {character ? "每一次相遇，都能续写。" : "先认识一个角色。"}
+                    {character ? "每一次相遇，都能续写" : "走进一场新的相遇"}
                   </h2>
                   <p className="mt-4 whitespace-pre-line text-sm leading-7 text-muted-foreground">
                     {character
-                      ? "开启一段对话，或从侧栏回到先前的故事。\n重要的记忆，会陪伴这个角色留在每段对话里。"
-                      : "为角色写下名字、性格与背景，\n然后用一句话，打开你们的故事。"}
+                      ? "开启一段对话，或从侧栏继续故事。\n重要的记忆，陪伴点点滴滴"
+                      : "写下你心中的角色信息，\n然后打开你们的故事"}
                   </p>
                   <Button
                     className="mt-7 h-11"
@@ -640,7 +502,7 @@ export function AppShell() {
           </div>
           {wide && app.memoryOpen && character && (
             <aside className="w-80 shrink-0 border-l">
-              <MemoryPanel />
+              <StatePanel key={app.sessionId} />
             </aside>
           )}
         </main>
@@ -664,11 +526,11 @@ export function AppShell() {
             showCloseButton={false}
             className="inset-y-0 right-0 left-auto h-dvh max-h-dvh w-full max-w-none translate-x-0 translate-y-0 rounded-none border-y-0 border-r-0 p-0 sm:w-96 sm:max-w-none"
           >
-            <DialogTitle className="sr-only">角色共享记忆</DialogTitle>
+            <DialogTitle className="sr-only">剧情与记忆</DialogTitle>
             <DialogDescription className="sr-only">
-              查看与维护当前角色所有对话共享的记忆
+              查看与维护当前剧情、记忆与目标
             </DialogDescription>
-            <MemoryPanel />
+            <StatePanel key={app.sessionId} />
           </DialogContent>
         </Dialog>
       </ChatRuntimeProvider>

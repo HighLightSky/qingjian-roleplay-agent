@@ -1,3 +1,15 @@
+import type { StateTask, Operation, Goal } from "./state/types";
+import {
+  object,
+  string,
+  integer,
+  validateSnapshot,
+  validateStory,
+  validateStateResult,
+  validateMemoryValue,
+  sourceIds,
+  validateGoalValue,
+} from "./state/validation";
 import { sha256 } from "./images/hash";
 import {
   inspectImage,
@@ -9,10 +21,8 @@ import {
   type ImageAsset,
   type VisualObservation,
   type ImageUsage,
-  type VisualTask,
-  type ContentPart,
 } from "./images/types";
-import { database, TABLES } from "./db";
+import { database, TABLES, atomic } from "./db";
 import {
   parseCharacterProfile,
   parseInteractionSettings,
@@ -31,7 +41,9 @@ export type Snapshot = {
   assets: BackupAsset[];
   visualObservations: VisualObservation[];
   imageUsages: ImageUsage[];
-  visualTasks: VisualTask[];
+  stateTasks: StateTask[];
+  operations: Operation[];
+  goals: Goal[];
   characters: Character[];
   sessions: Session[];
   messages: Message[];
@@ -41,22 +53,10 @@ export type Snapshot = {
 };
 export type Backup = {
   format: "roleplay-agent-backup";
-  formatVersion: 3;
+  formatVersion: 4;
   exportedAt: string;
   data: Snapshot;
 };
-function object(value: unknown): asserts value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("备份包含无效记录。");
-}
-function string(value: unknown, max = 1_000_000): asserts value is string {
-  if (typeof value !== "string" || value.length > max)
-    throw new Error("备份中的文字字段无效或过长。");
-}
-function integer(value: unknown, min = 0): asserts value is number {
-  if (!Number.isSafeInteger(value) || (value as number) < min)
-    throw new Error("备份中的序号无效。");
-}
 function date(value: unknown) {
   string(value, 100);
   if (!Number.isFinite(Date.parse(value)))
@@ -66,7 +66,7 @@ export function validateBackup(value: unknown): Backup {
   object(value);
   if (new Blob([JSON.stringify(value)]).size > 50 * 1024 * 1024)
     throw new Error("备份不能超过 50 MiB。");
-  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 3)
+  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 4)
     throw new Error("不支持此备份格式或版本，请选择本应用导出的文件。");
   date(value.exportedAt);
   object(value.data);
@@ -102,7 +102,7 @@ export function validateBackup(value: unknown): Backup {
     if (typeof character.archived !== "boolean")
       throw new Error("角色归档状态无效。");
     integer(character.profileVersion, 1);
-    string(character.sharedSummary, 8000);
+    integer(character.memoryVersion);
   }
   for (const session of snapshot.sessions) {
     if (!characters.has(session.characterId))
@@ -114,8 +114,9 @@ export function validateBackup(value: unknown): Backup {
       throw new Error("会话标题来源无效。");
     integer(session.profileVersion, 1);
     integer(session.nextMessageSeq, 1);
-    integer(session.summaryThroughSeq);
-    string(session.summary, 8000);
+    integer(session.stateVersion);
+    integer(session.stateProcessedThroughSeq);
+    validateStory(session.story);
   }
   for (const message of snapshot.messages) {
     if (!sessions.has(message.sessionId))
@@ -160,20 +161,52 @@ export function validateBackup(value: unknown): Backup {
   for (const session of snapshot.sessions) {
     if (
       session.nextMessageSeq <= (maxSeq.get(session.id) ?? 0) ||
-      session.summaryThroughSeq >= session.nextMessageSeq
+      session.stateProcessedThroughSeq >= session.nextMessageSeq
     )
       throw new Error("会话消息游标无效。");
   }
-  const counts = new Map<string, number>();
   for (const memory of snapshot.memories) {
-    if (!characters.has(memory.characterId))
-      throw new Error("记忆引用了不存在的角色。");
-    string(memory.content, 300);
+    if (
+      !characters.has(memory.characterId) ||
+      (memory.sessionId !== null &&
+        sessions.get(memory.sessionId)?.characterId !== memory.characterId)
+    )
+      throw new Error("记忆引用了不存在的角色或会话。");
+    validateMemoryValue(memory.value);
+    integer(memory.version, 1);
+    sourceIds(memory.sourceMessageIds);
     date(memory.createdAt);
-    if (!memory.content.trim()) throw new Error("记忆内容不能为空。");
-    counts.set(memory.characterId, (counts.get(memory.characterId) ?? 0) + 1);
-    if (counts.get(memory.characterId)! > 50)
-      throw new Error("角色记忆超过 50 条。");
+    string(memory.sourceSessionId, 200);
+    if (!["manual", "automatic"].includes(memory.origin))
+      throw new Error("记忆维护来源无效。");
+  }
+  for (const goal of snapshot.goals) {
+    if (!sessions.has(goal.sessionId))
+      throw new Error("目标引用了不存在的会话。");
+    validateGoalValue(goal.value);
+    integer(goal.version, 1);
+    sourceIds(goal.sourceMessageIds);
+    date(goal.createdAt);
+    if (!["manual", "automatic"].includes(goal.origin))
+      throw new Error("目标维护来源无效。");
+  }
+  for (const session of snapshot.sessions) {
+    const character = characters.get(session.characterId)!;
+    validateSnapshot({
+      sessionId: session.id,
+      characterId: character.id,
+      sessionVersion: session.stateVersion,
+      memoryVersion: character.memoryVersion,
+      processedThroughSeq: session.stateProcessedThroughSeq,
+      story: session.story,
+      storySources: session.storySources,
+      memories: snapshot.memories.filter(
+        (m) =>
+          m.characterId === character.id &&
+          (m.sessionId === null || m.sessionId === session.id),
+      ),
+      goals: snapshot.goals.filter((g) => g.sessionId === session.id),
+    });
   }
   for (const draft of snapshot.drafts) {
     if (!sessions.has(draft.sessionId))
@@ -201,7 +234,7 @@ export function validateBackup(value: unknown): Backup {
   validateImages(snapshot);
   return {
     format: "roleplay-agent-backup",
-    formatVersion: 3,
+    formatVersion: 4,
     exportedAt: value.exportedAt as string,
     data: snapshot,
   };
@@ -316,61 +349,220 @@ function validateImages(snapshot: Snapshot) {
       throw new Error("图片使用记录来源无效。");
     string(u.purpose, 2000);
   }
-  for (const task of snapshot.visualTasks) {
-    const user = messages.get(task.userMessageId),
-      assistant = messages.get(task.assistantMessageId);
+  const operations = new Map(snapshot.operations.map((o) => [o.id, o]));
+  for (const op of snapshot.operations) {
     if (
-      !sessions.has(task.sessionId) ||
-      user?.sessionId !== task.sessionId ||
-      user.role !== "user" ||
-      assistant?.sessionId !== task.sessionId ||
-      assistant.role !== "assistant" ||
-      assistant.replyToMessageId !== user.id ||
-      assistant.status !== "complete" ||
-      task.id !== assistant.id
+      messages.get(op.anchorMessageId)?.sessionId !== op.sessionId ||
+      !sessions.has(op.sessionId) ||
+      !["selection", "state_update"].includes(op.kind) ||
+      !["before", "after"].includes(op.placement) ||
+      ![
+        "pending",
+        "running",
+        "computed",
+        "committed",
+        "failed",
+        "cancelled",
+        "stale",
+      ].includes(op.status)
     )
-      throw new Error("视觉任务来源无效。");
-    string(task.assistantText);
-    object(task.context);
-    parseCharacterProfile(task.context.character);
-    object(task.context.input);
-    object(task.context.visual);
-    if (
-      task.context.visual.sessionId !== task.sessionId ||
-      !Array.isArray(task.context.visual.assetCatalog) ||
-      !Array.isArray(task.context.visual.imagePayloads) ||
-      task.context.visual.imagePayloads.length
-    )
-      throw new Error("视觉任务上下文无效。");
-    checkParts(task.context.input.parts, user.text ?? "");
-    if (JSON.stringify(task.context.input.parts) !== JSON.stringify(user.parts))
-      throw new Error("视觉任务输入不一致。");
-    for (const a of task.context.visual.assetCatalog) {
-      object(a);
-      if (
-        !sessionHasAsset(task.sessionId, a.assetId) ||
-        !Array.isArray(a.sources) ||
-        a.sources.some(
-          (source) =>
-            messages.get(source.messageId)?.sessionId !== task.sessionId,
+      throw new Error("操作记录来源或状态无效。");
+    string(op.runId, 200);
+    if (op.error !== undefined) string(op.error, 8000);
+    if (op.result !== undefined) {
+      if (op.kind === "state_update") {
+        validateStateResult(op.result);
+        if (
+          !Array.isArray(op.sourceVersions) ||
+          op.sourceVersions.some((source) => {
+            integer(source.checkpointVersion);
+            string(source.id, 200);
+            return messages.get(source.id)?.sessionId !== op.sessionId;
+          })
         )
-      )
-        throw new Error("视觉任务图片目录来源无效。");
+          throw new Error("整理结果缺少有效的来源版本。");
+        if (
+          op.result.operationId !== op.id ||
+          op.result.throughSeq !== messages.get(op.anchorMessageId)!.seq
+        )
+          throw new Error("操作结果 ID 或处理区间无效。");
+        for (const change of [
+          ...op.result.storyChanges,
+          ...op.result.memoryChanges,
+          ...op.result.goalChanges,
+        ]) {
+          if (
+            change.sourceMessageIds.some((id) => {
+              const m = messages.get(id);
+              return (
+                !m ||
+                m.sessionId !== op.sessionId ||
+                m.status !== "complete" ||
+                m.seq <=
+                  (op.result as import("./state/types").StateResult)
+                    .fromExclusiveSeq ||
+                m.seq >
+                  (op.result as import("./state/types").StateResult).throughSeq
+              );
+            })
+          )
+            throw new Error("整理变更的消息来源无效。");
+        }
+        for (const change of op.result.memoryChanges) {
+          const memory = snapshot.memories.find((m) => m.id === change.id);
+          if (change.action === "create" && memory && op.status !== "committed")
+            throw new Error("待提交记忆 ID 已被使用。");
+          if (
+            change.action === "update" &&
+            (!memory ||
+              memory.characterId !==
+                snapshot.sessions.find((s) => s.id === op.sessionId)!
+                  .characterId ||
+              (memory.sessionId !== null && memory.sessionId !== op.sessionId))
+          )
+            throw new Error("整理结果修改了无关记忆。");
+        }
+        for (const change of op.result.goalChanges) {
+          const goal = snapshot.goals.find((g) => g.id === change.id);
+          if (change.action === "create" && goal && op.status !== "committed")
+            throw new Error("待提交目标 ID 已被使用。");
+          if (
+            change.action === "update" &&
+            (!goal || goal.sessionId !== op.sessionId)
+          )
+            throw new Error("整理结果修改了无关目标。");
+        }
+        for (const observation of op.result.visualObservations) {
+          if (
+            !sessionHasAsset(op.sessionId, observation.assetId) ||
+            observation.sourceMessageIds.some(
+              (id) => messages.get(id)?.sessionId !== op.sessionId,
+            )
+          )
+            throw new Error("整理结果的视觉来源无效。");
+        }
+      } else {
+        const selection: unknown = op.result;
+        object(selection);
+        object(selection.plan);
+        const plan = selection.plan;
+        if (
+          plan.operationId !== op.id ||
+          !["ready", "ambiguous", "over_limit"].includes(
+            plan.status as string,
+          ) ||
+          !Array.isArray(plan.selectedHistoricalImages) ||
+          !Array.isArray(plan.candidateAssetIds) ||
+          !Array.isArray(selection.catalog)
+        )
+          throw new Error("选图操作结果无效。");
+        string(plan.message, 2000);
+        string(plan.contextFingerprint, 200);
+        const catalogIds = new Set<string>();
+        for (const a of selection.catalog as unknown[]) {
+          object(a);
+          string(a.assetId, 200);
+          catalogIds.add(a.assetId);
+          if (!sessionHasAsset(op.sessionId, a.assetId as string))
+            throw new Error("选图结果包含其他会话图片。");
+          if (!Array.isArray(a.sources) || !a.sources.length)
+            throw new Error("选图结果缺少图片来源。");
+          for (const source of a.sources) {
+            object(source);
+            string(source.messageId, 200);
+            const message = messages.get(source.messageId);
+            if (
+              !message ||
+              message.sessionId !== op.sessionId ||
+              message.seq !== source.seq ||
+              !imageIds(message.parts).includes(a.assetId)
+            )
+              throw new Error("选图结果的消息来源无效。");
+          }
+        }
+        const selectedIds = new Set<string>();
+        for (const selected of plan.selectedHistoricalImages) {
+          object(selected);
+          string(selected.assetId, 200);
+          string(selected.purpose, 2000);
+          if (
+            !catalogIds.has(selected.assetId) ||
+            selectedIds.has(selected.assetId)
+          )
+            throw new Error("选图结果引用无效或重复。");
+          selectedIds.add(selected.assetId);
+        }
+        if (
+          plan.candidateAssetIds.some(
+            (id) => typeof id !== "string" || !catalogIds.has(id),
+          )
+        )
+          throw new Error("选图候选来源无效。");
+      }
+    } else if (["computed", "committed"].includes(op.status))
+      throw new Error("操作缺少计算结果。");
+    if (op.status === "running") {
+      op.status = "cancelled";
+      op.error = "从备份恢复的操作已中断。";
     }
-    const plan = task.context.visual.plan;
-    if (plan !== null) {
-      object(plan);
+  }
+  for (const task of snapshot.stateTasks) {
+    const assistant = messages.get(task.assistantMessageId);
+    if (
+      !assistant ||
+      assistant.sessionId !== task.sessionId ||
+      assistant.role !== "assistant" ||
+      assistant.status !== "complete" ||
+      task.throughSeq !== assistant.seq ||
+      task.id !== `state:${assistant.id}` ||
+      !operations.has(task.id) ||
+      operations.get(task.id)!.status === "committed"
+    )
+      throw new Error("整理任务来源无效。");
+    integer(task.automaticAttempts);
+    object(task.context);
+    validateSnapshot(task.context.state);
+    parseCharacterProfile(task.context.character);
+    parseInteractionSettings(task.context.interactionSettings);
+    string(task.context.earlierHistory, 20_000);
+    object(task.context.input);
+    if (task.context.state.sessionId !== task.sessionId)
+      throw new Error("整理任务会话无效。");
+    const user = messages.get(assistant.replyToMessageId!);
+    if (!user || user.role !== "user" || user.sessionId !== task.sessionId)
+      throw new Error("整理输入来源缺失。");
+    checkParts(task.context.input.parts, user.text ?? "");
+    if (
+      task.context.input.text !== user.text ||
+      JSON.stringify(task.context.input.parts) !== JSON.stringify(user.parts)
+    )
+      throw new Error("整理任务输入不一致。");
+    if (task.context.visual) {
+      const visual = task.context.visual;
       if (
-        plan.status !== "ready" ||
-        !Array.isArray(plan.selectedHistoricalImages) ||
-        plan.selectedHistoricalImages.some(
-          (v) =>
-            !task.context.visual!.assetCatalog.some(
-              (a) => a.assetId === v.assetId,
-            ),
-        )
+        visual.sessionId !== task.sessionId ||
+        !Array.isArray(visual.imagePayloads) ||
+        visual.imagePayloads.length ||
+        !Array.isArray(visual.assetCatalog)
       )
-        throw new Error("视觉任务选图计划无效。");
+        throw new Error("整理任务图片上下文无效。");
+      for (const a of visual.assetCatalog) {
+        if (
+          !sessionHasAsset(task.sessionId, a.assetId) ||
+          a.sources.some(
+            (s) => messages.get(s.messageId)?.sessionId !== task.sessionId,
+          )
+        )
+          throw new Error("整理任务图片来源无效。");
+      }
+      if (
+        visual.plan &&
+        (visual.plan.status !== "ready" ||
+          visual.plan.selectedHistoricalImages.some(
+            (s) => !visual.assetCatalog.some((a) => a.assetId === s.assetId),
+          ))
+      )
+        throw new Error("整理任务选图计划无效。");
     }
   }
 }
@@ -397,7 +589,7 @@ export async function takeSnapshot(): Promise<Backup> {
   }
   const backup: Backup = {
     format: "roleplay-agent-backup",
-    formatVersion: 3,
+    formatVersion: 4,
     exportedAt: new Date().toISOString(),
     data: { ...data, assets: serialized },
   };
@@ -422,10 +614,11 @@ export async function restoreSnapshot(backup: Backup) {
   }
   const db = await database();
   const tx = db.transaction(TABLES, "readwrite");
-  for (const table of TABLES) {
-    await tx.objectStore(table).clear();
-    const rows = table === "assets" ? assets : validated.data[table];
-    for (const row of rows) await tx.objectStore(table).put(row);
-  }
-  await tx.done;
+  await atomic(tx, async () => {
+    for (const table of TABLES) {
+      await tx.objectStore(table).clear();
+      const rows = table === "assets" ? assets : validated.data[table];
+      for (const row of rows) await tx.objectStore(table).put(row);
+    }
+  });
 }

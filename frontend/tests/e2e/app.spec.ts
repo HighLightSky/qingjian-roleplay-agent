@@ -141,7 +141,8 @@ test("dialogue and narration retain their styles and typed history across turns 
     expect(
       requests
         .at(-1)!
-        .history.filter((message) => message.role === "assistant"),
+        .history.filter((message) => message.role === "assistant")
+        .map(({ role, text }) => ({ role, text })),
     ).toEqual(
       Array.from({ length: turn - 1 }, () => ({
         role: "assistant",
@@ -428,7 +429,10 @@ test("chat, shared memory, one-click sessions, theme, drafts and browser recover
 }, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const requests: { memories: string[]; history: unknown[] }[] = [];
+  const requests: {
+    state: { memories: { value: { content: string } }[] };
+    history: unknown[];
+  }[] = [];
   page.on("request", (request) => {
     if (request.url().endsWith("/api/chat"))
       requests.push(request.postDataJSON());
@@ -444,16 +448,20 @@ test("chat, shared memory, one-click sessions, theme, drafts and browser recover
   await expect(
     page.getByRole("heading", { name: "你好，旅人", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "打开角色记忆" }).click();
-  await page.getByRole("button", { name: "新增", exact: true }).click();
+  await page.getByRole("button", { name: "打开剧情与记忆" }).click();
+  await page.getByRole("tab", { name: "记忆", exact: true }).click();
+  await page.getByRole("button", { name: "新增记忆", exact: true }).click();
   await page
-    .getByRole("textbox", { name: "内容", exact: true })
+    .getByRole("textbox", { name: "记忆内容", exact: true })
     .fill("用户希望被称为阿远");
-  await page.getByRole("button", { name: "保存记忆", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: "使用范围" })
+    .selectOption("character");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(
     page.getByText("用户希望被称为阿远", { exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "关闭记忆" }).click();
+  await page.getByRole("button", { name: "关闭剧情与记忆" }).click();
   await nav(page);
   await page
     .getByRole("button", { name: "新建对话", exact: true })
@@ -466,7 +474,9 @@ test("chat, shared memory, one-click sessions, theme, drafts and browser recover
   await expect(
     page.getByText("“欢迎回来，阿远。”", { exact: true }),
   ).toBeVisible();
-  expect(requests.at(-1)?.memories).toEqual(["用户希望被称为阿远"]);
+  expect(requests.at(-1)?.state.memories.map((m) => m.value.content)).toEqual([
+    "用户希望被称为阿远",
+  ]);
   expect(requests.at(-1)?.history).toEqual([]);
   await page.getByRole("button", { name: "角色与会话菜单" }).click();
   await page.getByRole("menuitem", { name: "重命名对话" }).click();
@@ -513,7 +523,7 @@ test("chat, shared memory, one-click sessions, theme, drafts and browser recover
     ),
   ).toBe(true);
   expect(errors).toEqual([]);
-  await page.getByRole("button", { name: "打开角色记忆" }).click();
+  await page.getByRole("button", { name: "打开剧情与记忆" }).click();
   await page.screenshot({
     path: `/tmp/qingjian-${testInfo.project.name}.png`,
     animations: "disabled",
@@ -573,7 +583,7 @@ test("API errors retain user messages and a second tab cannot mutate data", asyn
   await second.close();
 });
 
-test("a running reply stays in its original session while navigating", async ({
+test("switching sessions cancels the active run and retains its partial reply", async ({
   page,
 }) => {
   await createRole(page);
@@ -586,6 +596,9 @@ test("a running reply stays in its original session while navigating", async ({
     .getByRole("button", { name: "新建对话", exact: true })
     .filter({ visible: true })
     .click();
+  await expect(
+    page.getByRole("heading", { name: "新对话", exact: true }),
+  ).toBeVisible();
   await send(page, "慢慢回复新的故事");
   await expect(page.getByText("“欢迎回来，", { exact: true })).toBeVisible();
   await nav(page);
@@ -597,19 +610,22 @@ test("a running reply stays in its original session while navigating", async ({
     page.getByRole("heading", { name: "原来的故事", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "发送消息", exact: true }),
-  ).toBeDisabled();
+    page.getByRole("button", { name: "停止生成", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("textbox", { name: "消息内容" }).fill("切换后可发送");
   await expect(
-    page.getByText("另一段对话正在回复", { exact: true }),
-  ).toBeVisible();
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeEnabled();
   await expect(
     page
       .locator('[data-role="user"]')
       .getByText("慢慢回复新的故事", { exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: "前往", exact: true }).click();
-  await expect(page.getByText("“欢迎回来，", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "停止生成", exact: true }).click();
+  await nav(page);
+  await page
+    .getByRole("button", { name: "慢慢回复新的故事", exact: true })
+    .filter({ visible: true })
+    .click();
   await expect(
     page.getByText("已停止，保留已收到的内容。", { exact: true }),
   ).toBeVisible();
@@ -665,7 +681,7 @@ test("closing and reopening a browser profile restores committed data and drafts
   const directory = await mkdtemp(join(tmpdir(), "qingjian-profile-"));
   const options = {
     headless: true,
-    baseURL: "http://127.0.0.1:3100",
+    baseURL: testInfo.project.use.baseURL,
     viewport: { width: 1280, height: 900 },
   };
   let context = await chromium.launchPersistentContext(directory, options);
@@ -707,7 +723,7 @@ test("image drafts, first send, history selection and settings gallery survive r
   const calls: { path: string; body: any }[] = [];
   page.on("request", (request) => {
     if (
-      ["/api/chat", "/api/context/inspect", "/api/visual/update"].some((p) =>
+      ["/api/chat", "/api/context/inspect", "/api/state/update"].some((p) =>
         request.url().endsWith(p),
       )
     )
@@ -740,7 +756,7 @@ test("image drafts, first send, history selection and settings gallery survive r
   ).toBeEnabled();
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
   await expect
-    .poll(() => calls.filter((c) => c.path === "/api/visual/update").length)
+    .poll(() => calls.filter((c) => c.path === "/api/state/update").length)
     .toBe(1);
   await expect(
     page.getByRole("button", { name: "发送消息", exact: true }),
@@ -753,7 +769,7 @@ test("image drafts, first send, history selection and settings gallery survive r
   ).toHaveLength(1);
   await send(page, "看看地图里的标记");
   await expect
-    .poll(() => calls.filter((c) => c.path === "/api/visual/update").length)
+    .poll(() => calls.filter((c) => c.path === "/api/state/update").length)
     .toBe(2);
   expect(calls.filter((c) => c.path === "/api/context/inspect")).toHaveLength(
     1,
@@ -788,7 +804,7 @@ test("image drafts, first send, history selection and settings gallery survive r
   await expect(page.getByText("3 × 2", { exact: false })).toBeVisible();
 });
 
-test("ambiguous image selection returns the input to the composer without losing its original", async ({
+test("ambiguous image selection retains submitted input and exposes candidates", async ({
   page,
 }) => {
   await createRole(page);
@@ -819,6 +835,7 @@ test("ambiguous image selection returns the input to the composer without losing
     const context = route.request().postDataJSON();
     await route.fulfill({
       json: {
+        operationId: context.operationId,
         status: "ambiguous",
         selectedHistoricalImages: [],
         candidateAssetIds: context.visual.assetCatalog.map(
@@ -831,16 +848,12 @@ test("ambiguous image selection returns the input to the composer without losing
   });
   await send(page, "再看一下之前那张");
   await expect(
-    page.getByText("请说明你指哪张图片。", { exact: true }),
+    page.getByText("请说明你指哪张图片。", { exact: true }).first(),
   ).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "消息内容" })).toHaveValue(
-    "再看一下之前那张",
-  );
-  await expect(page.locator('[data-role="user"]')).toHaveCount(1);
+  await expect(page.getByRole("textbox", { name: "消息内容" })).toHaveValue("");
+  await expect(page.locator('[data-role="user"]')).toHaveCount(2);
   await page.reload();
-  await expect(page.getByRole("textbox", { name: "消息内容" })).toHaveValue(
-    "再看一下之前那张",
-  );
+  await expect(page.getByRole("textbox", { name: "消息内容" })).toHaveValue("");
   await expect(page.locator('[data-role="user"] img')).toBeVisible();
 });
 
@@ -867,4 +880,105 @@ test("retrying a failed reply keeps one saved user input", async ({ page }) => {
   await expect(page.locator('[data-role="user"]')).toHaveCount(1);
   await page.reload();
   await expect(page.locator('[data-role="user"]')).toHaveCount(1);
+});
+
+test("自动整理过程可展开，结果持久化且只有统一人工维护入口", async ({
+  page,
+}) => {
+  await createRole(page);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await send(
+    page,
+    "自动整理测试，慢慢整理：我们到了旅馆，我叫阿远，要寻找哥哥",
+  );
+  await expect(
+    page.getByRole("button", { name: "整理视觉、剧情、记忆与目标：正在请求" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("“欢迎回来，旅人。”", { exact: true }),
+  ).toBeVisible();
+  const result = page.getByRole("button", {
+    name: "已更新：剧情 1 项，记忆 1 项，目标 1 项",
+  });
+  await expect(result).toBeVisible();
+  await result.click();
+  await expect(page.getByText("依据：本轮明确说明").first()).toBeVisible();
+  await expect(page.getByText(/^新内容：寻找失踪的哥哥/)).toBeVisible();
+  await page.reload();
+  await expect(result).toBeVisible();
+  await page.getByRole("button", { name: "打开剧情与记忆" }).click();
+  await expect(page.getByRole("tabpanel")).toContainText("旅馆");
+  await page.getByRole("tab", { name: "记忆", exact: true }).click();
+  await expect(page.getByRole("tabpanel")).toContainText("用户希望被称为阿远");
+  await page.getByRole("tab", { name: "目标", exact: true }).click();
+  await expect(page.getByRole("tabpanel")).toContainText("寻找失踪的哥哥");
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
+  await page.getByRole("combobox", { name: "目标状态" }).selectOption("paused");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByRole("tabpanel")).toContainText("暂停");
+  await page.getByRole("button", { name: "关闭剧情与记忆" }).click();
+  await expect(page.getByRole("button", { name: "加入角色记忆" })).toHaveCount(
+    0,
+  );
+  await page.getByRole("button", { name: "角色与会话菜单" }).click();
+  await expect(page.getByRole("menuitem", { name: "整理剧情" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await send(page, "普通寒暄");
+  await expect(
+    page.getByRole("button", {
+      name: "已检查，剧情、记忆和目标无变化",
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("整理失败保留正文并仅重试整理，刷新后仍可展开", async ({ page }) => {
+  await createRole(page);
+  let fail = true;
+  let chatCalls = 0;
+  page.on("request", (r) => {
+    if (r.url().endsWith("/api/chat")) chatCalls++;
+  });
+  await page.route("**/api/state/update", async (route) => {
+    if (fail)
+      await route.fulfill({
+        status: 502,
+        json: { message: "整理服务暂不可用" },
+      });
+    else await route.continue();
+  });
+  await send(page, "这一轮检查失败");
+  const operation = page.getByRole("button", {
+    name: "正文已保存，整理待重试",
+    exact: true,
+  });
+  await expect(operation).toBeVisible();
+  await operation.click();
+  await expect(
+    page.getByText("“欢迎回来，旅人。”", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "重试回复", exact: true }),
+  ).toHaveCount(0);
+  fail = false;
+  await page.getByRole("button", { name: "重试此步骤", exact: true }).click();
+  await expect(
+    page.getByRole("button", {
+      name: "已检查，剧情、记忆和目标无变化",
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(chatCalls).toBe(1);
+  await page.reload();
+  await page
+    .getByRole("button", {
+      name: "已检查，剧情、记忆和目标无变化",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByText("已检查消息范围：1—2", { exact: true }),
+  ).toBeVisible();
 });

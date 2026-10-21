@@ -1,4 +1,6 @@
 import type { ContentPart } from "./images/types";
+import type { Story, StorySources } from "./state/types";
+export type { Memory } from "./state/types";
 
 export type CharacterProfile = {
   name: string;
@@ -44,7 +46,7 @@ export type Character = CharacterProfile & {
   id: string;
   archived: boolean;
   profileVersion: number;
-  sharedSummary: string;
+  memoryVersion: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -55,8 +57,10 @@ export type Session = {
   titleSource: "default" | "first-message" | "manual";
   characterSnapshot: CharacterProfile;
   profileVersion: number;
-  summary: string;
-  summaryThroughSeq: number;
+  story: Story;
+  storySources: StorySources;
+  stateVersion: number;
+  stateProcessedThroughSeq: number;
   nextMessageSeq: number;
   createdAt: string;
   updatedAt: string;
@@ -81,15 +85,6 @@ export type Message = {
   error?: string;
   replyToMessageId?: string;
   checkpointVersion: number;
-  createdAt: string;
-  updatedAt: string;
-};
-export type Memory = {
-  id: string;
-  characterId: string;
-  content: string;
-  sourceSessionId?: string;
-  sourceMessageId?: string;
   createdAt: string;
   updatedAt: string;
 };

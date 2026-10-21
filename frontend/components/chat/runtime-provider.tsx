@@ -34,14 +34,55 @@ import {
   useAppStore,
 } from "@/stores/use-app-store";
 
-const mapped = new WeakMap<Message, ThreadMessageLike>();
-function convertMessage(message: Message): ThreadMessageLike {
+import { projectMessages, type RuntimeEntry } from "@/lib/state/projection";
+const mapped = new WeakMap<RuntimeEntry, ThreadMessageLike>();
+function convertMessage(message: RuntimeEntry): ThreadMessageLike {
   const previous = mapped.get(message);
   if (previous) return previous;
+  if ("kind" in message) {
+    const failed =
+      ["failed", "cancelled", "stale"].includes(message.status) ||
+      !!message.error;
+    const complete = message.status === "committed";
+    const value: ThreadMessageLike = {
+      id: `activity:${message.id}`,
+      role: "assistant",
+      createdAt: new Date(message.createdAt),
+      content: [
+        {
+          type: "tool-call",
+          toolCallId: message.id,
+          toolName: message.kind,
+          args: { operationId: message.id, origin: "orchestrator" },
+          ...(complete || failed
+            ? {
+                result: message.result ?? { error: message.error },
+                isError: failed,
+              }
+            : {}),
+        },
+      ],
+      status: complete
+        ? { type: "complete", reason: "stop" }
+        : failed
+          ? {
+              type: "incomplete",
+              reason: message.status === "cancelled" ? "cancelled" : "other",
+            }
+          : { type: "running" },
+      metadata: { custom: { activity: true, segmented: true } },
+    };
+    mapped.set(message, value);
+    return value;
+  }
   const text = plainText(message);
   const note =
     message.error ||
-    (["pending", "streaming"].includes(message.status) ? "正在回复…" : "");
+    (message.status === "pending"
+      ? "等待生成正文…"
+      : message.status === "streaming"
+        ? "正在回复…"
+        : "");
   const value: ThreadMessageLike = {
     id: message.id,
     role: message.role,
@@ -257,6 +298,7 @@ function SessionRuntime({ children }: { children: ReactNode }) {
   const state = useAppStore(
     useShallow((state) => ({
       messages: state.messages,
+      operations: state.operations,
       sessions: state.sessions,
       loadingMessages: state.loadingMessages,
       readOnly: state.readOnly,
@@ -283,11 +325,20 @@ function SessionRuntime({ children }: { children: ReactNode }) {
     () => createImageAttachmentAdapter(state.sessionId ?? "", write),
     [state.sessionId],
   );
-  const runtime = useExternalStoreRuntime<Message>({
-    messages: state.messages,
+  const entries = useMemo(
+    () => projectMessages(state.messages, state.operations),
+    [state.messages, state.operations],
+  );
+  const runtime = useExternalStoreRuntime<RuntimeEntry>({
+    messages: entries,
     convertMessage,
     isLoading: state.loadingMessages,
-    isDisabled: state.readOnly || !state.sessionId || state.archived,
+    isDisabled:
+      state.loadingMessages ||
+      state.busy ||
+      state.readOnly ||
+      !state.sessionId ||
+      state.archived,
     isSendDisabled:
       preparingImages ||
       state.busy ||
