@@ -3,6 +3,9 @@ package com.example.service;
 import java.util.Objects;
 import java.util.function.Consumer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.example.web.dto.SegmentDelta;
 
 /**
@@ -11,6 +14,7 @@ import com.example.web.dto.SegmentDelta;
  * 只将 LF（\n）识别为换行。每次聊天创建一个实例，通过回调输出 SegmentDelta，不在多个请求之间共享。
 */
 public class SegmentStreamParser {
+    private static final Logger log = LoggerFactory.getLogger(SegmentStreamParser.class);
     private static final String DIALOGUE_MARKER = "[台词]";
     private static final String NARRATION_MARKER = "[描写]";
 
@@ -23,6 +27,8 @@ public class SegmentStreamParser {
     // null 表示当前行尚未识别类型。
     private String kind;
     private boolean lineHasContent;
+    private boolean lineMarked;
+    private boolean formatWarningLogged;
 
     /** 保存解析结果的接收函数，此处不开始解析。 */
     public SegmentStreamParser(Consumer<SegmentDelta> onDelta) {
@@ -64,6 +70,7 @@ public class SegmentStreamParser {
 
         if (DIALOGUE_MARKER.equals(candidate) || NARRATION_MARKER.equals(candidate)) {
             kind = DIALOGUE_MARKER.equals(candidate) ? "dialogue" : "narration";
+            lineMarked = true;
             prefix.setLength(0);
         } else if (DIALOGUE_MARKER.startsWith(candidate)
                 || NARRATION_MARKER.startsWith(candidate)) {
@@ -94,6 +101,7 @@ public class SegmentStreamParser {
 
         kind = null;
         lineHasContent = false;
+        lineMarked = false;
         content.setLength(0);
     }
 
@@ -104,6 +112,11 @@ public class SegmentStreamParser {
         // 行首或标记后的纯空白先缓存，避免空白行、只有标记的行产生空段。
         if (!lineHasContent && content.toString().isBlank()) {
             return;
+        }
+
+        if (!lineMarked && !formatWarningLogged) {
+            log.warn("模型回复未遵循分段协议：正文缺少 [台词]/[描写] 行首标记，已按描写保留");
+            formatWarningLogged = true;
         }
 
         String text = content.toString();

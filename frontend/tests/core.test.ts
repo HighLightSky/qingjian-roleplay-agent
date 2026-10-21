@@ -147,6 +147,83 @@ test("memories belong to characters and survive session deletion", async () => {
     [],
   );
 });
+test("multi-turn context restores every assistant line marker without changing visible text", async () => {
+  const { character, session } = await setup();
+  const expected = ["[描写]（她看向门口。）"];
+  for (let turn = 0; turn < 4; turn++) {
+    const input = `第${turn}轮：\n“[台词]这是用户原文。”`;
+    const body = chatContext(
+      character,
+      session,
+      [],
+      await allMessages(session.id),
+      input,
+      DEFAULT_INTERACTION_SETTINGS,
+    );
+    assert.equal(body.input.text, input);
+    assert.deepEqual(
+      body.history
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.text),
+      expected,
+    );
+    assert.deepEqual(
+      body.history
+        .filter((message) => message.role === "user")
+        .map((message) => message.text),
+      Array.from(
+        { length: turn },
+        (_, index) => `第${index}轮：\n“[台词]这是用户原文。”`,
+      ),
+    );
+    const { assistant } = await beginTurn(session.id, input);
+    let reply = assistant;
+    for (const delta of [
+      { kind: "narration" as const, text: `她翻到第${turn}页。\n` },
+      { kind: "narration" as const, text: "  指着一行字。\r\n\n" },
+      { kind: "dialogue" as const, text: "“看这里。”\n" },
+      { kind: "dialogue" as const, text: "下一行（保留括号）。" },
+    ])
+      reply = appendDelta(reply, delta);
+    await checkpoint({
+      ...reply,
+      status: "complete",
+      checkpointVersion: reply.checkpointVersion + 1,
+    });
+    expected.push(
+      `[描写]她翻到第${turn}页。\n[描写]  指着一行字。\n[台词]“看这里。”\n[台词]下一行（保留括号）。`,
+    );
+    assert.equal(
+      plainText(reply),
+      `她翻到第${turn}页。\n  指着一行字。\r\n\n\n“看这里。”\n下一行（保留括号）。`,
+    );
+  }
+});
+test("interrupted history retains typed content and marks its completion note as narration", async () => {
+  const { character, session } = await setup();
+  const { assistant } = await beginTurn(session.id, "看看地图");
+  await checkpoint({
+    ...appendDelta(assistant, { kind: "dialogue", text: "这条路通往" }),
+    status: "interrupted",
+    checkpointVersion: 2,
+  });
+  // 下一轮尚未收到正文的占位消息不应进入模型历史。
+  await beginTurn(session.id, "继续");
+  const body = chatContext(
+    character,
+    session,
+    [],
+    await allMessages(session.id),
+    "然后呢",
+    DEFAULT_INTERACTION_SETTINGS,
+  );
+  assert.deepEqual(
+    body.history
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.text),
+    ["[描写]（她看向门口。）", "[台词]这条路通往\n[描写]（该回复未完成。）"],
+  );
+});
 test("older history is included as raw context, not silently dropped by the 20-message backend cap", async () => {
   const { character, session } = await setup();
   for (let i = 0; i < 15; i++) {
@@ -169,6 +246,7 @@ test("older history is included as raw context, not silently dropped by the 20-m
   );
   assert.equal(body.history.length, 20);
   assert.match(body.summary, /消息0/);
+  assert.match(body.summary, /林溪：\[台词\]回复0/);
   assert.equal(body.input.text, "本轮");
   const long = history.map((message) =>
     message.role === "user" ? { ...message, text: "a".repeat(4000) } : message,

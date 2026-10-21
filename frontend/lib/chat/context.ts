@@ -9,6 +9,30 @@ import {
   type InteractionSettings,
 } from "../domain";
 
+function historyText(message: Message): string {
+  // 历史回复也是模型的格式示例；同类增量合并后，每一行仍需恢复标记。
+  const text =
+    message.role === "user"
+      ? plainText(message)
+      : message
+          .segments!.flatMap((segment) =>
+            segment.text
+              .split(/\r?\n/)
+              .filter((line) => line.trim())
+              .map(
+                (line) =>
+                  `[${segment.kind === "dialogue" ? "台词" : "描写"}]${line}`,
+              ),
+          )
+          .join("\n");
+  return (
+    text +
+    (message.status === "complete"
+      ? ""
+      : `\n${message.role === "assistant" ? "[描写]" : ""}（该回复未完成。）`)
+  );
+}
+
 export function chatContext(
   character: Character,
   session: Session,
@@ -29,9 +53,7 @@ export function chatContext(
       seq: message.seq,
       id: message.id,
       parts: message.parts,
-      text:
-        plainText(message) +
-        (message.status === "complete" ? "" : "\n（该回复未完成。）"),
+      text: historyText(message),
     }));
   const recent = history.slice(-20);
   const firstRecent = recent[0]?.seq ?? Number.MAX_SAFE_INTEGER;

@@ -33,6 +33,43 @@ async function chooseSetting(page: Page, label: string, option: string) {
   ).toBeEnabled();
 }
 
+test("dialogue and narration retain their styles and typed history across turns and reloads", async ({
+  page,
+}) => {
+  const requests: { history: { role: string; text: string }[] }[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/chat"))
+      requests.push(request.postDataJSON());
+  });
+  await createRole(page);
+  for (let turn = 1; turn <= 4; turn++) {
+    await send(page, `第${turn}轮，看看地图`);
+    await expect(
+      page.getByRole("button", { name: "发送消息", exact: true }),
+    ).toBeVisible();
+    expect(requests).toHaveLength(turn);
+    expect(
+      requests
+        .at(-1)!
+        .history.filter((message) => message.role === "assistant"),
+    ).toEqual(
+      Array.from({ length: turn - 1 }, () => ({
+        role: "assistant",
+        text: "[描写]（她放下烛台，望向门口。）\n[台词]“欢迎回来，旅人。”",
+      })),
+    );
+    const dialogue = page.getByText("“欢迎回来，旅人。”", { exact: true });
+    const narration = page.getByText("（她放下烛台，望向门口。）", {
+      exact: true,
+    });
+    await expect(dialogue).toHaveCount(turn);
+    await expect(narration).toHaveCount(turn);
+    await expect(dialogue.last()).toHaveClass(/bg-accent/);
+    await expect(narration.last()).not.toHaveClass(/bg-accent/);
+    if (turn === 2) await page.reload();
+  }
+});
+
 test("interaction settings persist globally across sessions, characters and reloads", async ({
   page,
 }) => {

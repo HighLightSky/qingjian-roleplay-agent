@@ -1,11 +1,15 @@
 package com.example.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
 import com.example.web.dto.SegmentDelta;
 
@@ -44,6 +48,22 @@ class SegmentStreamParserTest {
                 List.of(
                         new SegmentDelta("narration",
                                 "  普通描写[台词]仍是正文\n  “没有标记的台词。”\n[未知]保留原文")));
+    }
+
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void reportsUnmarkedOutputOncePerReplyWithoutLoggingItsContent(CapturedOutput output) {
+        List<SegmentDelta> deltas = new ArrayList<>();
+        SegmentStreamParser parser = new SegmentStreamParser(deltas::add);
+        parser.feed("[描写]符合协议的正文\n\n[台词]\n");
+        assertEquals("", output.getOut());
+
+        parser.feed("缺少标记");
+        parser.feed("的第一行\n第二行\n[台");
+        parser.finish();
+        assertEquals(1, output.getOut().lines().filter(line -> line.contains("模型回复未遵循分段协议")).count());
+        assertFalse(output.getOut().contains("缺少标记的第一行"));
+        assertEquals(List.of(new SegmentDelta("narration", "符合协议的正文\n缺少标记的第一行\n第二行\n[台")), merge(deltas));
     }
 
     @Test
