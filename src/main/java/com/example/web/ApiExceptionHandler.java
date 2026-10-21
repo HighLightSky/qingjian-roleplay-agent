@@ -2,6 +2,7 @@ package com.example.web;
 
 import java.io.IOException;
 import java.net.http.HttpTimeoutException;
+import java.util.StringJoiner;
 
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -15,7 +16,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import com.example.web.dto.ApiError;
 
-/** 流式输出开始前的错误统一返回 JSON，不将上游错误正文或密钥发送给浏览器。 */
+/** 流式输出开始前的错误统一返回 JSON，异常详情供前端展示失败原因。 */
 @RestControllerAdvice
 public class ApiExceptionHandler {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ApiExceptionHandler.class);
@@ -58,9 +59,13 @@ public class ApiExceptionHandler {
     static ApiError toModelError(Exception exception) {
         if (exception instanceof com.example.service.ContextTooLargeException)
             return new ApiError("CONTEXT_TOO_LARGE", exception.getMessage());
+        StringJoiner details = new StringJoiner("；原因：");
+        for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
+            details.add(cause.toString());
+        }
         return exception instanceof HttpTimeoutException
-                ? new ApiError("MODEL_TIMEOUT", "模型请求超时，请稍后重试。")
-                : new ApiError("MODEL_ERROR", "模型服务调用失败，请稍后重试。");
+                ? new ApiError("MODEL_TIMEOUT", "模型请求超时，请稍后重试。原因：" + details)
+                : new ApiError("MODEL_ERROR", "模型服务调用失败，请稍后重试。原因：" + details);
     }
 
     private ResponseEntity<ApiError> jsonError(HttpStatus status, ApiError error) {

@@ -113,14 +113,14 @@ class ChatControllerTest {
     }
 
     @Test
-    void sendsModelErrorAfterContextWithoutLeakingUpstreamDetails() throws Exception {
-        doAnswer(invocation -> { throw new IOException("secret-api-key upstream body"); })
+    void sendsModelErrorAfterContextWithUpstreamDetails() throws Exception {
+        doAnswer(invocation -> { throw new IOException("模型接口返回 HTTP 503"); })
                 .when(llmClient).chatStream(any(), any());
         HttpResponse<String> response = post(validJson());
         assertEquals(200, response.statusCode());
         assertTrue(response.body().contains("event:context"));
         assertTrue(response.body().contains("MODEL_ERROR"));
-        assertFalse(response.body().contains("secret"));
+        assertTrue(response.body().contains("模型接口返回 HTTP 503"));
     }
 
     @Test
@@ -130,6 +130,7 @@ class ChatControllerTest {
         var response = post(validJson());
         assertEquals(200, response.statusCode());
         assertTrue(response.body().contains("MODEL_TIMEOUT"));
+        assertTrue(response.body().contains("upstream timed out"));
     }
 
     @Test
@@ -137,7 +138,7 @@ class ChatControllerTest {
         doAnswer(invocation -> {
             Consumer<String> onText = invocation.getArgument(1);
             onText.accept("[描写]部分内容");
-            throw new IOException("upstream secret");
+            throw new IOException("模型事件流读取失败", new IOException("连接已重置"));
         }).when(llmClient).chatStream(any(), any());
         HttpResponse<String> response = post(validJson());
         assertEquals(200, response.statusCode());
@@ -145,7 +146,8 @@ class ChatControllerTest {
         assertTrue(response.body().contains("event:error"));
         assertTrue(response.body().contains("MODEL_ERROR"));
         assertFalse(response.body().contains("event:done"));
-        assertFalse(response.body().contains("secret"));
+        assertTrue(response.body().contains("模型事件流读取失败"));
+        assertTrue(response.body().contains("连接已重置"));
     }
 
     @Test
