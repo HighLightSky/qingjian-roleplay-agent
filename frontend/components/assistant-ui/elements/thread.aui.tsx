@@ -528,7 +528,7 @@ const ComposerAction: FC = () => {
         <ComposerAddAttachment />
         {ComposerControls && <ComposerControls />}
         <span className="text-xs text-muted-foreground">
-          {length ? `${length} / 2000` : "让故事继续"}
+          {length ? `${length} / 2000` : ""}
         </span>
       </div>
       <AuiIf condition={(state) => !state.composer.canCancel}>

@@ -67,13 +67,42 @@ class StateUpdateServiceTest {
 
     @Test void returnsCanonicalBeforeAfterAndServerAssignedIds() throws Exception {
         answer(output("[" + change("location", "\"旅馆\"") + "]", "[" + change("", memoryValue("character")) + "]",
-                "[" + change("", "{\"description\":\"寻找哥哥\",\"status\":\"active\",\"currentFocus\":\"询问掌柜\",\"clues\":[\"旅馆登记\"],\"milestones\":[],\"blockers\":[]}") + "]"));
+                "[" + change("", "{\"description\":\"寻找哥哥\",\"status\":\"active\",\"currentFocus\":\"询问掌柜\",\"progressSummary\":\"为了寻找哥哥来到旅馆，发现登记册可能有线索。\"}") + "]"));
         var result = service.update(request());
         assertEquals("", result.storyChanges().getFirst().before().asText());
         assertEquals("旅馆", result.storyChanges().getFirst().value().asText());
         assertFalse(result.memoryChanges().getFirst().id().isBlank());
         assertTrue(result.memoryChanges().getFirst().before().isNull());
         assertEquals("active", result.goalChanges().getFirst().value().path("status").asText());
+        assertTrue(result.goalChanges().getFirst().value().path("progressSummary").asText().contains("为了寻找哥哥来到旅馆"));
+    }
+
+    @Test void updatesBothPeopleAndCumulativeGoalProgressWithCanonicalBeforeValues() throws Exception {
+        var state = TestRequests.state(List.of());
+        var value = new GoalValue("寻找哥哥", "active", "询问掌柜", "为寻找哥哥来到旅馆，发现旧登记册。");
+        var goal = new Goal("goal", "session", value, 1, "automatic", List.of(), "2026-10-20T00:00:00Z");
+        var snapshot = new Snapshot("session", "character", 0, 0, 0, state.story(), Map.of(), List.of(), List.of(goal));
+        String progress = "为寻找哥哥来到旅馆，发现旧登记册；掌柜确认哥哥昨天离店，留下前往码头的信息。";
+        String goalJson = mapper.writeValueAsString(new GoalValue("寻找哥哥", "active", "核实码头消息", progress));
+        answer(output("[" + change("characterState", "\"穿着灰色外套，神情平静，手腕受伤\"") + ","
+                + change("userState", "\"穿着校服，自述紧张，身体状态未明确\"") + "]", "[]",
+                "[" + change("goal", goalJson).replace("expectedVersion\":0", "expectedVersion\":1") + "]"));
+        var result = service.update(request(snapshot, null, List.of()));
+        assertEquals(2, result.storyChanges().size());
+        assertEquals("", result.storyChanges().getFirst().before().asText());
+        assertEquals("穿着灰色外套，神情平静，手腕受伤", result.storyChanges().getFirst().value().asText());
+        assertEquals(value.progressSummary(), result.goalChanges().getFirst().before().path("progressSummary").asText());
+        assertEquals(progress, result.goalChanges().getFirst().value().path("progressSummary").asText());
+        verify(model).chat(argThat(call -> call.getMessages().get(1).getParts().getFirst().text().contains(value.progressSummary())));
+    }
+
+    @Test void rejectsOldGoalShapeAndInvalidPeopleState() throws Exception {
+        answer(output("[]", "[]", "[" + change("", "{\"description\":\"目标\",\"status\":\"active\",\"currentFocus\":\"\",\"clues\":[],\"milestones\":[],\"blockers\":[]}") + "]"));
+        assertThrows(IOException.class, () -> service.update(request()));
+        for (String field : List.of("characterState", "userState")) {
+            answer(output("[" + change(field, "[\"错误的列表\"]") + "]", "[]", "[]"));
+            assertThrows(IOException.class, () -> service.update(request()));
+        }
     }
 
     @Test void rejectsInventedReferencesUnknownFieldsAndDuplicateChanges() throws Exception {
@@ -137,10 +166,10 @@ class StateUpdateServiceTest {
 
     @Test void manualGoalEditsAlsoRequireLaterEvidence() throws Exception {
         var state = TestRequests.state(List.of());
-        var value = new GoalValue("寻找哥哥", "active", "问掌柜", List.of(), List.of(), List.of());
+        var value = new GoalValue("寻找哥哥", "active", "问掌柜", "已来到旅馆寻找哥哥。");
         var goal = new Goal("goal", "session", value, 1, "manual", List.of(), "2027-01-01T00:00:00Z");
         var snapshot = new Snapshot("session", "character", 0, 0, 0, state.story(), Map.of(), List.of(), List.of(goal));
-        String update = change("goal", "{\"description\":\"寻找哥哥\",\"status\":\"completed\",\"currentFocus\":\"\",\"clues\":[],\"milestones\":[],\"blockers\":[]}")
+        String update = change("goal", "{\"description\":\"寻找哥哥\",\"status\":\"completed\",\"currentFocus\":\"\",\"progressSummary\":\"已找到哥哥。\"}")
                 .replace("expectedVersion\":0", "expectedVersion\":1");
         answer(output("[]", "[]", "[" + update + "]"));
         assertThrows(IOException.class, () -> service.update(request(snapshot, null, List.of())));

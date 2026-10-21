@@ -53,7 +53,7 @@ export type Snapshot = {
 };
 export type Backup = {
   format: "roleplay-agent-backup";
-  formatVersion: 4;
+  formatVersion: 5;
   exportedAt: string;
   data: Snapshot;
 };
@@ -66,7 +66,7 @@ export function validateBackup(value: unknown): Backup {
   object(value);
   if (new Blob([JSON.stringify(value)]).size > 50 * 1024 * 1024)
     throw new Error("备份不能超过 50 MiB。");
-  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 4)
+  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 5)
     throw new Error("不支持此备份格式或版本，请选择本应用导出的文件。");
   date(value.exportedAt);
   object(value.data);
@@ -234,7 +234,7 @@ export function validateBackup(value: unknown): Backup {
   validateImages(snapshot);
   return {
     format: "roleplay-agent-backup",
-    formatVersion: 4,
+    formatVersion: 5,
     exportedAt: value.exportedAt as string,
     data: snapshot,
   };
@@ -589,7 +589,7 @@ export async function takeSnapshot(): Promise<Backup> {
   }
   const backup: Backup = {
     format: "roleplay-agent-backup",
-    formatVersion: 4,
+    formatVersion: 5,
     exportedAt: new Date().toISOString(),
     data: { ...data, assets: serialized },
   };

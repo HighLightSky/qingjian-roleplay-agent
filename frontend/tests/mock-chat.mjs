@@ -109,12 +109,51 @@ createServer(async (request, response) => {
               description: "寻找失踪的哥哥",
               status: "active",
               currentFocus: "询问掌柜",
-              clues: ["登记册"],
-              milestones: [{ description: "检查登记册", status: "discovered" }],
-              blockers: [],
+              progressSummary:
+                "为了寻找哥哥来到旅馆，得知登记册可能留下了相关信息。",
             },
           });
       }
+    }
+    if (
+      request.url === "/api/state/update" &&
+      data.context.input.text.includes("人物状态测试")
+    ) {
+      for (const [id, value] of Object.entries({
+        characterState: "灰色外套，神情平静，手腕受伤。",
+        userState: "白色校服，自述紧张，暂无受伤信息。",
+        items: ["旅馆柜台上的登记册，夹有哥哥留下的纸条"],
+      }))
+        result.storyChanges.push({
+          action: "update",
+          id,
+          value,
+          expectedVersion: data.context.state.sessionVersion,
+          before: data.context.state.story[id],
+          reason: "本轮明确呈现双方状态与环境物品",
+          sourceMessageIds: data.messages.map((message) => message.id),
+        });
+    }
+    if (
+      request.url === "/api/state/update" &&
+      data.context.input.text.includes("目标进展测试")
+    ) {
+      const previous = data.context.state.goals[0];
+      result.goalChanges.push({
+        action: "update",
+        id: previous.id,
+        expectedVersion: previous.version,
+        before: previous.value,
+        value: {
+          ...previous.value,
+          currentFocus: "核实码头消息",
+          progressSummary:
+            previous.value.progressSummary +
+            "掌柜确认哥哥昨天离店，留下前往码头的信息。",
+        },
+        reason: "新对话补充了哥哥的去向",
+        sourceMessageIds: data.messages.map((message) => message.id),
+      });
     }
     response
       .writeHead(200, { "content-type": "application/json" })

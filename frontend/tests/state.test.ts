@@ -96,6 +96,20 @@ function updates(body: UpdateBody): StateResult {
       sourceMessageIds,
     },
   ];
+  result.storyChanges.push(
+    ...(["characterState", "userState"] as const).map((id) => ({
+      action: "update" as const,
+      id,
+      expectedVersion: body.context.state.sessionVersion,
+      before: "",
+      value:
+        id === "characterState"
+          ? "穿灰外套，神情平静，手腕受伤"
+          : "穿校服，自述紧张",
+      reason: "对话明确呈现",
+      sourceMessageIds,
+    })),
+  );
   result.memoryChanges = [
     {
       action: "create",
@@ -117,9 +131,7 @@ function updates(body: UpdateBody): StateResult {
         description: "寻找哥哥",
         status: "active",
         currentFocus: "询问掌柜",
-        clues: ["旅馆登记"],
-        milestones: [],
-        blockers: [],
+        progressSummary: "为了寻找哥哥来到旅馆，得知登记册可能留下了相关信息。",
       },
       reason: "对话形成目标",
       sourceMessageIds,
@@ -160,9 +172,20 @@ test("剧情、记忆和目标同时提交，下一轮按会话隔离注入", as
     const memories = await db.getAll("memories"),
       goals = await db.getAll("goals");
     assert.equal(current.story.location, "旅馆");
+    assert.equal(current.story.characterState, "穿灰外套，神情平静，手腕受伤");
+    assert.equal(current.story.userState, "穿校服，自述紧张");
     assert.equal(current.stateVersion, 1);
     assert.equal(memories[0].version, 1);
     assert.equal(goals[0].value.currentFocus, "询问掌柜");
+    const nextContext = stateSnapshot(character, current, memories, goals);
+    assert.equal(
+      nextContext.goals[0].value.progressSummary,
+      "为了寻找哥哥来到旅馆，得知登记册可能留下了相关信息。",
+    );
+    assert.equal(
+      nextContext.story.characterState,
+      current.story.characterState,
+    );
     const other = await createSession(character.id);
     assert.deepEqual(
       stateSnapshot(character, other, memories, []).memories,

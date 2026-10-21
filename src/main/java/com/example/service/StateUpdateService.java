@@ -103,7 +103,7 @@ public class StateUpdateService {
         int limit = switch (kind) {
             case "memory" -> ContextLimits.MEMORIES;
             case "goal" -> ContextLimits.GOALS;
-            default -> 6;
+            default -> StateValidation.STORY_FIELDS.size();
         };
         if (proposals.size() > limit)
             throw new IOException("整理变更数量超限");
@@ -125,9 +125,7 @@ public class StateUpdateService {
             JsonNode value;
             int version;
             if ("story".equals(kind)) {
-                if (create || p.id() == null || !Set
-                        .of("location", "storyTime", "presentCharacters", "relationships", "items", "openThreads")
-                        .contains(p.id()))
+                if (create || p.id() == null || !StateValidation.STORY_FIELDS.contains(p.id()))
                     throw new IOException("剧情字段或操作无效");
 
                 var full = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.valueToTree(s.story());

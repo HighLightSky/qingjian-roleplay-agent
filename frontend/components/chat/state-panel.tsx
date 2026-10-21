@@ -1,6 +1,6 @@
 "use client";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { XIcon, PlusIcon } from "lucide-react";
+import { XIcon, PlusIcon, StarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -14,6 +14,7 @@ import {
 import { errorText } from "@/lib/domain";
 import {
   STORY_LABELS,
+  STORY_TEXT_FIELDS,
   GOAL_LABELS,
   type Story,
   type Memory,
@@ -21,7 +22,7 @@ import {
   type MemoryValue,
   type GoalValue,
 } from "@/lib/state/types";
-import { SourceLinks } from "./operation-tool";
+import { SourceLinks } from "./source-links";
 
 const selectClass = "min-h-10 rounded border bg-background px-2 text-sm";
 const lines = (value: string) =>
@@ -107,7 +108,7 @@ function StoryEditor({
       Object.fromEntries(
         Object.entries(value).map(([k, v]) => [
           k,
-          k === "location" || k === "storyTime" ? v : lines(v),
+          STORY_TEXT_FIELDS.includes(k) ? v : lines(v),
         ]),
       ) as Story,
       version,
@@ -226,23 +227,11 @@ function GoalEditor({
       description: "",
       status: "active",
       currentFocus: "",
-      clues: [],
-      milestones: [],
-      blockers: [],
+      progressSummary: "",
     },
   );
-  const [clues, setClues] = useState(value.clues.join("\n"));
-  const [blockers, setBlockers] = useState(value.blockers.join("\n"));
   return (
-    <Editor
-      save={() =>
-        saveGoal(
-          { ...value, clues: lines(clues), blockers: lines(blockers) },
-          existing,
-        )
-      }
-      close={close}
-    >
+    <Editor save={() => saveGoal(value, existing)} close={close}>
       <Field label="目标描述">
         <Textarea
           autoFocus
@@ -275,9 +264,9 @@ function GoalEditor({
             ))}
         </select>
       </Field>
-      <Field label="当前关注">
+      <Field label="当前关注点">
         <Textarea
-          aria-label="当前关注"
+          aria-label="当前关注点"
           maxLength={2000}
           value={value.currentFocus}
           onChange={(e) =>
@@ -285,90 +274,18 @@ function GoalEditor({
           }
         />
       </Field>
-      {(["clues", "blockers"] as const).map((key) => (
-        <Field
-          key={key}
-          label={key === "clues" ? "线索（每行一项）" : "阻碍（每行一项）"}
-        >
-          <Textarea
-            aria-label={key === "clues" ? "目标线索" : "目标阻碍"}
-            value={key === "clues" ? clues : blockers}
-            onChange={(e) =>
-              (key === "clues" ? setClues : setBlockers)(e.target.value)
-            }
-          />
-        </Field>
-      ))}
-      <div className="grid gap-2">
-        <p className="text-sm">目标阶段</p>
-        {value.milestones.map((m, index) => (
-          <div key={index} className="grid gap-2 rounded border p-2">
-            <input
-              className={selectClass}
-              aria-label={`阶段 ${index + 1}`}
-              maxLength={2000}
-              value={m.description}
-              onChange={(e) =>
-                setValue((v) => ({
-                  ...v,
-                  milestones: v.milestones.map((old, i) =>
-                    i === index ? { ...old, description: e.target.value } : old,
-                  ),
-                }))
-              }
-            />
-            <select
-              className={selectClass}
-              aria-label={`阶段 ${index + 1} 状态`}
-              value={m.status}
-              onChange={(e) =>
-                setValue((v) => ({
-                  ...v,
-                  milestones: v.milestones.map((old, i) =>
-                    i === index
-                      ? { ...old, status: e.target.value as typeof m.status }
-                      : old,
-                  ),
-                }))
-              }
-            >
-              <option value="discovered">已发现</option>
-              <option value="in_progress">进行中</option>
-              <option value="completed">已完成</option>
-              <option value="discarded">已排除</option>
-            </select>
-            <Button
-              size="sm"
-              variant="ghost"
-              type="button"
-              onClick={() =>
-                setValue((v) => ({
-                  ...v,
-                  milestones: v.milestones.filter((_, i) => i !== index),
-                }))
-              }
-            >
-              移除阶段
-            </Button>
-          </div>
-        ))}
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() =>
-            setValue((v) => ({
-              ...v,
-              milestones: [
-                ...v.milestones,
-                { description: "", status: "discovered" },
-              ],
-            }))
+      <Field label="完成过程">
+        <Textarea
+          aria-label="完成过程"
+          rows={5}
+          maxLength={2000}
+          placeholder="用一小段话记录从目标开始以来的重要行动、信息与进展"
+          value={value.progressSummary}
+          onChange={(e) =>
+            setValue((v) => ({ ...v, progressSummary: e.target.value }))
           }
-        >
-          添加阶段
-        </Button>
-      </div>
+        />
+      </Field>
     </Editor>
   );
 }
@@ -388,9 +305,9 @@ export function StatePanel() {
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex items-start justify-between border-b p-5">
         <div>
-          <h2 className="font-medium">剧情与记忆</h2>
+          <h2 className="text-base font-semibold tracking-wide">剧情与记忆</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            自动检查；人工修改后继续自动维护
+            记录当下，延续故事
           </p>
         </div>
         <Button
@@ -405,7 +322,7 @@ export function StatePanel() {
       <div
         role="tablist"
         aria-label="剧情状态管理"
-        className="flex gap-1 border-b px-3 py-2"
+        className="grid grid-cols-3 border-b px-5"
       >
         {(
           [
@@ -420,7 +337,8 @@ export function StatePanel() {
             role="tab"
             aria-selected={tab === key}
             aria-controls={`state-panel-${key}`}
-            variant={tab === key ? "secondary" : "ghost"}
+            variant="ghost"
+            className={`h-12 rounded-none border-b-2 hover:bg-transparent ${tab === key ? "border-foreground text-foreground" : "border-transparent text-muted-foreground"}`}
             onClick={() => {
               setTab(key);
               setEditing(undefined);
@@ -454,24 +372,32 @@ export function StatePanel() {
               >
                 修改剧情
               </Button>
-              <dl className="mt-4 grid gap-4">
+              <dl className="mt-4 divide-y">
                 {(Object.keys(STORY_LABELS) as (keyof Story)[]).map((key) => (
-                  <div key={key}>
-                    <dt className="text-xs text-muted-foreground">
+                  <div
+                    key={key}
+                    className="py-4 first:pt-1"
+                    data-story-field={key}
+                  >
+                    <dt className="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
                       {STORY_LABELS[key]}
+                      {session.storySources[key]?.origin === "manual" && (
+                        <StarIcon
+                          className="size-3 fill-current"
+                          aria-label="手动修改"
+                          role="img"
+                        >
+                          <title>手动修改</title>
+                        </StarIcon>
+                      )}
                     </dt>
-                    <dd className="mt-1 whitespace-pre-wrap text-sm leading-6">
+                    <dd className="mt-2 whitespace-pre-wrap text-sm leading-7">
                       {(Array.isArray(session.story[key])
                         ? session.story[key].join("\n")
                         : session.story[key]) || "尚未记录"}
                     </dd>
                     {session.storySources[key] && (
                       <div className="mt-1">
-                        <p className="text-xs text-muted-foreground">
-                          {session.storySources[key]!.origin === "manual"
-                            ? "人工修改"
-                            : "自动整理"}
-                        </p>
                         <SourceLinks
                           ids={session.storySources[key]!.sourceMessageIds}
                         />
@@ -515,7 +441,6 @@ export function StatePanel() {
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {m.value.scope === "character" ? "角色共享" : "当前会话"} ·{" "}
-                    {m.origin === "manual" ? "人工修改" : "自动整理"} ·{" "}
                     {m.value.epistemicStatus === "established"
                       ? "已确认"
                       : m.value.epistemicStatus === "claim"
@@ -577,20 +502,35 @@ export function StatePanel() {
                   key={g.id}
                   className="space-y-2 border-b py-4 text-sm leading-6"
                 >
-                  <p className="font-medium">{g.value.description}</p>
-                  <p>{GOAL_LABELS[g.value.status]}</p>
-                  <p>当前关注：{g.value.currentFocus || "无"}</p>
-                  <p>线索：{g.value.clues.join("；") || "无"}</p>
-                  <p>
-                    阶段：
-                    {g.value.milestones
-                      .map(
-                        (m) =>
-                          `${m.description}（${m.status === "completed" ? "已完成" : m.status === "discarded" ? "已排除" : m.status === "in_progress" ? "进行中" : "已发现"}）`,
-                      )
-                      .join("；") || "无"}
-                  </p>
-                  <p>阻碍：{g.value.blockers.join("；") || "无"}</p>
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="min-w-0 font-medium">
+                      {g.value.description}
+                    </h3>
+                    <span
+                      className="mt-0.5 shrink-0 rounded-full border px-2 py-0.5 text-[11px] leading-4 text-muted-foreground"
+                      data-goal-status={g.value.status}
+                    >
+                      {GOAL_LABELS[g.value.status]}
+                    </span>
+                  </div>
+                  <dl className="space-y-3 pt-2">
+                    <div>
+                      <dt className="text-xs text-muted-foreground">
+                        当前关注点
+                      </dt>
+                      <dd className="mt-1 whitespace-pre-wrap">
+                        {g.value.currentFocus || "尚未记录"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">
+                        完成过程
+                      </dt>
+                      <dd className="mt-1 whitespace-pre-wrap leading-7">
+                        {g.value.progressSummary || "尚未记录"}
+                      </dd>
+                    </div>
+                  </dl>
                   <SourceLinks ids={g.sourceMessageIds} />
                   <div className="flex gap-2">
                     <Button

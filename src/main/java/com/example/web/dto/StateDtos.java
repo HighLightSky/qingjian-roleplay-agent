@@ -9,7 +9,7 @@ public final class StateDtos {
     private StateDtos() {
     }
 
-    public record Story(String location, String storyTime, List<String> presentCharacters,
+    public record Story(String location, String storyTime, String characterState, String userState, List<String> presentCharacters,
             List<String> relationships, List<String> items, List<String> openThreads) {
         public Story {
             presentCharacters = list(presentCharacters);
@@ -29,16 +29,7 @@ public final class StateDtos {
         }
     }
 
-    public record Milestone(String description, String status) {
-    }
-
-    public record GoalValue(String description, String status, String currentFocus, List<String> clues,
-            List<Milestone> milestones, List<String> blockers) {
-        public GoalValue {
-            clues = list(clues);
-            milestones = list(milestones);
-            blockers = list(blockers);
-        }
+    public record GoalValue(String description, String status, String currentFocus, String progressSummary) {
     }
 
     public record Goal(String id, String sessionId, GoalValue value, int version, String origin,

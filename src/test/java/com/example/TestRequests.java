@@ -14,6 +14,6 @@ public final class TestRequests {
                     1, "manual", "session", List.of(), "2000-01-01T00:00:00Z"));
         }
         return new Snapshot("session", "character", 0, 0, 0,
-                new Story("", "", List.of(), List.of(), List.of(), List.of()), Map.of(), memories, List.of());
+                new Story("", "", "", "", List.of(), List.of(), List.of(), List.of()), Map.of(), memories, List.of());
     }
 }

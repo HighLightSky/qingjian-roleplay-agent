@@ -4,12 +4,20 @@ import type { Observation, ImagePlan, CatalogAsset } from "../images/types";
 export const EMPTY_STORY = {
   location: "",
   storyTime: "",
+  characterState: "",
+  userState: "",
   presentCharacters: [] as string[],
   relationships: [] as string[],
   items: [] as string[],
   openThreads: [] as string[],
 };
 export type Story = typeof EMPTY_STORY;
+export const STORY_TEXT_FIELDS = [
+  "location",
+  "storyTime",
+  "characterState",
+  "userState",
+];
 export type StorySources = Partial<
   Record<
     keyof Story,
@@ -23,6 +31,8 @@ export type StorySources = Partial<
 export const STORY_LABELS: Record<keyof Story, string> = {
   location: "地点",
   storyTime: "故事时间",
+  characterState: "角色状态",
+  userState: "我的状态",
   presentCharacters: "在场人物",
   relationships: "人物关系",
   items: "物品状态",
@@ -60,12 +70,7 @@ export type GoalValue = {
   description: string;
   status: keyof typeof GOAL_LABELS;
   currentFocus: string;
-  clues: string[];
-  milestones: {
-    description: string;
-    status: "discovered" | "in_progress" | "completed" | "discarded";
-  }[];
-  blockers: string[];
+  progressSummary: string;
 };
 export type Goal = {
   id: string;

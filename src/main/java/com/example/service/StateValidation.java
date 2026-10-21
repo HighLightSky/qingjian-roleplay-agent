@@ -5,6 +5,9 @@ import com.example.web.dto.StateDtos.*;
 
 /** 聊天、选图、整理入口共用的领域边界约束。 */
 public final class StateValidation {
+    public static final Set<String> STORY_FIELDS = Set.of("location", "storyTime", "characterState", "userState",
+            "presentCharacters", "relationships", "items", "openThreads");
+
     private StateValidation() {
     }
 
@@ -16,7 +19,7 @@ public final class StateValidation {
         id(s.characterId());
         story(s.story());
         for (var entry : s.storySources().entrySet()) {
-            if (!Set.of("location", "storyTime", "presentCharacters", "relationships", "items", "openThreads").contains(entry.getKey()))
+            if (!STORY_FIELDS.contains(entry.getKey()))
                 throw new IllegalArgumentException("剧情来源字段无效");
             origin(entry.getValue().origin());
             date(entry.getValue().updatedAt());
@@ -53,6 +56,8 @@ public final class StateValidation {
     public static void story(Story s) {
         text(s.location(), ContextLimits.STATE_TEXT_CHARS);
         text(s.storyTime(), ContextLimits.STATE_TEXT_CHARS);
+        text(s.characterState(), ContextLimits.STATE_TEXT_CHARS);
+        text(s.userState(), ContextLimits.STATE_TEXT_CHARS);
         strings(s.presentCharacters());
         strings(s.relationships());
         strings(s.items());
@@ -76,14 +81,7 @@ public final class StateValidation {
         choice(v.status(), Set.of("candidate", "active", "blocked", "paused", "completed", "abandoned", "dismissed"),
                 "目标状态");
         text(v.currentFocus(), ContextLimits.STATE_TEXT_CHARS);
-        strings(v.clues());
-        strings(v.blockers());
-        if (v.milestones().size() > ContextLimits.LIST_ITEMS)
-            throw new IllegalArgumentException("目标阶段数量超限");
-        for (Milestone m : v.milestones()) {
-            nonblank(m.description(), ContextLimits.STATE_TEXT_CHARS);
-            choice(m.status(), Set.of("discovered", "in_progress", "completed", "discarded"), "阶段状态");
-        }
+        text(v.progressSummary(), ContextLimits.STATE_TEXT_CHARS);
     }
 
     public static void strings(List<String> values) {

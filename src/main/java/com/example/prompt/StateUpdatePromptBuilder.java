@@ -54,11 +54,18 @@ public class StateUpdatePromptBuilder {
                 "expectedVersion":0,"value":{},"reason":"中文依据","sourceMessageIds":["消息ID"]}
                 create 的 expectedVersion=0；update 必须使用快照中当前版本。剧情只能 update，版本为 sessionVersion。
                 sourceMessageIds 必须非空，只能引用 messages 中 complete 的 user/assistant 消息；不能引用之前的最近历史来制造新变更。
-                剧情字段仅 location、storyTime（字符串）、presentCharacters、relationships、items、openThreads（字符串数组）。value 是对应字段的新值。
+                剧情字段仅 location、storyTime、characterState、userState（字符串）、presentCharacters、relationships、items、openThreads（字符串数组）。value 是对应字段的新值。
+                characterState 是当前扮演角色的状态，userState 是用户控制人物（“我”）的状态；分别用一小段话简要记录已知穿着、情绪、身体状态。
+                只记录对话明确呈现的状态，不虚构未知穿着、伤病或用户内心；用户情绪仅据其明确表达。状态改变时更新当前情况，无新依据则保持原值。
+                items 只记录与剧情有关的物品及环境中的物品，包含已知位置、持有人或变化；不要机械罗列与情节无关的随身用品，不推断未提及的物品。
                 memory value 必须完整：{"content":"事实内容","scope":"session或character","kind":"preference或fact或agreement或event",
                 "epistemicStatus":"established或claim或hypothesis","status":"active或superseded"}。
                 goal value 必须完整：{"description":"目标","status":"candidate或active或blocked或paused或completed或abandoned",
-                "currentFocus":"当前关注点","clues":[],"milestones":[{"description":"阶段","status":"discovered或in_progress或completed或discarded"}],"blockers":[]}。
+                "currentFocus":"当前关注点","progressSummary":"从目标开始以来的完成过程短述"}。
+                每个目标的详情只有 currentFocus 和 progressSummary 两项。currentFocus 简要写现在最值得关注的具体事项，随实际进展调整，不强加行动或替用户决定。
+                progressSummary 用一小段连贯文字（通常80—180字，信息少时更短）累计总结目标从开始以来的重要行动、已获信息、关键转折和当前进展。
+                更新时结合已有 progressSummary 和新来源压缩重述，保留仍重要的早期信息，不只记录最近一轮，不堆砌逐条日志，不把尚未发生的计划写成已完成。
+                初次创建也应根据已有依据生成当前关注点和完成过程；没有实质进展时不重复改写目标。不要再输出 clues、milestones 或 blockers 字段。
                 不删除已有记录，不修改记忆范围；纠正已有记忆用 update 并说明原因，重复内容不修改。不要返回与旧值相同的 update。
                 视觉观察只覆盖本次实际收到的原图，每张恰好一项：
                 {"assetId":"原图ID","summary":"简洁概括","visibleDetails":[],"extractedText":[],"uncertainDetails":[],"sourceMessageIds":[],"version":1}。

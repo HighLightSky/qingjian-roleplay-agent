@@ -122,9 +122,9 @@ test("备份拒绝旧版本、无效角色草稿和快照，空名字草稿可�
   await setup();
   await setting("characterDraft:new", JSON.stringify(EMPTY_PROFILE));
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 4);
+  assert.equal(backup.formatVersion, 5);
   validateBackup(structuredClone(backup));
-  for (const formatVersion of [1, 2, 3])
+  for (const formatVersion of [1, 2, 3, 4])
     assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
   for (const field of ["name", "identity", "description"] as const) {
     const invalid = structuredClone(backup);

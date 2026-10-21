@@ -1,3 +1,4 @@
+import { migrateV4 } from "./state/migrate-v4";
 import { validateMemoryValue } from "./state/validation";
 import {
   EMPTY_STORY,
@@ -68,8 +69,19 @@ export const TABLES = [
 let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
-    connection = openDB<RoleplayDB>("roleplay-agent", 3, {
-      upgrade(db) {
+    let upgradeError: unknown;
+    connection = openDB<RoleplayDB>("roleplay-agent", 4, {
+      upgrade(db, oldVersion, _newVersion, tx) {
+        void tx.done.catch((error: unknown) => {
+          upgradeError ??= error;
+        });
+        if (oldVersion === 3) {
+          void migrateV4(tx).catch((error: unknown) => {
+            upgradeError = error;
+            tx.abort();
+          });
+          return;
+        }
         for (const name of Array.from(db.objectStoreNames))
           db.deleteObjectStore(name);
         db.createObjectStore("characters", { keyPath: "id" });
@@ -114,7 +126,7 @@ export function database(): Promise<IDBPDatabase<RoleplayDB>> {
       },
     }).catch((error) => {
       connection = undefined;
-      throw error;
+      throw upgradeError ?? error;
     });
   }
   return connection;

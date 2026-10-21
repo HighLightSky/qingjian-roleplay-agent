@@ -339,7 +339,7 @@ class ChatControllerTest {
         return """
                 {"character":{"name":"林溪","identity":"老板","description":"好奇，说话简短，生活在山城。"},
                 "operationId":"operation","state":{"sessionId":"session","characterId":"character","sessionVersion":0,"memoryVersion":0,"processedThroughSeq":0,
-                "story":{"location":"","storyTime":"","presentCharacters":[],"relationships":[],"items":[],"openThreads":[]},"memories":[],"goals":[]},"earlierHistory":"","history":[],"input":{"text":"你好"},
+                "story":{"location":"","storyTime":"","characterState":"","userState":"","presentCharacters":[],"relationships":[],"items":[],"openThreads":[]},"memories":[],"goals":[]},"earlierHistory":"","history":[],"input":{"text":"你好"},
                 "interactionSettings":{"replyLength":"standard","narrativeMode":"scene"}}
                 """;
     }

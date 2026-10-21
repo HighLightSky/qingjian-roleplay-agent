@@ -4,8 +4,6 @@
     "identity": "山间旅馆的老板，也是我多年未见的朋友",
     "description": "曾是探险家，谨慎而好奇，说话简短自然。故事发生在被迷雾包围的山城。"
   },
-  "memories": [],
-  "summary": "",
   "history": [],
   "input": {
     "text": "你好，今晚还有空房吗？"
@@ -13,5 +11,27 @@
   "interactionSettings": {
     "replyLength": "standard",
     "narrativeMode": "scene"
+  },
+  "operationId": "chat:example",
+  "earlierHistory": "",
+  "state": {
+    "sessionId": "session-example",
+    "characterId": "character-example",
+    "sessionVersion": 0,
+    "memoryVersion": 0,
+    "processedThroughSeq": 0,
+    "story": {
+      "location": "",
+      "storyTime": "",
+      "characterState": "",
+      "userState": "",
+      "presentCharacters": [],
+      "relationships": [],
+      "items": [],
+      "openThreads": []
+    },
+    "storySources": {},
+    "memories": [],
+    "goals": []
   }
 }

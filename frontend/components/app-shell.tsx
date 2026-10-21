@@ -137,9 +137,7 @@ function Navigation() {
       <div className="flex items-center gap-2 px-3 text-primary">
         <LeafIcon className="size-5" />
         <span className="text-lg font-semibold tracking-widest">青笺</span>
-        <span className="ml-auto text-[10px] tracking-wider text-muted-foreground">
-          角色与故事
-        </span>
+
       </div>
       <Button
         variant="ghost"
@@ -151,13 +149,13 @@ function Navigation() {
           <span className="block truncate text-base font-medium">
             {character?.name ?? "选择角色"}
           </span>
-          <span className="mt-1 block truncate text-xs font-normal text-muted-foreground">
+          {/* <span className="mt-1 block truncate text-xs font-normal text-muted-foreground">
             {character
               ? character.archived
                 ? "已归档 · 可阅读已有对话"
                 : "每段故事，都有自己的经历"
               : "开启一个新的故事"}
-          </span>
+          </span> */}
         </span>
         <ChevronDownIcon />
       </Button>
@@ -501,7 +499,7 @@ export function AppShell() {
             )}
           </div>
           {wide && app.memoryOpen && character && (
-            <aside className="w-80 shrink-0 border-l">
+            <aside className="w-[22rem] shrink-0 border-l">
               <StatePanel key={app.sessionId} />
             </aside>
           )}

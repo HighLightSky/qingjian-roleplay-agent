@@ -934,6 +934,116 @@ test("自动整理过程可展开，结果持久化且只有统一人工维护�
   expect(errors).toEqual([]);
 });
 
+test("精简目标详情、双方剧情状态、折叠消息预览及手动星标持久化", async ({
+  page,
+}) => {
+  await createRole(page);
+  await send(
+    page,
+    "自动整理测试，人物状态测试：我们来到旅馆寻找哥哥，她穿灰外套且手腕受伤，我穿校服并明确说很紧张，柜台上有登记册。",
+  );
+  await expect(
+    page.getByRole("button", {
+      name: "已更新：剧情 4 项，记忆 1 项，目标 1 项",
+    }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "打开剧情与记忆" }).click();
+  const panel = page.getByRole("tabpanel");
+  await expect(
+    panel.locator('[data-story-field="characterState"]'),
+  ).toContainText("灰色外套，神情平静，手腕受伤。");
+  await expect(panel.locator('[data-story-field="userState"]')).toContainText(
+    "白色校服，自述紧张",
+  );
+  await expect(panel).not.toContainText("自动整理");
+  await expect(panel).not.toContainText("人工修改");
+  await expect(panel.getByRole("img", { name: "手动修改" })).toHaveCount(0);
+  const references = panel.locator(
+    '[data-story-field="characterState"] details',
+  );
+  await expect(references).not.toHaveAttribute("open");
+  await expect(
+    references.getByRole("button", { name: /^消息1：/ }),
+  ).not.toBeVisible();
+  await references.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  const messageLink = references.getByRole("button", {
+    name: /^消息1：自动整理测试，人物状态测试：我们来到旅馆/,
+  });
+  await expect(messageLink).toBeVisible();
+  await expect(
+    references.getByRole("button", { name: /^消息2：（她放下烛台，望向门口。）/ }),
+  ).toBeVisible();
+  await messageLink.click();
+  await expect(
+    page.getByRole("button", { name: "关闭剧情与记忆", exact: true }),
+  ).not.toBeVisible();
+  await expect(page.locator('[data-role="user"]')).toBeInViewport();
+  await page.getByRole("button", { name: "打开剧情与记忆" }).click();
+  await page.getByRole("button", { name: "修改剧情" }).click();
+  await page
+    .getByRole("textbox", { name: "我的状态", exact: true })
+    .fill("白色校服，明确说已放松，身体无变化。");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(
+    panel
+      .locator('[data-story-field="userState"]')
+      .getByRole("img", { name: "手动修改" }),
+  ).toBeVisible();
+  await expect(
+    panel
+      .locator('[data-story-field="characterState"]')
+      .getByRole("img", { name: "手动修改" }),
+  ).toHaveCount(0);
+  await page.getByRole("tab", { name: "目标", exact: true }).click();
+  await expect(panel.locator("h3")).toHaveText("寻找失踪的哥哥");
+  await expect(panel.locator("h3 + [data-goal-status]")).toHaveText("进行中");
+  await expect(panel.locator("dt")).toHaveText(["当前关注点", "完成过程"]);
+  await expect(panel).toContainText("为了寻找哥哥来到旅馆");
+  await expect(panel.locator("details")).not.toHaveAttribute("open");
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
+  await expect(panel.getByRole("textbox")).toHaveCount(3);
+  await panel
+    .getByRole("textbox", { name: "当前关注点", exact: true })
+    .fill("继续询问掌柜");
+  await panel
+    .getByRole("textbox", { name: "完成过程", exact: true })
+    .fill("为了寻找哥哥来到旅馆，已看到登记册和他留下的纸条。");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await page.getByRole("button", { name: "关闭剧情与记忆" }).click();
+  const nextRequest = page.waitForRequest((request) =>
+    request.url().endsWith("/api/state/update"),
+  );
+  await send(
+    page,
+    "目标进展测试：掌柜确认哥哥昨天离店，并留下前往码头的信息。",
+  );
+  const body = (await nextRequest).postDataJSON();
+  expect(body.context.state.goals[0].value).toEqual({
+    description: "寻找失踪的哥哥",
+    status: "active",
+    currentFocus: "继续询问掌柜",
+    progressSummary: "为了寻找哥哥来到旅馆，已看到登记册和他留下的纸条。",
+  });
+  expect(body.context.state.story.userState).toContain("已放松");
+  await expect(
+    page.getByRole("button", { name: "已更新：目标 1 项" }),
+  ).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "打开剧情与记忆" }).click();
+  await expect(
+    panel
+      .locator('[data-story-field="userState"]')
+      .getByRole("img", { name: "手动修改" }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "目标", exact: true }).click();
+  await expect(panel).toContainText(
+    "为了寻找哥哥来到旅馆，已看到登记册和他留下的纸条。掌柜确认哥哥昨天离店，留下前往码头的信息。",
+  );
+  await expect(panel).toContainText("核实码头消息");
+  await expect(panel.locator("details[open]")).toHaveCount(0);
+});
+
 test("整理失败保留正文并仅重试整理，刷新后仍可展开", async ({ page }) => {
   await createRole(page);
   let fail = true;

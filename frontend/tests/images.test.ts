@@ -276,19 +276,19 @@ test("retry reuses the saved user message instead of appending a second image in
     restore();
   }
 });
-test("v4 backup restores original bytes and rejects damaged originals before replacing data", async () => {
+test("v5 backup restores original bytes and rejects damaged originals before replacing data", async () => {
   const { session } = await setup();
   const a = await asset();
   await beginTurn(session.id, "", [{ type: "image", assetId: a.id }]);
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 4);
+  assert.equal(backup.formatVersion, 5);
   await restoreSnapshot(backup);
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
   const invalid = structuredClone(backup);
   invalid.data.assets[0].base64 = "AAAA";
   await assert.rejects(restoreSnapshot(invalid));
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
-  for (const formatVersion of [1, 2, 3])
+  for (const formatVersion of [1, 2, 3, 4])
     assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
 });
 test("ambiguous selection and cancellation preserve submitted input and never generate a reply", async () => {

@@ -1,5 +1,7 @@
 import {
   GOAL_LABELS,
+  STORY_LABELS,
+  STORY_TEXT_FIELDS,
   type Story,
   type MemoryValue,
   type GoalValue,
@@ -48,8 +50,7 @@ export function sourceIds(value: unknown) {
 }
 export function validateStory(value: unknown): asserts value is Story {
   object(value);
-  string(value.location, 2000);
-  string(value.storyTime, 2000);
+  for (const key of STORY_TEXT_FIELDS) string(value[key], 2000);
   for (const key of [
     "presentCharacters",
     "relationships",
@@ -73,14 +74,7 @@ export function validateGoalValue(value: unknown): asserts value is GoalValue {
   text(value.description);
   choice(value.status, Object.keys(GOAL_LABELS));
   string(value.currentFocus, 2000);
-  strings(value.clues);
-  strings(value.blockers);
-  array(value.milestones, 20);
-  for (const m of value.milestones) {
-    object(m);
-    text(m.description);
-    choice(m.status, ["discovered", "in_progress", "completed", "discarded"]);
-  }
+  string(value.progressSummary, 2000);
 }
 export function validateSnapshot(
   value: unknown,
@@ -94,14 +88,7 @@ export function validateSnapshot(
   validateStory(value.story);
   object(value.storySources);
   for (const [key, source] of Object.entries(value.storySources)) {
-    choice(key, [
-      "location",
-      "storyTime",
-      "presentCharacters",
-      "relationships",
-      "items",
-      "openThreads",
-    ]);
+    choice(key, Object.keys(STORY_LABELS));
     object(source);
     choice(source.origin, ["manual", "automatic"]);
     date(source.updatedAt);
@@ -155,7 +142,7 @@ export function validateStateResult(
   if (value.throughSeq <= value.fromExclusiveSeq)
     throw new Error("整理消息范围无效。");
   for (const [field, max] of [
-    ["storyChanges", 6],
+    ["storyChanges", Object.keys(STORY_LABELS).length],
     ["memoryChanges", 50],
     ["goalChanges", 20],
   ] as const) {
@@ -187,15 +174,8 @@ export function validateStateResult(
         if (field === "memoryChanges") validateMemoryValue(v);
         else if (field === "goalChanges") validateGoalValue(v);
         else {
-          choice(c.id, [
-            "location",
-            "storyTime",
-            "presentCharacters",
-            "relationships",
-            "items",
-            "openThreads",
-          ]);
-          if (c.id === "location" || c.id === "storyTime") string(v, 2000);
+          choice(c.id, Object.keys(STORY_LABELS));
+          if (STORY_TEXT_FIELDS.includes(c.id as string)) string(v, 2000);
           else strings(v);
         }
       };

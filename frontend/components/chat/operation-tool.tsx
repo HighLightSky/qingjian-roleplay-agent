@@ -11,10 +11,8 @@ import {
   recoverStateTasks,
   retryLastMessage,
   report,
-  loadEarlier,
-  selectSession,
 } from "@/stores/use-app-store";
-import { database } from "@/lib/db";
+import { SourceLinks } from "./source-links";
 import {
   STORY_LABELS,
   GOAL_LABELS,
@@ -27,38 +25,6 @@ import {
 import { useImageUrl } from "@/hooks/use-image-url";
 import { Button } from "@/components/ui/button";
 
-async function showSource(messageId: string) {
-  const message = await (await database()).get("messages", messageId);
-  if (!message) throw new Error("来源消息已删除。");
-  if (useAppStore.getState().sessionId !== message.sessionId)
-    await selectSession(message.sessionId);
-  while (
-    useAppStore.getState().hasEarlier &&
-    !useAppStore.getState().messages.some((m) => m.id === messageId)
-  )
-    await loadEarlier();
-  requestAnimationFrame(() =>
-    document
-      .getElementById(`message:${messageId}`)
-      ?.scrollIntoView({ behavior: "smooth", block: "center" }),
-  );
-}
-export function SourceLinks({ ids }: { ids: string[] }) {
-  return (
-    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-      {ids.map((id, i) => (
-        <button
-          key={id}
-          type="button"
-          className="underline underline-offset-2"
-          onClick={() => void showSource(id).catch(report)}
-        >
-          来源消息 {i + 1}
-        </button>
-      ))}
-    </div>
-  );
-}
 function Picture({ id }: { id: string }) {
   const url = useImageUrl(id, true);
   return url ? (
@@ -97,13 +63,7 @@ function describe(value: unknown): string {
       return `${m.content}\n使用范围：${m.scope === "character" ? "角色共享" : "当前会话"}；类型：${kind}；事实类别：${epistemic}；状态：${status}`;
     }
     const g = value as GoalValue;
-    const phases = {
-      discovered: "已发现",
-      in_progress: "进行中",
-      completed: "已完成",
-      discarded: "已排除",
-    };
-    return `${g.description}\n状态：${GOAL_LABELS[g.status]}；当前关注：${g.currentFocus || "无"}\n线索：${g.clues.join("；") || "无"}\n阶段：${g.milestones.map((m) => `${m.description}（${phases[m.status]}）`).join("；") || "无"}\n阻碍：${g.blockers.join("；") || "无"}`;
+    return `${g.description}\n状态：${GOAL_LABELS[g.status]}；当前关注点：${g.currentFocus || "无"}\n完成过程：${g.progressSummary || "尚未记录"}`;
   }
   throw new Error("整理结果包含无效的领域值。");
 }
