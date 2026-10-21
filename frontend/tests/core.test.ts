@@ -13,9 +13,12 @@ import {
   getMessages,
   deleteSession,
   putMemory,
+  setting,
 } from "../lib/db";
 import {
   EMPTY_PROFILE,
+  DEFAULT_INTERACTION_SETTINGS,
+  parseInteractionSettings,
   appendDelta,
   plainText,
   titleFrom,
@@ -24,12 +27,25 @@ import {
 import { chatContext } from "../lib/chat/context";
 import { SSEParser, streamChat } from "../lib/chat/sse";
 import { restoreSnapshot, takeSnapshot, validateBackup } from "../lib/backup";
+import {
+  updateInteractionSettings,
+  sendMessage,
+  useAppStore,
+  importBackup,
+  clearData,
+} from "../stores/use-app-store";
 
 beforeEach(async () => {
   const db = await database();
   const tx = db.transaction(TABLES, "readwrite");
   await Promise.all(TABLES.map((table) => tx.objectStore(table).clear()));
   await tx.done;
+  useAppStore.setState({
+    ready: true,
+    readOnly: false,
+    busy: false,
+    interactionSettings: { ...DEFAULT_INTERACTION_SETTINGS },
+  });
 });
 async function setup() {
   const character = await saveCharacter({
@@ -110,11 +126,24 @@ test("memories belong to characters and survive session deletion", async () => {
   );
   assert.equal(memories.length, 1);
   assert.equal((await allMessages(session.id)).length, 0);
-  const body = chatContext(character, other, memories, [], "你好");
+  const body = chatContext(
+    character,
+    other,
+    memories,
+    [],
+    "你好",
+    DEFAULT_INTERACTION_SETTINGS,
+  );
   assert.deepEqual(body.memories, ["用户叫阿远"]);
   assert.deepEqual(
-    chatContext({ ...character, id: "other" }, other, memories, [], "你好")
-      .memories,
+    chatContext(
+      { ...character, id: "other" },
+      other,
+      memories,
+      [],
+      "你好",
+      DEFAULT_INTERACTION_SETTINGS,
+    ).memories,
     [],
   );
 });
@@ -130,7 +159,14 @@ test("older history is included as raw context, not silently dropped by the 20-m
     });
   }
   const history = await allMessages(session.id);
-  const body = chatContext(character, session, [], history, "本轮");
+  const body = chatContext(
+    character,
+    session,
+    [],
+    history,
+    "本轮",
+    DEFAULT_INTERACTION_SETTINGS,
+  );
   assert.equal(body.history.length, 20);
   assert.match(body.summary, /消息0/);
   assert.equal(body.input.text, "本轮");
@@ -138,7 +174,15 @@ test("older history is included as raw context, not silently dropped by the 20-m
     message.role === "user" ? { ...message, text: "a".repeat(4000) } : message,
   );
   assert.throws(
-    () => chatContext(character, session, [], long, "本轮"),
+    () =>
+      chatContext(
+        character,
+        session,
+        [],
+        long,
+        "本轮",
+        DEFAULT_INTERACTION_SETTINGS,
+      ),
     /整理剧情/,
   );
 });
@@ -164,6 +208,140 @@ test("backup roundtrip preserves structured messages and invalid import leaves d
   await assert.rejects(() => restoreSnapshot(bad), /不存在的角色/);
   assert.deepEqual((await takeSnapshot()).data, restored.data);
 });
+test("interaction settings validate all combinations and are snapshotted into requests", async () => {
+  assert.deepEqual(DEFAULT_INTERACTION_SETTINGS, {
+    replyLength: "standard",
+    narrativeMode: "scene",
+  });
+  const { character, session } = await setup();
+  for (const replyLength of ["short", "standard", "detailed"] as const) {
+    for (const narrativeMode of ["interactive", "scene"] as const) {
+      const settings = parseInteractionSettings({ replyLength, narrativeMode });
+      const body = chatContext(
+        character,
+        session,
+        [],
+        [],
+        "看看地图",
+        settings,
+      );
+      assert.deepEqual(body.interactionSettings, settings);
+      settings.replyLength = replyLength === "short" ? "detailed" : "short";
+      assert.equal(body.interactionSettings.replyLength, replyLength);
+    }
+  }
+  for (const invalid of [
+    null,
+    [],
+    "short",
+    {},
+    { replyLength: "standard" },
+    { replyLength: "SHORT", narrativeMode: "scene" },
+    { replyLength: "standard", narrativeMode: "auto" },
+    { replyLength: null, narrativeMode: "scene" },
+  ]) {
+    assert.throws(() => parseInteractionSettings(invalid), /设置无效/);
+  }
+});
+
+test("queued settings changes merge, survive backup import, and reset on clear", async () => {
+  await Promise.all([
+    updateInteractionSettings({ replyLength: "detailed" }),
+    updateInteractionSettings({ narrativeMode: "interactive" }),
+  ]);
+  const expected = { replyLength: "detailed", narrativeMode: "interactive" };
+  assert.deepEqual(useAppStore.getState().interactionSettings, expected);
+  const saved = await (await database()).get("settings", "interactionSettings");
+  assert.deepEqual(JSON.parse(saved!.value), expected);
+  const backup = await takeSnapshot();
+  await clearData();
+  assert.deepEqual(
+    useAppStore.getState().interactionSettings,
+    DEFAULT_INTERACTION_SETTINGS,
+  );
+  await importBackup(backup);
+  assert.deepEqual(useAppStore.getState().interactionSettings, expected);
+});
+
+test("invalid interaction settings in backups are rejected without replacing current data", async () => {
+  await setting(
+    "interactionSettings",
+    JSON.stringify(DEFAULT_INTERACTION_SETTINGS),
+  );
+  const backup = await takeSnapshot();
+  for (const value of [
+    "not-json",
+    "null",
+    "{}",
+    '{"replyLength":"standard","narrativeMode":"auto"}',
+  ]) {
+    const invalid = structuredClone(backup);
+    invalid.data.settings.find(
+      (item) => item.key === "interactionSettings",
+    )!.value = value;
+    await assert.rejects(() => restoreSnapshot(invalid), /交互设置无效/);
+    assert.deepEqual((await takeSnapshot()).data, backup.data);
+  }
+});
+
+test("sending waits for an already queued settings save", async () => {
+  const { character, session } = await setup();
+  useAppStore.setState({
+    characterId: character.id,
+    sessionId: session.id,
+    characters: [character],
+    sessions: [session],
+  });
+  const originalFetch = globalThis.fetch;
+  let sentSettings: unknown;
+  globalThis.fetch = async (_input, init) => {
+    sentSettings = JSON.parse(String(init?.body)).interactionSettings;
+    return new Response(
+      'event: delta\ndata: {"kind":"dialogue","text":"我来看看。"}\n\nevent: done\ndata: {"finishReason":"stop"}\n\n',
+      {
+        headers: { "content-type": "text/event-stream" },
+      },
+    );
+  };
+  try {
+    const saving = updateInteractionSettings({ replyLength: "detailed" });
+    const sending = sendMessage("我把地图递给她，让她看看");
+    await Promise.all([saving, sending]);
+    assert.deepEqual(sentSettings, {
+      replyLength: "detailed",
+      narrativeMode: "scene",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("failed settings saves keep the last committed choice", async () => {
+  await updateInteractionSettings({ replyLength: "short" });
+  const put = IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put = function (...args: Parameters<typeof put>) {
+    if (this.name === "settings")
+      throw new DOMException("storage full", "QuotaExceededError");
+    return put.apply(this, args);
+  };
+  try {
+    await assert.rejects(
+      () => updateInteractionSettings({ replyLength: "detailed" }),
+      /storage full/,
+    );
+    assert.equal(
+      useAppStore.getState().interactionSettings.replyLength,
+      "short",
+    );
+    const saved = await (
+      await database()
+    ).get("settings", "interactionSettings");
+    assert.equal(JSON.parse(saved!.value).replyLength, "short");
+  } finally {
+    IDBObjectStore.prototype.put = put;
+  }
+});
+
 test("SSE parser handles split CRLF, comments, multiple events and multiline data", () => {
   const events: { name: string; data: string }[] = [];
   const parser = new SSEParser((event) => events.push(event));

@@ -92,6 +92,7 @@ export type ThreadComponents = {
   AssistantMessage?: ComponentType | undefined;
   Welcome?: ComponentType | undefined;
   MessageActions?: ComponentType | undefined;
+  ComposerControls?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
   ToolGroup?:
     ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>> | undefined;
@@ -518,12 +519,16 @@ const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
 };
 
 const ComposerAction: FC = () => {
+  const { ComposerControls } = useContext(ThreadComponentsContext);
   const length = useAuiState((state) => state.composer.text.length);
   return (
-    <div className="aui-composer-action-wrapper flex items-center justify-between px-1">
-      <span className="text-xs text-muted-foreground">
-        {length ? `${length} / 2000` : "让故事继续"}
-      </span>
+    <div className="aui-composer-action-wrapper flex items-center justify-between gap-2 px-1">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        {ComposerControls && <ComposerControls />}
+        <span className="text-xs text-muted-foreground">
+          {length ? `${length} / 2000` : "让故事继续"}
+        </span>
+      </div>
       <AuiIf condition={(state) => !state.composer.canCancel}>
         <ComposerPrimitive.Send asChild>
           <TooltipIconButton

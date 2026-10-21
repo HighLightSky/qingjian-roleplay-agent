@@ -18,6 +18,8 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -190,6 +192,55 @@ class ChatControllerTest {
         }).when(llmClient).chatStream(any(), any());
     }
 
+    @Test
+    void rejectsMissingNullAndUnknownInteractionSettingsWithoutCallingModel() throws Exception {
+        List<ObjectNode> invalid = new ArrayList<>();
+        ObjectNode missing = (ObjectNode) objectMapper.readTree(validJson());
+        missing.remove("interactionSettings");
+        invalid.add(missing);
+        ObjectNode nullSettings = (ObjectNode) objectMapper.readTree(validJson());
+        nullSettings.putNull("interactionSettings");
+        invalid.add(nullSettings);
+        for (String field : List.of("replyLength", "narrativeMode")) {
+            for (String value : new String[] {null, "unknown", "auto", "STANDARD", "", "1"}) {
+                ObjectNode body = (ObjectNode) objectMapper.readTree(validJson());
+                ((ObjectNode) body.get("interactionSettings")).put(field, value);
+                invalid.add(body);
+            }
+            ObjectNode body = (ObjectNode) objectMapper.readTree(validJson());
+            ((ObjectNode) body.get("interactionSettings")).remove(field);
+            invalid.add(body);
+        }
+        for (ObjectNode body : invalid) {
+            assertJsonError(post(body.toString()), 400, "BAD_REQUEST");
+        }
+        verifyNoInteractions(llmClient);
+    }
+
+    @Test
+    void acceptsEverySettingsCombinationAndPassesItToThePrompt() throws Exception {
+        doAnswer(invocation -> {
+            com.example.llm.model.ChatRequest modelRequest = invocation.getArgument(0);
+            String prompt = modelRequest.getMessages().getFirst().getContent();
+            assertTrue(prompt.contains("【回复长度】"));
+            assertTrue(prompt.contains("【叙事推进】"));
+            Consumer<String> onText = invocation.getArgument(1);
+            onText.accept("[台词]我来看看地图。\n[描写]她展开地图。");
+            return "stop";
+        }).when(llmClient).chatStream(any(), any());
+        for (String length : List.of("short", "standard", "detailed")) {
+            for (String mode : List.of("interactive", "scene")) {
+                ObjectNode body = (ObjectNode) objectMapper.readTree(validJson());
+                ObjectNode settings = (ObjectNode) body.get("interactionSettings");
+                settings.put("replyLength", length).put("narrativeMode", mode);
+                HttpResponse<String> response = post(body.toString());
+                assertEquals(200, response.statusCode());
+                assertTrue(response.body().contains("event:done"));
+                assertFalse(response.body().contains("event:error"));
+            }
+        }
+    }
+
     private HttpResponse<String> post(String body) throws Exception {
         try (HttpClient client = HttpClient.newHttpClient()) {
             return client.send(request(body), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -237,7 +288,8 @@ class ChatControllerTest {
         return """
                 {"character":{"name":"林溪","description":"老板","personality":"好奇",
                 "speakingStyle":"简短","worldSetting":"山城","openingScene":"雨夜"},
-                "memories":[],"summary":"","history":[],"input":{"text":"你好"}}
+                "memories":[],"summary":"","history":[],"input":{"text":"你好"},
+                "interactionSettings":{"replyLength":"standard","narrativeMode":"scene"}}
                 """;
     }
 }

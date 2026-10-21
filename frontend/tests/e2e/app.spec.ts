@@ -23,6 +23,157 @@ async function send(page: Page, text: string) {
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
 }
 
+async function chooseSetting(page: Page, label: string, option: string) {
+  await page.getByRole("button", { name: new RegExp(`^${label}：`) }).click();
+  await page
+    .getByRole("menuitemradio", { name: new RegExp(`^${option}`) })
+    .click();
+  await expect(
+    page.getByRole("button", { name: `${label}：${option}`, exact: true }),
+  ).toBeEnabled();
+}
+
+test("interaction settings persist globally across sessions, characters and reloads", async ({
+  page,
+}) => {
+  const requests: {
+    interactionSettings: { replyLength: string; narrativeMode: string };
+  }[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/chat"))
+      requests.push(request.postDataJSON());
+  });
+  await createRole(page);
+  await expect(
+    page.getByRole("button", { name: "回复长度：标准", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "叙事推进：场景推进", exact: true }),
+  ).toBeVisible();
+  await chooseSetting(page, "回复长度", "详细");
+  await chooseSetting(page, "叙事推进", "频繁互动");
+  expect(requests).toHaveLength(0);
+  await send(page, "第一段故事");
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeVisible();
+  expect(requests.at(-1)?.interactionSettings).toEqual({
+    replyLength: "detailed",
+    narrativeMode: "interactive",
+  });
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "回复长度：详细", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "叙事推进：频繁互动", exact: true }),
+  ).toBeVisible();
+  await nav(page);
+  await page
+    .getByRole("button", { name: "新建对话", exact: true })
+    .filter({ visible: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "回复长度：详细", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "叙事推进：频繁互动", exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "角色与会话菜单" }).click();
+  await page
+    .getByRole("menuitem", { name: "复制为新角色", exact: true })
+    .click();
+  await page.getByPlaceholder("你想如何称呼这个角色？").fill("顾川");
+  await page.getByRole("button", { name: "保存角色", exact: true }).click();
+  await page.getByRole("button", { name: "开始对话", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "回复长度：详细", exact: true }),
+  ).toBeVisible();
+  await chooseSetting(page, "回复长度", "简短");
+  await nav(page);
+  await page
+    .getByRole("button", { name: "切换角色", exact: true })
+    .filter({ visible: true })
+    .click();
+  await page.getByRole("dialog").getByRole("button", { name: /^林溪/ }).click();
+  await expect(
+    page.getByRole("button", { name: "回复长度：简短", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "叙事推进：频繁互动", exact: true }),
+  ).toBeVisible();
+  await send(page, "全局设置仍然生效");
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeVisible();
+  expect(requests.at(-1)?.interactionSettings).toEqual({
+    replyLength: "short",
+    narrativeMode: "interactive",
+  });
+});
+
+test("changing settings during generation affects only the next request", async ({
+  page,
+}) => {
+  const requests: {
+    interactionSettings: { replyLength: string; narrativeMode: string };
+  }[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/chat"))
+      requests.push(request.postDataJSON());
+  });
+  await createRole(page);
+  await send(page, "慢慢回复，我把地图递给她");
+  await expect(
+    page.getByRole("button", { name: "停止生成", exact: true }),
+  ).toBeVisible();
+  await chooseSetting(page, "回复长度", "详细");
+  await chooseSetting(page, "叙事推进", "频繁互动");
+  expect(requests).toHaveLength(1);
+  expect(requests[0].interactionSettings).toEqual({
+    replyLength: "standard",
+    narrativeMode: "scene",
+  });
+  await page.getByRole("button", { name: "停止生成", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeVisible();
+  await send(page, "下一段采用新的设置");
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeVisible();
+  expect(requests).toHaveLength(2);
+  expect(requests[1].interactionSettings).toEqual({
+    replyLength: "detailed",
+    narrativeMode: "interactive",
+  });
+});
+
+test("a failed settings write keeps the previous UI choice", async ({
+  page,
+}) => {
+  await createRole(page);
+  await page.evaluate(() => {
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (...args) {
+      if (this.name === "settings")
+        throw new DOMException("设置保存测试失败", "QuotaExceededError");
+      return put.apply(this, args);
+    };
+  });
+  await page
+    .getByRole("button", { name: "回复长度：标准", exact: true })
+    .click();
+  await page.getByRole("menuitemradio", { name: /^详细/ }).click();
+  await expect(
+    page.getByRole("button", { name: "回复长度：标准", exact: true }),
+  ).toBeEnabled();
+  await expect(
+    page.getByText("设置保存测试失败", { exact: true }),
+  ).toBeVisible();
+});
+
 test("IME composition survives draft persistence and only committed text is saved", async ({
   page,
   context,

@@ -61,6 +61,51 @@ export type Memory = {
 export type Draft = { sessionId: string; text: string; updatedAt: string };
 export type ThemeMode = "system" | "light" | "dark";
 export type Setting = { key: string; value: string };
+export type ReplyLength = "short" | "standard" | "detailed";
+export type NarrativeMode = "interactive" | "scene";
+export type InteractionSettings = {
+  replyLength: ReplyLength;
+  narrativeMode: NarrativeMode;
+};
+export const DEFAULT_INTERACTION_SETTINGS: Readonly<InteractionSettings> =
+  Object.freeze({
+    replyLength: "standard",
+    narrativeMode: "scene",
+  });
+export const REPLY_LENGTH_OPTIONS = [
+  { value: "short", label: "简短", description: "约 150—300 字" },
+  { value: "standard", label: "标准", description: "约 350—600 字" },
+  { value: "detailed", label: "详细", description: "约 700—1200 字" },
+] as const;
+export const NARRATIVE_MODE_OPTIONS = [
+  {
+    value: "interactive",
+    label: "频繁互动",
+    description: "较早停在自然互动点",
+  },
+  { value: "scene", label: "场景推进", description: "展开完整的场景片段" },
+] as const;
+export function parseInteractionSettings(value: unknown): InteractionSettings {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("交互设置无效。");
+  const settings = value as Record<string, unknown>;
+  if (
+    !REPLY_LENGTH_OPTIONS.some(
+      (option) => option.value === settings.replyLength,
+    )
+  )
+    throw new Error("回复长度设置无效。");
+  if (
+    !NARRATIVE_MODE_OPTIONS.some(
+      (option) => option.value === settings.narrativeMode,
+    )
+  )
+    throw new Error("叙事推进设置无效。");
+  return {
+    replyLength: settings.replyLength as ReplyLength,
+    narrativeMode: settings.narrativeMode as NarrativeMode,
+  };
+}
 export const EMPTY_PROFILE: CharacterProfile = {
   name: "",
   description: "",

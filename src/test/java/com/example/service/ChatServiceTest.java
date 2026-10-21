@@ -26,9 +26,13 @@ import com.example.web.dto.ChatApiRequest;
 import com.example.web.dto.HistoryMessageDto;
 import com.example.web.dto.ImageDto;
 import com.example.web.dto.InputDto;
+import com.example.web.dto.InteractionSettingsDto;
+import com.example.web.dto.InteractionSettingsDto.NarrativeMode;
+import com.example.web.dto.InteractionSettingsDto.ReplyLength;
 import com.example.web.dto.SegmentDelta;
 
 class ChatServiceTest {
+    private static final InteractionSettingsDto SETTINGS = new InteractionSettingsDto(ReplyLength.STANDARD, NarrativeMode.SCENE);
     private final LLMClient llmClient = mock(LLMClient.class);
     private final ChatService service = new ChatService(
             new PromptBuilder(new LlmProperties("", "", "", 0.8, 800, 120)), llmClient);
@@ -66,11 +70,11 @@ class ChatServiceTest {
         ChatApiRequest valid = validRequest();
         List<ChatApiRequest> invalid = Arrays.asList(
                 null,
-                new ChatApiRequest(null, List.of(), "", List.of(), valid.input()),
-                new ChatApiRequest(valid.character(), null, "", List.of(), valid.input()),
-                new ChatApiRequest(valid.character(), List.of(), null, List.of(), valid.input()),
-                new ChatApiRequest(valid.character(), List.of(), "", null, valid.input()),
-                new ChatApiRequest(valid.character(), List.of(), "", List.of(), null));
+                new ChatApiRequest(null, List.of(), "", List.of(), valid.input(), SETTINGS),
+                new ChatApiRequest(valid.character(), null, "", List.of(), valid.input(), SETTINGS),
+                new ChatApiRequest(valid.character(), List.of(), null, List.of(), valid.input(), SETTINGS),
+                new ChatApiRequest(valid.character(), List.of(), "", null, valid.input(), SETTINGS),
+                new ChatApiRequest(valid.character(), List.of(), "", List.of(), null, SETTINGS));
         for (ChatApiRequest request : invalid) {
             assertThrows(IllegalArgumentException.class, () -> service.chatStream(request, delta -> {}));
         }
@@ -85,7 +89,7 @@ class ChatServiceTest {
                 new InputDto("字".repeat(2001), null),
                 new InputDto("文字", new ImageDto("data:image/png;base64,...")))) {
             ChatApiRequest valid = validRequest();
-            ChatApiRequest request = new ChatApiRequest(valid.character(), List.of(), "", List.of(), input);
+            ChatApiRequest request = new ChatApiRequest(valid.character(), List.of(), "", List.of(), input, SETTINGS);
             assertThrows(IllegalArgumentException.class, () -> service.chatStream(request, delta -> {}));
         }
         verifyNoInteractions(llmClient);
@@ -99,11 +103,11 @@ class ChatServiceTest {
                 List.of(new HistoryMessageDto("system", "错误角色")),
                 List.of(new HistoryMessageDto(null, "缺少角色")),
                 List.of(new HistoryMessageDto("user", null)))) {
-            ChatApiRequest request = new ChatApiRequest(valid.character(), List.of(), "", history, valid.input());
+            ChatApiRequest request = new ChatApiRequest(valid.character(), List.of(), "", history, valid.input(), SETTINGS);
             assertThrows(IllegalArgumentException.class, () -> service.chatStream(request, delta -> {}));
         }
         for (List<String> memories : List.of(Collections.<String>singletonList(null), Collections.nCopies(51, "记忆"))) {
-            ChatApiRequest request = new ChatApiRequest(valid.character(), memories, "", List.of(), valid.input());
+            ChatApiRequest request = new ChatApiRequest(valid.character(), memories, "", List.of(), valid.input(), SETTINGS);
             assertThrows(IllegalArgumentException.class, () -> service.chatStream(request, delta -> {}));
         }
         verifyNoInteractions(llmClient);
@@ -114,7 +118,7 @@ class ChatServiceTest {
         doAnswer(invocation -> "length").when(llmClient).chatStream(any(), any());
         ChatApiRequest valid = validRequest();
         ChatApiRequest request = new ChatApiRequest(valid.character(), Collections.nCopies(50, "记忆"),
-                "", List.of(), new InputDto("字".repeat(2000), null));
+                "", List.of(), new InputDto("字".repeat(2000), null), SETTINGS);
         assertEquals("length", service.chatStream(request, delta -> {}));
     }
 
@@ -176,10 +180,24 @@ class ChatServiceTest {
         assertEquals(List.of(new SegmentDelta("narration", "第二轮")), second);
     }
 
+    @Test
+    void rejectsMissingSettingsAndNullFieldsBeforeCallingModel() {
+        ChatApiRequest valid = validRequest();
+        for (InteractionSettingsDto settings : Arrays.asList(
+                null,
+                new InteractionSettingsDto(null, NarrativeMode.SCENE),
+                new InteractionSettingsDto(ReplyLength.STANDARD, null))) {
+            ChatApiRequest request = new ChatApiRequest(valid.character(), valid.memories(), valid.summary(),
+                    valid.history(), valid.input(), settings);
+            assertThrows(IllegalArgumentException.class, () -> service.chatStream(request, delta -> {}));
+        }
+        verifyNoInteractions(llmClient);
+    }
+
     private ChatApiRequest validRequest() {
         return new ChatApiRequest(
                 new CharacterDto("林溪", "旅馆老板", "好奇", "简短", "山城", "雨夜初遇"),
                 List.of(), "", List.of(new HistoryMessageDto("assistant", "欢迎。")),
-                new InputDto("你好", null));
+                new InputDto("你好", null), SETTINGS);
     }
 }

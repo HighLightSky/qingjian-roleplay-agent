@@ -10,11 +10,13 @@ import java.util.List;
  * @param summary 已生成的历史摘要，必须提供，无摘要时传空字符串
  * @param history 按时间从早到晚排列的最近消息，必须提供，可为空，不包含本轮输入
  * @param input 本轮用户输入，文字和图片不能同时为空
+ * @param interactionSettings 本次回复的全局交互设置快照，必须提供
  */
 public record ChatApiRequest(
         CharacterDto character,
         List<String> memories,
         String summary,
         List<HistoryMessageDto> history,
-        InputDto input
+        InputDto input,
+        InteractionSettingsDto interactionSettings
 ) {}

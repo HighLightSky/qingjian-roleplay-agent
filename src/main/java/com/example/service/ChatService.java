@@ -12,6 +12,7 @@ import com.example.prompt.PromptBuilder;
 import com.example.web.dto.ChatApiRequest;
 import com.example.web.dto.HistoryMessageDto;
 import com.example.web.dto.InputDto;
+import com.example.web.dto.InteractionSettingsDto;
 import com.example.web.dto.SegmentDelta;
 
 /** 串起一次聊天的校验、提示词构建、模型调用与流式解析，不保存会话状态。 */
@@ -67,6 +68,7 @@ public class ChatService {
         if (request.character() == null) {
             throw new IllegalArgumentException("角色快照不能为空");
         }
+        validateInteractionSettings(request.interactionSettings());
         if (request.memories() == null) {
             throw new IllegalArgumentException("重要记忆必须提供，无记忆时请传空列表");
         }
@@ -109,6 +111,18 @@ public class ChatService {
         }
         if (input.text().length() > MAX_INPUT_CHARS) {
             throw new IllegalArgumentException("用户输入不能超过 " + MAX_INPUT_CHARS + " 字符");
+        }
+    }
+
+    private void validateInteractionSettings(InteractionSettingsDto settings) {
+        if (settings == null) {
+            throw new IllegalArgumentException("交互设置必须提供");
+        }
+        if (settings.replyLength() == null) {
+            throw new IllegalArgumentException("回复长度必须提供");
+        }
+        if (settings.narrativeMode() == null) {
+            throw new IllegalArgumentException("叙事推进必须提供");
         }
     }
 }

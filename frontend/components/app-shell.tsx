@@ -30,6 +30,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ChatRuntimeProvider } from "@/components/chat/runtime-provider";
+import { InteractionSettingsControls } from "@/components/chat/interaction-settings";
 import { AppDialogs, type DialogState } from "@/components/app-dialogs";
 import {
   cancelGeneration,
@@ -68,7 +69,10 @@ function RememberAction() {
     </TooltipIconButton>
   );
 }
-const THREAD_COMPONENTS = { MessageActions: RememberAction };
+const THREAD_COMPONENTS = {
+  MessageActions: RememberAction,
+  ComposerControls: InteractionSettingsControls,
+};
 function MoreMenu({
   label,
   items,

@@ -1,0 +1,67 @@
+package com.example.prompt;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Stream;
+
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import com.example.config.LlmProperties;
+import com.example.web.dto.CharacterDto;
+import com.example.web.dto.ChatApiRequest;
+import com.example.web.dto.HistoryMessageDto;
+import com.example.web.dto.InputDto;
+import com.example.web.dto.InteractionSettingsDto;
+import com.example.web.dto.InteractionSettingsDto.NarrativeMode;
+import com.example.web.dto.InteractionSettingsDto.ReplyLength;
+
+class PromptBuilderTest {
+    private final PromptBuilder builder = new PromptBuilder(new LlmProperties("", "", "", 0.8, 8192, 120));
+
+    static Stream<Arguments> combinations() {
+        return Arrays.stream(ReplyLength.values()).flatMap(length ->
+                Arrays.stream(NarrativeMode.values()).map(mode -> Arguments.of(length, mode)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("combinations")
+    void appliesIndependentLengthAndNarrativeRulesWithoutChangingTheModelBudget(ReplyLength length, NarrativeMode mode) {
+        var request = builder.build(new ChatApiRequest(
+                new CharacterDto("林溪", "旅馆老板", "好奇", "简短", "山城", "雨夜初遇"),
+                List.of("用户叫阿远"), "用户带来了一张地图。",
+                List.of(new HistoryMessageDto("assistant", "[台词]让我看看。")),
+                new InputDto("我把地图递给她，让她看看", null), new InteractionSettingsDto(length, mode)));
+        String system = request.getMessages().getFirst().getContent();
+        String expectedRange = switch (length) {
+            case SHORT -> "150—300";
+            case STANDARD -> "350—600";
+            case DETAILED -> "700—1200";
+        };
+        for (String range : List.of("150—300", "350—600", "700—1200")) {
+            assertEquals(range.equals(expectedRange), system.contains(range));
+        }
+        assertEquals(mode == NarrativeMode.SCENE, system.contains("场景推进："));
+        assertEquals(mode == NarrativeMode.INTERACTIVE, system.contains("频繁互动："));
+        assertTrue(system.contains("字数是参考范围"));
+        assertTrue(system.contains("不替用户添加台词、心理或重大行动"));
+        assertTrue(system.contains("不要求每次结尾提问"));
+        assertTrue(system.contains("[台词]"));
+        assertTrue(system.contains("[描写]"));
+        assertTrue(system.contains("台词无需加引号，描写无需加括号"));
+        assertFalse(system.contains("内容用引号包裹"));
+        assertFalse(system.contains("内容用括号包裹"));
+        assertFalse(system.contains("示例："));
+        assertTrue(system.contains("用户叫阿远"));
+        assertTrue(system.contains("用户带来了一张地图。"));
+        assertEquals(List.of("system", "assistant", "user"), request.getMessages().stream().map(m -> m.getRole()).toList());
+        assertEquals("我把地图递给她，让她看看", request.getMessages().getLast().getContent());
+        assertEquals(8192, request.getMaxTokens());
+        assertEquals(0.8, request.getTemperature());
+    }
+}

@@ -4,6 +4,7 @@ import {
   type Memory,
   type Message,
   type Session,
+  type InteractionSettings,
 } from "../domain";
 
 export function chatContext(
@@ -12,6 +13,7 @@ export function chatContext(
   memories: Memory[],
   messages: Message[],
   input: string,
+  interactionSettings: InteractionSettings,
 ) {
   const history = messages
     .filter(
@@ -57,5 +59,6 @@ export function chatContext(
       .join("\n\n"),
     history: recent.map(({ role, text }) => ({ role, text })),
     input: { text: input, image: null },
+    interactionSettings: { ...interactionSettings },
   };
 }

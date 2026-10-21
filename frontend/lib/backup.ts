@@ -1,6 +1,7 @@
 import { database, TABLES } from "./db";
 import {
   EMPTY_PROFILE,
+  parseInteractionSettings,
   type Character,
   type Draft,
   type Memory,
@@ -166,6 +167,13 @@ export function validateBackup(value: unknown): Backup {
   }
   for (const setting of snapshot.settings) {
     string(setting.value, 50_000);
+    if (setting.key === "interactionSettings") {
+      try {
+        parseInteractionSettings(JSON.parse(setting.value));
+      } catch {
+        throw new Error("备份中的交互设置无效。");
+      }
+    }
     if (
       setting.key === "themeMode" &&
       !["system", "light", "dark"].includes(setting.value)

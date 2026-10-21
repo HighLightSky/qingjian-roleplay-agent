@@ -12,5 +12,9 @@
   "history": [],
   "input": {
     "text": "你好，今晚还有空房吗？"
+  },
+  "interactionSettings": {
+    "replyLength": "standard",
+    "narrativeMode": "scene"
   }
 }

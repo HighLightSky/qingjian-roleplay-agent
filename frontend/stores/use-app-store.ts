@@ -6,9 +6,11 @@ import { chatContext } from "@/lib/chat/context";
 import { streamChat } from "@/lib/chat/sse";
 import {
   appendDelta,
+  DEFAULT_INTERACTION_SETTINGS,
   errorText,
   now,
   plainText,
+  parseInteractionSettings,
   visibleCharacters,
   type Character,
   type CharacterProfile,
@@ -16,6 +18,7 @@ import {
   type Message,
   type Session,
   type ThemeMode,
+  type InteractionSettings,
 } from "@/lib/domain";
 import { restoreSnapshot, takeSnapshot, type Backup } from "@/lib/backup";
 
@@ -36,6 +39,7 @@ type AppState = {
   loadingMessages: boolean;
   draft: string;
   themeMode: ThemeMode;
+  interactionSettings: InteractionSettings;
   activeSessionId: string | null;
   memoryOpen: boolean;
 };
@@ -56,6 +60,7 @@ export const useAppStore = create<AppState>(() => ({
   loadingMessages: false,
   draft: "",
   themeMode: "system",
+  interactionSettings: { ...DEFAULT_INTERACTION_SETTINGS },
   activeSessionId: null,
   memoryOpen: false,
 }));
@@ -89,6 +94,16 @@ let selection = 0;
 let controller: AbortController | null = null;
 let generation: Promise<void> | null = null;
 let liveReply: Message | null = null;
+function readInteractionSettings(
+  value: string | undefined,
+): InteractionSettings {
+  if (value === undefined) return { ...DEFAULT_INTERACTION_SETTINGS };
+  try {
+    return parseInteractionSettings(JSON.parse(value));
+  } catch {
+    throw new Error("保存的交互设置无效，请清空本地数据或导入有效备份。");
+  }
+}
 const draftBuffers = new Map<
   string,
   { text: string; timer: ReturnType<typeof setTimeout> }
@@ -122,6 +137,9 @@ export function initialize() {
         set({
           characters,
           themeMode: mode === "dark" || mode === "light" ? mode : "system",
+          interactionSettings: readInteractionSettings(
+            saved.get("interactionSettings"),
+          ),
         });
         const character =
           characters.find((item) => item.id === saved.get("characterId")) ??
@@ -392,6 +410,22 @@ export async function changeTheme(themeMode: ThemeMode) {
   set({ themeMode });
 }
 
+export async function updateInteractionSettings(
+  patch: Partial<InteractionSettings>,
+) {
+  if (!get().ready || get().busy)
+    throw new Error("请等待当前操作完成后再修改交互设置。");
+  await write(async () => {
+    // 在串行写入任务中读取最新状态，两个控件的更新不会互相覆盖。
+    const settings = parseInteractionSettings({
+      ...get().interactionSettings,
+      ...patch,
+    });
+    await db.setting("interactionSettings", JSON.stringify(settings));
+    set({ interactionSettings: settings });
+  });
+}
+
 export async function sendMessage(text: string) {
   if (get().activeSessionId)
     throw new Error("已有一段对话正在回复，请稍候或先停止。");
@@ -432,6 +466,8 @@ export async function sendMessage(text: string) {
   const run = async () => {
     try {
       await flushDrafts();
+      await writes;
+      const interactionSettings = { ...get().interactionSettings };
       const database = await db.database();
       const [character, session, memories] = await Promise.all([
         database.get("characters", characterId),
@@ -446,7 +482,14 @@ export async function sendMessage(text: string) {
         Math.max(0, session.nextMessageSeq - 21),
       );
       const history = await db.allMessages(sessionId, after);
-      const body = chatContext(character, session, memories, history, text);
+      const body = chatContext(
+        character,
+        session,
+        memories,
+        history,
+        text,
+        interactionSettings,
+      );
       if (runController.signal.aborted) return;
       const turn = await write(() => db.beginTurn(sessionId, text));
       reply = turn.assistant;
@@ -551,6 +594,9 @@ export async function importBackup(backup: Backup) {
   set({
     characters,
     themeMode: mode === "light" || mode === "dark" ? mode : "system",
+    interactionSettings: readInteractionSettings(
+      settings.get("interactionSettings"),
+    ),
     characterId: null,
     sessionId: null,
     sessions: [],
@@ -584,6 +630,7 @@ export async function clearData() {
     draft: "",
     hasEarlier: false,
     themeMode: "system",
+    interactionSettings: { ...DEFAULT_INTERACTION_SETTINGS },
     error: "",
   });
 }
