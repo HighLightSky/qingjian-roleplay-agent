@@ -33,15 +33,28 @@ public class StateUpdateService {
         validateRequest(r);
         String material = prompts.material(r);
         StateValidation.text(material, ContextLimits.CONTEXT_CHARS);
-        var modelRequest = prompts.build(r, material);
-        budgets.checkModelRequest(modelRequest);
-        var response = client.chat(modelRequest);
-        if (response.getContent() == null || response.getContent().length() > ContextLimits.CONTEXT_CHARS)
-            throw new IOException("状态整理结果缺失或超过字符限制");
-        if (!"stop".equals(response.getFinishReason()))
-            throw new IOException("状态整理输出未完成");
+        String correction = "";
+        for (int attempt = 0; ; attempt++) {
+            var modelRequest = prompts.build(r, material, correction);
+            budgets.checkModelRequest(modelRequest);
+            var response = client.chat(modelRequest);
+            if (response.getContent() == null || response.getContent().length() > ContextLimits.CONTEXT_CHARS)
+                throw new IOException("状态整理结果缺失或超过字符限制");
+            if (!"stop".equals(response.getFinishReason()))
+                throw new IOException("状态整理输出未完成");
+            try {
+                return parseResult(response.getContent(), r);
+            } catch (IOException e) {
+                if (attempt == 1)
+                    throw new IOException("状态整理结果纠正后仍无效：" + e.getMessage(), e);
+                correction = e.getMessage();
+            }
+        }
+    }
+
+    private Result parseResult(String content, UpdateRequest r) throws IOException {
         try {
-            JsonNode node = mapper.readTree(response.getContent());
+            JsonNode node = mapper.readTree(content);
             for (String field : List.of("visualObservations", "storyChanges", "memoryChanges", "goalChanges"))
                 if (node == null || !node.path(field).isArray())
                     throw new IOException("整理结果缺少数组：" + field);
@@ -225,13 +238,15 @@ public class StateUpdateService {
 
     private List<Observation> observations(List<Observation> values, UpdateRequest r) throws IOException {
         List<Payload> payloads = r.context().visual() == null ? List.of() : r.context().visual().imagePayloads();
-        Set<String> expected = new HashSet<>();
+        Set<String> expected = new LinkedHashSet<>();
         payloads.forEach(p -> expected.add(p.assetId()));
         Set<String> seen = new HashSet<>();
         List<Observation> result = new ArrayList<>();
         for (Observation o : values) {
-            if (o == null || !expected.contains(o.assetId()) || !seen.add(o.assetId()))
-                throw new IOException("视觉观察来源无效");
+            if (!expected.contains(o.assetId()))
+                throw new IOException("视觉观察引用了未传入的原图：" + o.assetId() + "；本次原图 ID：" + expected);
+            if (!seen.add(o.assetId()))
+                throw new IOException("同一原图重复返回视觉观察：" + o.assetId());
             StateValidation.visualContent(o);
             var previous = ImageValidationService.catalog(r.context()).stream()
                     .filter(a -> a.assetId().equals(o.assetId())).findFirst();
@@ -249,8 +264,9 @@ public class StateUpdateService {
             result.add(new Observation(o.assetId(), o.summary(), o.visibleDetails(), o.extractedText(),
                     o.uncertainDetails(), List.copyOf(sources), version));
         }
-        if (!seen.equals(expected))
-            throw new IOException("视觉观察未覆盖本次全部原图");
+        expected.removeAll(seen);
+        if (!expected.isEmpty())
+            throw new IOException("视觉观察缺少本次原图：" + expected);
         return result;
     }
 }

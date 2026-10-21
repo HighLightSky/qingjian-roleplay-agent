@@ -57,13 +57,52 @@ class StateUpdateServiceTest {
                 + "\",\"kind\":\"preference\",\"epistemicStatus\":\"established\",\"status\":\"active\"}";
     }
 
+    private Payload payload(String assetId) throws Exception {
+        var out = new ByteArrayOutputStream();
+        var image = new BufferedImage(3, 2, BufferedImage.TYPE_INT_RGB);
+        image.setRGB(0, 0, assetId.hashCode());
+        ImageIO.write(image, "png", out);
+        byte[] bytes = out.toByteArray();
+        return new Payload(assetId, ImageValidationService.sha256(bytes),
+                "data:image/png;base64," + Base64.getEncoder().encodeToString(bytes));
+    }
+
+    private UpdateRequest photoRequest() throws Exception {
+        var payload = payload("photo");
+        var photo = new Asset("photo", payload.sha256(), "image/png",
+                Base64.getDecoder().decode(payload.dataUrl().split(",")[1]).length, 3, 2,
+                List.of(new CharacterPhotoSource("character", 4)), null, List.of());
+        var base = request();
+        var c = base.context();
+        var context = new ChatApiRequest(new CharacterDto("林溪", "旧友", "银发", "photo", 4), c.state(),
+                c.summary(), c.history(), c.input(), c.interactionSettings(),
+                new Context("session", List.of(photo), null, List.of(payload)), c.operationId());
+        return new UpdateRequest(base.operationId(), context, base.fromExclusiveSeq(), base.throughSeq(), base.messages());
+    }
+
+    private String observations(String... assetIds) throws Exception {
+        var values = new ArrayList<Observation>();
+        for (String assetId : assetIds) {
+            values.add(new Observation(assetId, "黑发红斗篷", List.of(), List.of(), List.of("饰品模糊"),
+                    List.of(), 99));
+        }
+        return output("[]", "[]", "[]").replace("\"visualObservations\":[]",
+                "\"visualObservations\":" + mapper.writeValueAsString(values));
+    }
+
     @Test void noChangeStillReturnsCheckedRangeAndOnlyCallsOneModel() throws Exception {
         answer(output("[]", "[]", "[]"));
         var result = service.update(request());
         assertEquals(2, result.throughSeq());
         assertEquals("operation", result.operationId());
         assertTrue(result.memoryChanges().isEmpty());
-        verify(model, times(1)).chat(any());
+        var captor = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model).chat(captor.capture());
+        var parts = captor.getValue().getMessages().getLast().getParts();
+        assertTrue(parts.stream().noneMatch(p -> "image_url".equals(p.type())));
+        var material = parts.getFirst().text();
+        assertEquals(mapper.createArrayNode(),
+                mapper.readTree(material.substring(material.indexOf('{'))).path("actualImageAssetIds"));
         verify(model, never()).chatStream(any(), any());
     }
 
@@ -217,26 +256,93 @@ class StateUpdateServiceTest {
         verifyNoInteractions(model);
     }
     @Test void photoObservationHasTrueProfileSourceWithoutInventingUploadMessage() throws Exception {
-        var out = new ByteArrayOutputStream();
-        ImageIO.write(new BufferedImage(3, 2, BufferedImage.TYPE_INT_RGB), "png", out);
-        byte[] bytes = out.toByteArray();
-        var payload = new Payload("photo", ImageValidationService.sha256(bytes), "data:image/png;base64," + Base64.getEncoder().encodeToString(bytes));
-        var photo = new Asset("photo", payload.sha256(), "image/png", bytes.length, 3, 2,
-                List.of(new CharacterPhotoSource("character", 4)), null, List.of());
-        var base = request();
-        var c = base.context();
-        var context = new ChatApiRequest(new CharacterDto("林溪", "旧友", "银发", "photo", 4), c.state(), c.summary(), c.history(),
-                c.input(), c.interactionSettings(), new Context("session", List.of(photo), null, List.of(payload)), c.operationId());
-        var r = new UpdateRequest(base.operationId(), context, base.fromExclusiveSeq(), base.throughSeq(), base.messages());
-        answer("{\"visualObservations\":[{\"assetId\":\"photo\",\"summary\":\"黑发红斗篷\",\"visibleDetails\":[],\"extractedText\":[],\"uncertainDetails\":[\"饰品模糊\"],\"sources\":[],\"version\":99}],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}");
+        var r = photoRequest();
+        answer(observations("photo"));
         var result = service.update(r);
         assertEquals(List.of(new CharacterPhotoSource("character", 4)), result.visualObservations().getFirst().sources());
         assertEquals(1, result.visualObservations().getFirst().version());
         assertTrue(result.memoryChanges().isEmpty());
         var captor = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(model).chat(captor.capture());
-        assertEquals(payload.dataUrl(), captor.getValue().getMessages().getLast().getParts().stream()
+        assertEquals(r.context().visual().imagePayloads().getFirst().dataUrl(), captor.getValue().getMessages().getLast().getParts().stream()
                 .filter(p -> "image_url".equals(p.type())).findFirst().orElseThrow().imageUrl());
+        var material = captor.getValue().getMessages().getLast().getParts().getFirst().text();
+        var data = mapper.readTree(material.substring(material.indexOf('{')));
+        assertEquals(mapper.valueToTree(List.of("photo")), data.path("actualImageAssetIds"));
+        assertFalse(material.contains("base64"));
+    }
+
+    @Test void correctsInvalidPhotoIdOnceAndResendsActualImage() throws Exception {
+        var r = photoRequest();
+        when(model.chat(any())).thenReturn(
+                new ChatResponse(observations("character_photo"), "stop", TokenUsage.unavailable()),
+                new ChatResponse(observations("photo"), "stop", TokenUsage.unavailable()));
+
+        var result = service.update(r);
+
+        assertEquals("photo", result.visualObservations().getFirst().assetId());
+        assertEquals(List.of(new CharacterPhotoSource("character", 4)), result.visualObservations().getFirst().sources());
+        var captor = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model, times(2)).chat(captor.capture());
+        for (var call : captor.getAllValues()) {
+            var images = call.getMessages().getLast().getParts().stream()
+                    .filter(p -> "image_url".equals(p.type())).toList();
+            assertEquals(1, images.size());
+            assertEquals(r.context().visual().imagePayloads().getFirst().dataUrl(), images.getFirst().imageUrl());
+        }
+        String correction = captor.getAllValues().getLast().getMessages().getLast().getParts().getLast().text();
+        assertTrue(correction.contains("未传入的原图：character_photo"));
+        assertTrue(correction.contains("本次原图 ID：[photo]"));
+    }
+
+    @Test void rejectsPersistentUnknownDuplicateAndMissingImageReferencesWithoutSubstitution() throws Exception {
+        var r = photoRequest();
+        Map<String, String> invalid = Map.of(
+                observations("foreign-photo"), "未传入的原图：foreign-photo",
+                observations("photo", "photo"), "重复返回视觉观察：photo",
+                observations(), "缺少本次原图：[photo]");
+        for (var entry : invalid.entrySet()) {
+            clearInvocations(model);
+            answer(entry.getKey());
+            var failure = assertThrows(IOException.class, () -> service.update(r));
+            assertTrue(failure.getMessage().contains(entry.getValue()), failure.getMessage());
+            verify(model, times(2)).chat(any());
+        }
+    }
+
+    @Test void photoAndNewAttachmentsKeepTheirOwnSourcesAndSharedPhotoIsSentOnce() throws Exception {
+        var base = photoRequest();
+        var c = base.context();
+        var context = new ChatApiRequest(c.character(), c.state(), c.summary(), c.history(),
+                new InputDto(c.input().text(), List.of(ContentPartDto.text(c.input().text()),
+                        new ContentPartDto("image", null, "photo"),
+                        new ContentPartDto("image", null, "attachment"))), c.interactionSettings(),
+                new Context("session", c.visual().assetCatalog(), null,
+                        List.of(payload("photo"), payload("attachment"))), c.operationId());
+        answer(observations("attachment", "photo"));
+
+        var result = service.update(new UpdateRequest(base.operationId(), context, base.fromExclusiveSeq(),
+                base.throughSeq(), base.messages()));
+
+        assertEquals(List.of(new MessageSource("user", 1, c.input().text(), 2, 2)),
+                result.visualObservations().getFirst().sources());
+        assertEquals(List.of(new CharacterPhotoSource("character", 4),
+                new MessageSource("user", 1, c.input().text(), 1, 1)),
+                result.visualObservations().getLast().sources());
+        var captor = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model).chat(captor.capture());
+        var parts = captor.getValue().getMessages().getLast().getParts();
+        assertEquals(2, parts.stream().filter(p -> "image_url".equals(p.type())).count());
+        var material = parts.getFirst().text();
+        assertEquals(mapper.valueToTree(List.of("photo", "attachment")),
+                mapper.readTree(material.substring(material.indexOf('{'))).path("actualImageAssetIds"));
+    }
+
+    @Test void upstreamFailureDoesNotTriggerOutputCorrection() throws Exception {
+        when(model.chat(any())).thenThrow(new IOException("模型服务连接失败"));
+        var failure = assertThrows(IOException.class, () -> service.update(photoRequest()));
+        assertEquals("模型服务连接失败", failure.getMessage());
+        verify(model).chat(any());
     }
 
 }
