@@ -33,8 +33,9 @@ export async function proxy(request: Request, path: string) {
     const upstream = await fetch(`${backend}${path}`, {
       method: request.method,
       headers: {
-        "Content-Type": "application/json",
-        Accept: path === "/api/chat" ? "text/event-stream" : "application/json",
+        "Content-Type":
+          request.headers.get("content-type") ?? "application/json",
+        Accept: request.headers.get("accept") ?? "application/json",
       },
       body: body as BodyInit | undefined,
       signal: request.signal,

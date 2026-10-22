@@ -9,15 +9,15 @@ import com.example.web.dto.VisualDtos.Plan;
 import org.springframework.web.bind.annotation.*;
 import java.io.IOException;
 
-/** 无状态选图入口：返回计划，原图由浏览器随后按需补传。 */
+/** 生成前的只读预算预览与有界历史压缩。 */
 @RestController
 public class ContextController {
-    private final VisualSelectionService service;
     private final ContextBudgetService budgets;
     private final ContextCompactionService compaction;
+    private final com.example.service.ModelGate gate;
 
-    public ContextController(VisualSelectionService service, ContextBudgetService budgets, ContextCompactionService compaction) {
-        this.service = service;
+    public ContextController(ContextBudgetService budgets, ContextCompactionService compaction, com.example.service.ModelGate gate) {
+        this.gate = gate;
         this.budgets = budgets;
         this.compaction = compaction;
     }
@@ -29,11 +29,7 @@ public class ContextController {
 
     @PostMapping("/api/context/compact")
     public CompactionResult compact(@RequestBody CompactionRequest request) throws IOException, InterruptedException {
-        return compaction.compact(request);
+        try (var permit = gate.acquire()) { return compaction.compact(request); }
     }
 
-    @PostMapping("/api/context/inspect")
-    public Plan inspect(@RequestBody ChatApiRequest request) throws IOException, InterruptedException {
-        return service.select(request);
-    }
 }

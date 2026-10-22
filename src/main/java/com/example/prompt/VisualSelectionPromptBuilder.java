@@ -11,9 +11,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class VisualSelectionPromptBuilder {
     private final ObjectMapper mapper;
+    private final com.example.config.DispatchProperties config;
 
-    public VisualSelectionPromptBuilder(ObjectMapper mapper) {
+    public VisualSelectionPromptBuilder(ObjectMapper mapper, com.example.config.DispatchProperties config) {
         this.mapper = mapper;
+        this.config = config;
     }
 
     /** 移除包含字节和完整目录的 visual，避免重复材料挤占规划预算。 */
@@ -45,6 +47,6 @@ public class VisualSelectionPromptBuilder {
         return new ChatRequest(List.of(new Message("system", rules), new Message("user",
                 "剩余历史图名额：" + slots + "\n对话上下文：" + context(request) + "\n图片目录："
                         + mapper.valueToTree(catalog) + "\n" + correction)),
-                4096, 0.0);
+                config.selectionOutputTokens(), 0.0);
     }
 }

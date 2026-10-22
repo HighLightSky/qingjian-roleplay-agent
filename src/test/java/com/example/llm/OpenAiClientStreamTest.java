@@ -159,6 +159,40 @@ class OpenAiClientStreamTest {
         } finally { server.stop(0); }
     }
 
+    @Test
+    void perCallDeadlineClosesAStreamWhoseHeadersHaveAlreadyArrived() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        var release = new CountDownLatch(1);
+        var stopped = new CountDownLatch(1);
+        var failure = new AtomicReference<Exception>();
+        server.createContext("/chat", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, 0);
+            try (var body = exchange.getResponseBody()) {
+                body.write("data: {\"choices\":[{\"delta\":{\"content\":\"部分内容\"}}]}\n\n".getBytes(StandardCharsets.UTF_8));
+                body.flush();
+                release.await();
+            } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        });
+        server.start();
+        try (var http = HttpClient.newHttpClient()) {
+            var mapper = new ObjectMapper();
+            var llm = new com.example.config.LlmProperties("", "", "test", .8, 800, 1);
+            var client = new OpenAiClient(http, mapper, "http://127.0.0.1:" + server.getAddress().getPort() + "/chat",
+                    "test", Duration.ofMillis(300), new LlmRequestMapper(mapper, llm));
+            Thread worker = Thread.ofVirtual().start(() -> {
+                try { client.chatStream(request(), ignored -> {}); }
+                catch (Exception e) { failure.set(e); }
+                finally { stopped.countDown(); }
+            });
+            try {
+                assertTrue(stopped.await(3, TimeUnit.SECONDS));
+                assertTrue(failure.get() instanceof java.net.http.HttpTimeoutException, String.valueOf(failure.get()));
+            } finally { worker.interrupt(); release.countDown(); }
+        } finally { release.countDown(); server.stop(0); }
+    }
+
     private OpenAiClient client(HttpClient http, HttpServer server) {
         return new OpenAiClient(http, new ObjectMapper(),
                 "http://127.0.0.1:" + server.getAddress().getPort() + "/chat",

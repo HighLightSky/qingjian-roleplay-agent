@@ -1,14 +1,9 @@
-import { migrateV7 } from "./images/migrate-v7";
 import { IMAGE_SEQUENCE_KEY } from "./images/ids";
-import { migrateV4 } from "./state/migrate-v4";
-import { migrateV6 } from "./images/migrate-v6";
-import { migrateV5 } from "./context/migrate-v5";
 import {
   emptySummary,
   unknownUsage,
   type CompactionTask,
 } from "./context/types";
-import { validateMemoryValue } from "./state/validation";
 import {
   EMPTY_STORY,
   type StateTask,
@@ -85,27 +80,11 @@ let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
     let upgradeError: unknown;
-    connection = openDB<RoleplayDB>("roleplay-agent", 7, {
+    connection = openDB<RoleplayDB>("roleplay-agent", 8, {
       upgrade(db, oldVersion, _newVersion, tx) {
         void tx.done.catch((error: unknown) => {
           upgradeError ??= error;
         });
-        if (oldVersion >= 3 && oldVersion <= 6) {
-          if (oldVersion < 5)
-            db.createObjectStore("compactionTasks", {
-              keyPath: "id",
-            }).createIndex("session", "sessionId");
-          void (async () => {
-            if (oldVersion === 3) await migrateV4(tx);
-            if (oldVersion < 5) await migrateV5(tx);
-            if (oldVersion < 6) await migrateV6(tx);
-            await migrateV7(tx);
-          })().catch((error: unknown) => {
-            upgradeError = error;
-            tx.abort();
-          });
-          return;
-        }
         for (const name of Array.from(db.objectStoreNames))
           db.deleteObjectStore(name);
         db.createObjectStore("characters", { keyPath: "id" });
@@ -199,19 +178,26 @@ export async function allMessages(sessionId: string, afterSeq = 0) {
 }
 export async function recoverInterrupted() {
   const db = await database();
+  const active = new Set(
+    (await db.getAll("settings"))
+      .filter((s) => s.key.startsWith("dispatch:"))
+      .map((s) => JSON.parse(s.value).assistantMessageId as string),
+  );
   const tx = db.transaction(["messages", "operations"], "readwrite");
   for (const status of ["pending", "streaming"]) {
     const messages = await tx
       .objectStore("messages")
       .index("status")
       .getAll(status);
-    for (const message of messages)
+    for (const message of messages) {
+      if (active.has(message.id)) continue;
       await tx.objectStore("messages").put({
         ...message,
         status: "interrupted",
         error: "上次生成中断，已保留保存的内容。",
         updatedAt: now(),
       });
+    }
   }
   for (const operation of await tx.objectStore("operations").getAll()) {
     if (
@@ -312,7 +298,6 @@ export async function createSession(characterId: string) {
     story: structuredClone(EMPTY_STORY),
     storySources: {},
     stateVersion: 0,
-    stateProcessedThroughSeq: 0,
     summary: emptySummary(),
     nextMessageSeq: 1,
     createdAt: now(),
@@ -481,7 +466,6 @@ export async function putMemory(
   value: MemoryValue,
   existing?: Memory,
 ) {
-  validateMemoryValue(value);
   const db = await database();
   const tx = db.transaction(
     ["characters", "sessions", "memories"],
@@ -496,12 +480,6 @@ export async function putMemory(
       .objectStore("memories")
       .index("character")
       .getAll(characterId);
-    if (
-      !existing &&
-      records.filter((m) => m.sessionId === null || m.sessionId === sessionId)
-        .length >= 50
-    )
-      throw new Error("当前会话可用记忆已达到 50 条，请修改已有项。");
     const current = existing
       ? await tx.objectStore("memories").get(existing.id)
       : undefined;

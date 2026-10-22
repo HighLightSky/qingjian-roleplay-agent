@@ -12,8 +12,7 @@ public final class StateValidation {
     }
 
     public static void snapshot(Snapshot s) {
-        if (s == null || s.story() == null || s.sessionVersion() < 0 || s.memoryVersion() < 0
-                || s.processedThroughSeq() < 0)
+        if (s == null || s.story() == null || s.sessionVersion() < 0 || s.memoryVersion() < 0)
             throw new IllegalArgumentException("领域快照或版本无效");
         id(s.sessionId());
         id(s.characterId());
@@ -25,7 +24,7 @@ public final class StateValidation {
             date(entry.getValue().updatedAt());
             sources(entry.getValue().sourceMessageIds());
         }
-        if (s.memories().size() > ContextLimits.MEMORIES || s.goals().size() > ContextLimits.GOALS)
+        if (s.memories().size() > ContextLimits.COLLECTION_ITEMS || s.goals().size() > ContextLimits.COLLECTION_ITEMS)
             throw new IllegalArgumentException("记忆或目标数量超过限制");
         Set<String> ids = new HashSet<>();
         for (Memory m : s.memories()) {
@@ -54,10 +53,10 @@ public final class StateValidation {
     }
 
     public static void story(Story s) {
-        text(s.location(), ContextLimits.STATE_TEXT_CHARS);
-        text(s.storyTime(), ContextLimits.STATE_TEXT_CHARS);
-        text(s.characterState(), ContextLimits.STATE_TEXT_CHARS);
-        text(s.userState(), ContextLimits.STATE_TEXT_CHARS);
+        text(s.location());
+        text(s.storyTime());
+        text(s.characterState());
+        text(s.userState());
         strings(s.presentCharacters());
         strings(s.relationships());
         strings(s.items());
@@ -67,7 +66,7 @@ public final class StateValidation {
     public static void memory(MemoryValue v) {
         if (v == null)
             throw new IllegalArgumentException("记忆内容缺失");
-        nonblank(v.content(), ContextLimits.MEMORY_CHARS);
+        nonblank(v.content());
         choice(v.scope(), Set.of("character", "session"), "记忆范围");
         choice(v.kind(), Set.of("preference", "fact", "agreement", "event"), "记忆类型");
         choice(v.epistemicStatus(), Set.of("established", "claim", "hypothesis"), "事实类别");
@@ -77,32 +76,32 @@ public final class StateValidation {
     public static void goal(GoalValue v) {
         if (v == null)
             throw new IllegalArgumentException("目标内容缺失");
-        nonblank(v.description(), ContextLimits.STATE_TEXT_CHARS);
+        nonblank(v.description());
         choice(v.status(), Set.of("candidate", "active", "blocked", "paused", "completed", "abandoned", "dismissed"),
                 "目标状态");
-        text(v.currentFocus(), ContextLimits.STATE_TEXT_CHARS);
-        text(v.progressSummary(), ContextLimits.STATE_TEXT_CHARS);
+        text(v.currentFocus());
+        text(v.progressSummary());
     }
 
     public static void visualContent(com.example.web.dto.VisualDtos.Observation observation) {
-        nonblank(observation.summary(), 600);
+        nonblank(observation.summary());
         for (var list : List.of(observation.visibleDetails(), observation.extractedText(), observation.uncertainDetails())) {
-            if (list.size() > ContextLimits.LIST_ITEMS)
+            if (list.size() > ContextLimits.COLLECTION_ITEMS)
                 throw new IllegalArgumentException("视觉观察数量超限");
             for (String text : list)
-                nonblank(text, 300);
+                nonblank(text);
         }
     }
 
     public static void strings(List<String> values) {
-        if (values.size() > ContextLimits.LIST_ITEMS)
+        if (values.size() > ContextLimits.COLLECTION_ITEMS)
             throw new IllegalArgumentException("状态列表数量超限");
         for (String v : values)
-            nonblank(v, ContextLimits.STATE_TEXT_CHARS);
+            nonblank(v);
     }
 
     public static void sources(List<String> values) {
-        if (values.size() > ContextLimits.UPDATE_MESSAGES)
+        if (values.size() > ContextLimits.COLLECTION_ITEMS)
             throw new IllegalArgumentException("来源数量超限");
         Set<String> ids = new HashSet<>();
         for (String v : values) {
@@ -128,6 +127,20 @@ public final class StateValidation {
         nonblank(value, 200);
     }
 
+    public static void collection(Collection<?> values, String field) {
+        if (values.size() > ContextLimits.COLLECTION_ITEMS)
+            throw new IllegalArgumentException(field + "数量超限：实际 " + values.size() + "，上限 " + ContextLimits.COLLECTION_ITEMS);
+    }
+
+    public static void text(String value) {
+        if (value == null) throw new IllegalArgumentException("必需文字缺失");
+    }
+
+    public static void nonblank(String value) {
+        text(value);
+        if (value.isBlank()) throw new IllegalArgumentException("必需文字不能为空");
+    }
+
     public static void nonblank(String value, int max) {
         text(value, max);
         if (value.isBlank())
@@ -135,8 +148,9 @@ public final class StateValidation {
     }
 
     public static void text(String value, int max) {
-        if (value == null || value.length() > max)
-            throw new IllegalArgumentException("必需文字缺失或超过 " + max + " 字符");
+        text(value);
+        if (value.length() > max)
+            throw new IllegalArgumentException("协议文字超限：实际 " + value.length() + " 字符，上限 " + max + " 字符");
     }
 
     private static void choice(String value, Set<String> values, String label) {

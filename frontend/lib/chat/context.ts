@@ -40,7 +40,6 @@ export function stateSnapshot(
     characterId: character.id,
     sessionVersion: session.stateVersion,
     memoryVersion: character.memoryVersion,
-    processedThroughSeq: session.stateProcessedThroughSeq,
     story: session.story,
     storySources: session.storySources,
     memories: memories

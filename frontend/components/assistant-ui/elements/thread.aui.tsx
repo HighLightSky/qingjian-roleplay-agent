@@ -511,7 +511,6 @@ const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
             rows={1}
             autoFocus={autoFocus}
             enterKeyHint="enter"
-            maxLength={2000}
             unstable_insertNewlineOnTouchEnter
             addAttachmentOnPaste={true}
             aria-label="消息内容"
@@ -532,7 +531,7 @@ const ComposerAction: FC = () => {
         <ComposerAddAttachment />
         {ComposerControls && <ComposerControls />}
         <span className="hidden text-xs text-muted-foreground sm:inline">
-          {length ? `${length} / 2000` : ""}
+          {length ? `${length} 字符` : ""}
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">

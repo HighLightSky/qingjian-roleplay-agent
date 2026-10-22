@@ -1,16 +1,8 @@
 package com.example.service;
 
-/** 字符预算只做资源保护，不冒充模型 token 计数。各入口共用同一份限制。 */
+/** 传输与集合资源保护；模型容量单独按部署窗口和实际 token 校验。 */
 public final class ContextLimits {
     private ContextLimits() {}
-    public static final int INPUT_CHARS = 2000;
-    public static final int MEMORIES = 50;
-    public static final int MEMORY_CHARS = 300;
-    public static final int GOALS = 20;
-    public static final int LIST_ITEMS = 20;
-    public static final int STATE_TEXT_CHARS = 2000;
-    public static final int HISTORY_MESSAGES = 2000;
-    public static final int CONTEXT_CHARS = 2000000;
-    public static final int UPDATE_MESSAGES = 200;
-    public static final int UPDATE_OUTPUT_TOKENS = 8192;
+    public static final int COLLECTION_ITEMS = 10000;
+    public static final long REQUEST_BYTES = 64L * 1024 * 1024;
 }

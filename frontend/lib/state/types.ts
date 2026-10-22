@@ -87,7 +87,6 @@ export type StateSnapshot = {
   characterId: string;
   sessionVersion: number;
   memoryVersion: number;
-  processedThroughSeq: number;
   story: Story;
   storySources: StorySources;
   memories: Omit<Memory, "createdAt">[];
@@ -150,7 +149,6 @@ export type StateTask = {
   assistantMessageId: string;
   throughSeq: number;
   context: ChatContext;
-  automaticAttempts: number;
   createdAt: string;
   updatedAt: string;
 };

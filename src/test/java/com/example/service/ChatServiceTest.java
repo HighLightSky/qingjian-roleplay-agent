@@ -41,8 +41,7 @@ class ChatServiceTest {
     private final ImageValidationService images = new ImageValidationService(new VisionProperties());
     private final ChatService service = new ChatService(
             com.example.TestRequests.budgets(), llmClient, images,
-            new VisualSelectionService(llmClient, new ObjectMapper(),
-                    new VisualSelectionPromptBuilder(new ObjectMapper()), images, new ContextValidation(new ObjectMapper()), com.example.TestRequests.budgets()), new ContextValidation(new ObjectMapper()));
+            new ContextValidation());
 
     @Test
     void buildsModelRequestAndEmitsDeltasBeforeModelReturns() throws Exception {
@@ -89,11 +88,10 @@ class ChatServiceTest {
     }
 
     @Test
-    void rejectsBlankAndOversizedInputBeforeCallingModel() {
+    void rejectsBlankInputBeforeCallingModel() {
         for (InputDto input : List.of(
                 new InputDto(null, null),
-                new InputDto(" \n\t", null),
-                new InputDto("字".repeat(2001), null))) {
+                new InputDto(" \n\t", null))) {
             ChatApiRequest valid = validRequest();
             ChatApiRequest request = new ChatApiRequest(valid.character(), com.example.TestRequests.state(List.of()), com.example.TestRequests.summary(), List.of(), input, SETTINGS, null, "operation");
             assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
@@ -112,7 +110,7 @@ class ChatServiceTest {
             ChatApiRequest request = new ChatApiRequest(valid.character(), com.example.TestRequests.state(List.of()), com.example.TestRequests.summary(), history, valid.input(), SETTINGS, null, "operation");
             assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
         }
-        for (List<String> memories : List.of(Collections.<String>singletonList(null), Collections.nCopies(51, "记忆"))) {
+        for (List<String> memories : List.of(Collections.<String>singletonList(null), Collections.nCopies(10001, "记忆"))) {
             ChatApiRequest request = new ChatApiRequest(valid.character(), com.example.TestRequests.state(memories), com.example.TestRequests.summary(), List.of(), valid.input(), SETTINGS, null, "operation");
             assertThrows(IllegalArgumentException.class, () -> service.validateRequest(request));
         }

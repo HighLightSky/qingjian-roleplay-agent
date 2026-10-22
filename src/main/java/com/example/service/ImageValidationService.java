@@ -13,7 +13,7 @@ import org.springframework.stereotype.Service;
 /** 在模型调用前校验真实原图；不信任文件扩展名、浏览器尺寸或客户端哈希声明。 */
 @Service
 public class ImageValidationService {
-    public static final long MAX_REQUEST_BYTES = 64L * 1024 * 1024;
+    public static final long MAX_REQUEST_BYTES = ContextLimits.REQUEST_BYTES;
     private final VisionProperties properties;
 
     public ImageValidationService(VisionProperties properties) {
@@ -57,6 +57,7 @@ public class ImageValidationService {
 
     /** 校验来源与快照一致；无状态接口不认证浏览器数据库所有权。 */
     public void validateReferences(ChatApiRequest r) {
+        StateValidation.collection(catalog(r), "图片目录");
         Set<String> ids = new HashSet<>();
         int lastSeq = 0;
         int photoSources = 0;
@@ -68,6 +69,7 @@ public class ImageValidationService {
                     || a.sha256() == null || !a.sha256().matches("[a-f0-9]{64}")
                     || a.sources() == null || a.sources().isEmpty())
                 throw new IllegalArgumentException("图片目录或来源无效");
+            StateValidation.collection(a.sources(), "图片来源");
             validateMetadata(a.mimeType(), a.byteSize(), a.width(), a.height());
             int firstSeq = 0;
             boolean hasPhoto = false;
@@ -79,7 +81,7 @@ public class ImageValidationService {
                     StateValidation.id(m.messageId());
                     if (m.seq() < 1 || m.imageIndex() < 1 || m.uploadIndex() < 1)
                         throw new IllegalArgumentException("图片消息来源无效");
-                    StateValidation.text(m.text(), ContextLimits.INPUT_CHARS);
+                    StateValidation.text(m.text());
                     if (firstSeq == 0) firstSeq = m.seq();
                 } else if (source instanceof CharacterPhotoSource photo) {
                     photoSources++;
@@ -158,58 +160,4 @@ public class ImageValidationService {
             throw new IllegalArgumentException("本轮图片数量超限，请减少图片");
     }
 
-    /** 载荷必须恰好覆盖计划所需图片；先验体积和像素，再完整解码，避免静默漏图。 */
-    public void validatePayloads(ChatApiRequest r, Collection<String> required) {
-        List<Payload> payloads = r.visual() == null ? List.of() : r.visual().imagePayloads();
-        Set<String> seen = new HashSet<>();
-        long total = 0;
-        for (Payload p : payloads) {
-            if (p == null || !required.contains(p.assetId()) || !seen.add(p.assetId()) || p.dataUrl() == null)
-                throw new IllegalArgumentException("图片载荷引用无效");
-            total += p.dataUrl().length();
-            if (total > MAX_REQUEST_BYTES)
-                throw new IllegalArgumentException("图片请求体超限");
-            int comma = p.dataUrl().indexOf(',');
-            if (comma < 0)
-                throw new IllegalArgumentException("图片 data URL 无效");
-            String mime = switch (p.dataUrl().substring(0, comma)) {
-                case "data:image/png;base64" -> "image/png";
-                case "data:image/jpeg;base64" -> "image/jpeg";
-                default -> throw new IllegalArgumentException("仅支持静态 JPEG、PNG");
-            };
-            try {
-                byte[] bytes = Base64.getDecoder().decode(p.dataUrl().substring(comma + 1));
-                if (!sha256(bytes).equals(p.sha256()))
-                    throw new IllegalArgumentException("图片哈希不一致");
-                try (var stream = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
-                    var readers = ImageIO.getImageReaders(stream);
-                    if (!readers.hasNext())
-                        throw new IllegalArgumentException("图片无法解码");
-                    var reader = readers.next();
-                    try {
-                        reader.setInput(stream);
-                        String format = reader.getFormatName().toLowerCase(Locale.ROOT);
-                        if (!(mime.equals("image/png") ? format.equals("png")
-                                : format.equals("jpeg") || format.equals("jpg")))
-                            throw new IllegalArgumentException("图片真实格式与声明不符");
-                        int width = reader.getWidth(0), height = reader.getHeight(0);
-                        validateMetadata(mime, bytes.length, width, height);
-                        if (reader.read(0) == null)
-                            throw new IllegalArgumentException("图片无法解码");
-                        for (Asset a : catalog(r))
-                            if (a.assetId().equals(p.assetId()) &&
-                                    (!a.sha256().equals(p.sha256()) || !a.mimeType().equals(mime) || a.width() != width || a.height() != height
-                                            || a.byteSize() != bytes.length))
-                                throw new IllegalArgumentException("原图与目录元信息不一致");
-                    } finally {
-                        reader.dispose();
-                    }
-                }
-            } catch (IOException e) {
-                throw new IllegalArgumentException("图片无法解码", e);
-            }
-        }
-        if (!seen.equals(new HashSet<>(required)))
-            throw new IllegalArgumentException("缺少必需原图，请重新选择或恢复本地图片");
-    }
 }

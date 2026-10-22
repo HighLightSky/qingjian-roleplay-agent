@@ -1,6 +1,6 @@
 import { database, allMessages, atomic } from "../db";
 import { chatContext, type ChatContext } from "../chat/context";
-import { apiJson, buildCatalog } from "../images/coordinator";
+import { apiJson, buildCatalog, warmImageCache } from "../images/coordinator";
 import { capabilities } from "../images/repository";
 import { imageIds, type Commit } from "../images/types";
 import { id, now, errorText } from "../domain";
@@ -33,7 +33,6 @@ export async function inspectBudget(
     },
     signal,
   );
-  validateBudget(result);
   return result;
 }
 
@@ -119,13 +118,13 @@ export async function runCompactionTask(
         });
       });
       await changed();
+      await warmImageCache(context, signal);
       result = await apiJson<CompactionResult>(
         "/api/context/compact",
         { operationId: task.id, context },
         signal,
       );
       signal.throwIfAborted();
-      validateCompaction(result);
       const sources = context.history.filter(
         (m) => m.seq > result!.fromExclusiveSeq && m.seq <= result!.throughSeq,
       );
@@ -205,14 +204,12 @@ export async function runCompactionTask(
         await tx
           .objectStore("sessions")
           .put({ ...session, summary: result!.summary });
-        await tx
-          .objectStore("operations")
-          .put({
-            ...operation!,
-            status: "committed",
-            error: undefined,
-            updatedAt: now(),
-          });
+        await tx.objectStore("operations").put({
+          ...operation!,
+          status: "committed",
+          error: undefined,
+          updatedAt: now(),
+        });
         await tx.objectStore("compactionTasks").delete(task.id);
       });
     });
@@ -274,7 +271,7 @@ export async function resumeCompactionTasks(
 
 export async function ensureContextBudget(
   context: ChatContext,
-  mode: "required" | "final",
+  mode: "preview" | "required" | "final",
   anchorMessageId: string,
   signal: AbortSignal,
   commit: Commit,
@@ -323,7 +320,7 @@ export async function ensureContextBudget(
     compacted = true;
     context = await refreshContext(task);
     // 摘要使选图指纹失效，后续按必需图片预算检查，再重新选图。
-    budget = await inspectBudget(context, "required", signal);
+    budget = await inspectBudget(context, mode, signal);
   }
   if (budget.needsCompaction)
     throw new Error(

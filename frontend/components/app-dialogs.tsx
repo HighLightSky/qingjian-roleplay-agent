@@ -31,7 +31,6 @@ import {
 import { validateBackup, type Backup } from "@/lib/backup";
 import {
   EMPTY_PROFILE,
-  PROFILE_LIMITS,
   parseCharacterProfile,
   errorText,
   now,
@@ -171,7 +170,7 @@ function ProfileForm({
       setSaving(false);
     }
   }
-  const fields: [keyof typeof PROFILE_LIMITS, string, string][] = [
+  const fields: ["name" | "identity" | "description", string, string][] = [
     ["name", "角色名称", "你想如何称呼这个角色？"],
     ["identity", "身份（与我的关系）", "角色是谁，以及与我的关系？"],
     ["description", "角色描述", "自由描述经历、性格、说话方式和世界背景"],
@@ -197,7 +196,6 @@ function ProfileForm({
               className="app-input"
               disabled={!loaded || preparing || saving}
               value={profile[field]}
-              maxLength={PROFILE_LIMITS.name}
               required
               placeholder={placeholder}
               onChange={(event) =>
@@ -208,7 +206,6 @@ function ProfileForm({
             <Textarea
               disabled={!loaded || preparing || saving}
               value={profile[field]}
-              maxLength={PROFILE_LIMITS[field]}
               rows={field === "description" ? 6 : 2}
               placeholder={placeholder}
               onChange={(event) =>
@@ -735,7 +732,6 @@ export function AppDialogs({
               autoFocus
               value={value}
               required
-              maxLength={120}
               onChange={(event) => setValue(event.target.value)}
             />
           </Field>

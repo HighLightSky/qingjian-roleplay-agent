@@ -17,16 +17,14 @@ public class VisualSelectionService {
     private final ObjectMapper mapper;
     private final VisualSelectionPromptBuilder prompts;
     private final ImageValidationService images;
-    private final ContextValidation contexts;
     private final ContextBudgetService budgets;
 
     public VisualSelectionService(LLMClient client, ObjectMapper mapper, VisualSelectionPromptBuilder prompts,
-            ImageValidationService images, ContextValidation contexts, ContextBudgetService budgets) {
+            ImageValidationService images, ContextBudgetService budgets) {
         this.client = client;
         this.mapper = mapper;
         this.prompts = prompts;
         this.images = images;
-        this.contexts = contexts;
         this.budgets = budgets;
     }
 
@@ -42,30 +40,26 @@ public class VisualSelectionService {
 
     /** 按目录顺序分批选候选，再统一决策；无历史图时不调用模型。 */
     public Plan select(ChatApiRequest request) throws IOException, InterruptedException {
-        contexts.validate(request);
-        images.validateReferences(request);
         images.validateLimits(ImageValidationService.requiredIds(request));
         List<Asset> catalog = ImageValidationService.selectableCatalog(request);
         if (catalog.isEmpty())
             return new Plan("ready", List.of(), List.of(), "", fingerprint(request), request.operationId());
-        int budget = images.properties().getPlanningInputChars();
         List<List<Asset>> batches = new ArrayList<>();
-        List<Asset> batch = new ArrayList<>();
-        int size = 0;
-        for (Asset asset : catalog) {
-            int length = mapper.writeValueAsString(asset).length();
-            if (length > budget)
-                throw new IllegalArgumentException("单张图片目录超过规划预算");
-            if (size + length > budget && !batch.isEmpty()) {
-                batches.add(List.copyOf(batch));
-                batch.clear();
-                size = 0;
+        int offset = 0;
+        while (offset < catalog.size()) {
+            int low = offset + 1, high = catalog.size(), chosen = offset;
+            while (low <= high) {
+                int mid = (low + high) >>> 1;
+                if (budgets.modelRequestFits(prompts.build(request, catalog.subList(offset, mid),
+                        images.properties().getMaxImages(), "目录分批"))) {
+                    chosen = mid;
+                    low = mid + 1;
+                } else high = mid - 1;
             }
-            batch.add(asset);
-            size += length;
+            if (chosen == offset) throw new ContextTooLargeException("单张图片目录与上下文超过选图 token 预算");
+            batches.add(List.copyOf(catalog.subList(offset, chosen)));
+            offset = chosen;
         }
-        if (!batch.isEmpty())
-            batches.add(List.copyOf(batch));
         int slots = images.properties().getMaxImages() - ImageValidationService.requiredIds(request).size();
         Plan plan;
         if (batches.size() == 1)
@@ -80,8 +74,6 @@ public class VisualSelectionService {
                 candidates.addAll(result.candidateAssetIds());
             }
             List<Asset> merged = catalog.stream().filter(a -> candidates.contains(a.assetId())).toList();
-            if (mapper.writeValueAsString(merged).length() > budget)
-                throw new IllegalArgumentException("合并选图候选超过规划预算，请明确本轮参考图片");
             plan = merged.isEmpty() ? new Plan("ready", List.of(), List.of(), "", null, request.operationId())
                     : call(request, merged, slots, false);
         }
@@ -147,21 +139,4 @@ public class VisualSelectionService {
             throw new IllegalArgumentException("缺少歧义候选");
     }
 
-    /** 正文调用前重新验证计划，将本轮必选图与历史选图合并。 */
-    public List<String> validatePlan(ChatApiRequest r) {
-        var required = new LinkedHashSet<>(ImageValidationService.requiredIds(r));
-        List<Asset> catalog = ImageValidationService.catalog(r);
-        Plan p = r.visual() == null ? null : r.visual().plan();
-        if (p == null) {
-            if (!ImageValidationService.selectableCatalog(r).isEmpty())
-                throw new IllegalArgumentException("存在图片历史时必须先选图");
-        } else {
-            validateSelection(p, catalog, images.properties().getMaxImages());
-            if (!"ready".equals(p.status()) || !fingerprint(r).equals(p.contextFingerprint()))
-                throw new IllegalArgumentException("选图计划已失效，请重新选图");
-            p.selectedHistoricalImages().forEach(s -> required.add(s.assetId()));
-        }
-        images.validateLimits(required);
-        return List.copyOf(required);
-    }
 }

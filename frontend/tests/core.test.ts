@@ -1,3 +1,4 @@
+import { dispatchResponse } from "./dispatch-fixture";
 import { IMAGE_SEQUENCE_KEY } from "../lib/images/ids";
 import { contextFixture } from "./context-fixture";
 import { emptyStateResult } from "./state-fixture";
@@ -29,7 +30,7 @@ import {
   visibleCharacters,
 } from "../lib/domain";
 import { chatContext } from "../lib/chat/context";
-import { SSEParser, streamChat } from "../lib/chat/sse";
+import { SSEParser } from "../lib/chat/sse";
 import { restoreSnapshot, takeSnapshot, validateBackup } from "../lib/backup";
 import {
   updateInteractionSettings,
@@ -107,36 +108,29 @@ test("角色仅需名字，空会话从第一条用户消息开始，编辑保�
   await restoreSnapshot(backup);
   assert.deepEqual((await takeSnapshot()).data, backup.data);
 });
-test("保存角色统一检查名字和三字段长度", async () => {
-  for (const profile of [
-    { ...EMPTY_PROFILE, name: "  " },
-    { ...EMPTY_PROFILE, name: "名".repeat(61) },
-    { ...EMPTY_PROFILE, name: "林溪", identity: "身".repeat(2001) },
-    { ...EMPTY_PROFILE, name: "林溪", description: "描".repeat(8001) },
-  ])
-    await assert.rejects(saveCharacter(profile), /角色/);
+test("角色本地结构检查保留，自由描述不再按字符截断", async () => {
+  await assert.rejects(saveCharacter({ ...EMPTY_PROFILE, name: "  " }), /角色/);
   const character = await saveCharacter({
-    name: "名".repeat(60),
-    identity: "身".repeat(2000),
-    description: "描".repeat(8000),
+    name: "林溪",
+    identity: "身".repeat(3000),
+    description: "描".repeat(10000),
   });
-  assert.equal(character.identity.length, 2000);
+  assert.equal(character.description.length, 10000);
 });
 test("备份拒绝旧版本、无效角色草稿和快照，空名字草稿可以恢复", async () => {
   await setup();
   await setting("characterDraft:new", JSON.stringify(EMPTY_PROFILE));
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 8);
+  assert.equal(backup.formatVersion, 9);
   validateBackup(structuredClone(backup));
-  for (const formatVersion of [1, 2, 3, 4, 5, 6, 7])
+  for (const formatVersion of [1, 2, 3, 4, 5, 6, 7, 8])
     assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
   for (const field of ["name", "identity", "description"] as const) {
     const invalid = structuredClone(backup);
-    invalid.data.sessions[0].characterSnapshot[field] = "字".repeat(
-      field === "name" ? 61 : field === "identity" ? 2001 : 8001,
-    );
+    (invalid.data.sessions[0].characterSnapshot as any)[field] = null;
     assert.throws(() => validateBackup(invalid), /角色/);
   }
+
   const invalidDraft = structuredClone(backup);
   invalidDraft.data.settings.find(
     (s) => s.key === "characterDraft:new",
@@ -483,15 +477,10 @@ test("sending waits for an already queued settings save", async () => {
   globalThis.fetch = async (_input, init) => {
     const fixture = contextFixture(String(_input), init);
     if (fixture) return fixture;
-    if (String(_input) === "/api/state/update")
-      return Response.json(emptyStateResult(JSON.parse(String(init?.body))));
-    sentSettings = JSON.parse(String(init?.body)).interactionSettings;
-    return new Response(
-      'event: delta\ndata: {"kind":"dialogue","text":"我来看看。"}\n\nevent: done\ndata: {"finishReason":"stop","usage":{"status":"reported","inputTokens":100,"outputTokens":20,"totalTokens":120}}\n\n',
-      {
-        headers: { "content-type": "text/event-stream" },
-      },
-    );
+    if (String(_input).endsWith("/ack")) return Response.json({});
+    const request = JSON.parse(String(init?.body));
+    sentSettings = request.context.interactionSettings;
+    return dispatchResponse(request);
   };
   try {
     const saving = updateInteractionSettings({ replyLength: "detailed" });
@@ -540,48 +529,6 @@ test("SSE parser handles split CRLF, comments, multiple events and multiline dat
   assert.equal(events.length, 2);
   assert.equal(JSON.parse(events[0].data).text, "你好");
   assert.equal(events[1].name, "done");
-});
-test("streaming decodes split UTF-8 and requires a terminal done event", async () => {
-  const original = globalThis.fetch;
-  try {
-    const run = async (text: string) => {
-      const bytes = new TextEncoder().encode(text);
-      globalThis.fetch = async () =>
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
-              controller.close();
-            },
-          }),
-          { headers: { "content-type": "text/event-stream" } },
-        );
-      const parts: string[] = [];
-      const reason = await streamChat(
-        {},
-        new AbortController().signal,
-        (delta) => parts.push(delta.text),
-        () => {},
-      );
-      return { reason: reason.finishReason, parts };
-    };
-    assert.deepEqual(
-      await run(
-        'event: delta\ndata: {"kind":"dialogue","text":"你好🌱"}\n\nevent: done\ndata: {"finishReason":"stop","usage":{"status":"reported","inputTokens":100,"outputTokens":20,"totalTokens":120}}\n\n',
-      ),
-      { reason: "stop", parts: ["你好🌱"] },
-    );
-    await assert.rejects(
-      () => run('event: delta\ndata: {"kind":"narration","text":"未完成"}\n\n'),
-      /连接中断/,
-    );
-    await assert.rejects(
-      () => run('event: delta\ndata: {"kind":"html","text":"错误类型"}\n\n'),
-      /段落格式/,
-    );
-  } finally {
-    globalThis.fetch = original;
-  }
 });
 
 test("角色照片入口拒绝旧编号、前导零和尾随换行", () => {

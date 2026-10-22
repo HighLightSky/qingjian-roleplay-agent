@@ -62,7 +62,7 @@ test("达到70%自动压缩前30轮并保留最近10轮，原始历史不删除"
   await createRole(page);
   await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("roleplay-agent", 7);
+      const request = indexedDB.open("roleplay-agent", 8);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -112,7 +112,6 @@ test("达到70%自动压缩前30轮并保留最近10轮，原始历史不删除"
         tx.objectStore("sessions").put({
           ...session,
           nextMessageSeq: 81,
-          stateProcessedThroughSeq: 80,
         });
       };
       await new Promise<void>((resolve, reject) => {
@@ -127,7 +126,8 @@ test("达到70%自动压缩前30轮并保留最近10轮，原始历史不删除"
   let input:
     { summary: { throughSeq: number }; history: { seq: number }[] } | undefined;
   page.on("request", (request) => {
-    if (request.url().endsWith("/api/chat")) input = request.postDataJSON();
+    if (request.url().endsWith("/api/chat"))
+      input = request.postDataJSON().context;
   });
   await send(page, "继续");
   await expect(
@@ -142,7 +142,7 @@ test("达到70%自动压缩前30轮并保留最近10轮，原始历史不删除"
   );
   const count = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve) => {
-      const r = indexedDB.open("roleplay-agent", 7);
+      const r = indexedDB.open("roleplay-agent", 8);
       r.onsuccess = () => resolve(r.result);
     });
     try {
@@ -178,17 +178,17 @@ test("三字段角色支持仅名字创建、草稿恢复、快照隔离与复�
   }[] = [];
   page.on("request", (request) => {
     if (request.url().endsWith("/api/chat"))
-      requests.push(request.postDataJSON());
+      requests.push(request.postDataJSON().context);
   });
   await page.goto("/");
   await page.getByRole("button", { name: "创建第一个角色" }).click();
   await expect(page.getByRole("dialog").getByRole("textbox")).toHaveCount(3);
   await expect(
     page.getByPlaceholder("角色是谁，以及与我的关系？"),
-  ).toHaveAttribute("maxlength", "2000");
+  ).not.toHaveAttribute("maxlength");
   await expect(
     page.getByPlaceholder("自由描述经历、性格、说话方式和世界背景"),
-  ).toHaveAttribute("maxlength", "8000");
+  ).not.toHaveAttribute("maxlength");
   await page.getByPlaceholder("你想如何称呼这个角色？").fill("林溪");
   await page.getByRole("button", { name: "保存角色", exact: true }).click();
   await page.getByRole("button", { name: "开始对话", exact: true }).click();
@@ -268,7 +268,7 @@ test("dialogue and narration retain their styles and typed history across turns 
   const requests: { history: { role: string; text: string }[] }[] = [];
   page.on("request", (request) => {
     if (request.url().endsWith("/api/chat"))
-      requests.push(request.postDataJSON());
+      requests.push(request.postDataJSON().context);
   });
   await createRole(page);
   for (let turn = 1; turn <= 4; turn++) {
@@ -276,7 +276,7 @@ test("dialogue and narration retain their styles and typed history across turns 
     await expect(
       page.getByRole("button", { name: "发送消息", exact: true }),
     ).toBeVisible();
-    expect(requests).toHaveLength(turn);
+    await expect.poll(() => requests.length).toBe(turn);
     expect(
       requests
         .at(-1)!
@@ -308,7 +308,7 @@ test("interaction settings persist globally across sessions, characters and relo
   }[] = [];
   page.on("request", (request) => {
     if (request.url().endsWith("/api/chat"))
-      requests.push(request.postDataJSON());
+      requests.push(request.postDataJSON().context);
   });
   await createRole(page);
   await expect(
@@ -319,7 +319,7 @@ test("interaction settings persist globally across sessions, characters and relo
   ).toBeVisible();
   await chooseSetting(page, "回复长度", "详细");
   await chooseSetting(page, "叙事推进", "频繁互动");
-  expect(requests).toHaveLength(0);
+  await expect.poll(() => requests.length).toBe(0);
   await send(page, "第一段故事");
   await expect(
     page.getByRole("button", { name: "发送消息", exact: true }),
@@ -388,7 +388,7 @@ test("changing settings during generation affects only the next request", async 
   }[] = [];
   page.on("request", (request) => {
     if (request.url().endsWith("/api/chat"))
-      requests.push(request.postDataJSON());
+      requests.push(request.postDataJSON().context);
   });
   await createRole(page);
   await send(page, "慢慢回复，我把地图递给她");
@@ -397,7 +397,7 @@ test("changing settings during generation affects only the next request", async 
   ).toBeVisible();
   await chooseSetting(page, "回复长度", "详细");
   await chooseSetting(page, "叙事推进", "频繁互动");
-  expect(requests).toHaveLength(1);
+  await expect.poll(() => requests.length).toBe(1);
   expect(requests[0].interactionSettings).toEqual({
     replyLength: "standard",
     narrativeMode: "scene",
@@ -410,7 +410,7 @@ test("changing settings during generation affects only the next request", async 
   await expect(
     page.getByRole("button", { name: "发送消息", exact: true }),
   ).toBeVisible();
-  expect(requests).toHaveLength(2);
+  await expect.poll(() => requests.length).toBe(2);
   expect(requests[1].interactionSettings).toEqual({
     replyLength: "detailed",
     narrativeMode: "interactive",
@@ -539,12 +539,6 @@ test("LAN HTTP access hydrates, creates IDs and restores the conversation", asyn
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await page.route("**/api/chat", (route) =>
-      route.fulfill({
-        contentType: "text/event-stream",
-        body: 'event: delta\ndata: {"kind":"dialogue","text":"“欢迎回来，旅人。”"}\n\nevent: done\ndata: {"finishReason":"stop","usage":{"status":"reported","inputTokens":100,"outputTokens":20,"totalTokens":120}}\n\n',
-      }),
-    );
     await createRole(page);
     expect(await page.evaluate(() => isSecureContext)).toBe(false);
     await send(page, "从局域网访问的故事");
@@ -574,7 +568,7 @@ test("chat, shared memory, one-click sessions, theme, drafts and browser recover
   }[] = [];
   page.on("request", (request) => {
     if (request.url().endsWith("/api/chat"))
-      requests.push(request.postDataJSON());
+      requests.push(request.postDataJSON().context);
   });
   await createRole(page);
   await send(page, "你好，旅人");
@@ -693,7 +687,7 @@ test("stopping and reloading during a stream retain partial content", async ({
   await page.waitForTimeout(700);
   await page.reload();
   await expect(
-    page.getByText("上次生成中断，已保留保存的内容。", { exact: true }),
+    page.getByText("“欢迎回来，旅人。”", { exact: true }),
   ).toBeVisible();
   await expect(
     page.getByText("“欢迎回来，", { exact: true }).last(),
@@ -894,51 +888,32 @@ test("image drafts, first send, history selection and settings gallery survive r
     page.getByRole("button", { name: "发送消息", exact: true }),
   ).toBeEnabled();
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
-  await expect
-    .poll(() => calls.filter((c) => c.path === "/api/state/update").length)
-    .toBe(1);
+  await expect(
+    page.locator('[data-slot="turn-token-usage"]').last(),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "发送消息", exact: true }),
   ).toBeVisible();
-  expect(calls.filter((c) => c.path === "/api/context/inspect")).toHaveLength(
-    0,
-  );
-  expect(
-    calls.find((c) => c.path === "/api/chat")!.body.visual.imagePayloads,
-  ).toHaveLength(1);
-  expect(
-    calls.find((c) => c.path === "/api/chat")!.body.visual.imagePayloads[0]
-      .assetId,
-  ).toBe("img1");
-  expect(
-    calls.find((c) => c.path === "/api/state/update")!.body.context.visual
-      .imagePayloads[0].assetId,
-  ).toBe("img1");
+  expect(calls.filter((c) => c.path === "/api/chat")).toHaveLength(1);
+  const first = calls.find((c) => c.path === "/api/chat")!.body;
+  expect(first.context.visual.imagePayloads).toHaveLength(0);
+  expect(first.images[0]).toMatchObject({ assetId: "img1" });
+  expect(first.images[0].sha256).toMatch(/^[a-f0-9]{64}$/);
   await send(page, "看看地图里的标记");
-  await expect
-    .poll(() => calls.filter((c) => c.path === "/api/state/update").length)
-    .toBe(2);
-  expect(calls.filter((c) => c.path === "/api/context/inspect")).toHaveLength(
-    1,
-  );
-  expect(
-    calls.filter((c) => c.path === "/api/chat").at(-1)!.body.visual
-      .imagePayloads,
-  ).toHaveLength(1);
+  await expect(page.locator('[data-operation="state_update"]')).toHaveCount(2);
   await expect(
     page.getByRole("button", { name: "发送消息", exact: true }),
   ).toBeVisible();
-  await send(page, "不需要图片");
-  await expect
-    .poll(() => calls.filter((c) => c.path === "/api/chat").length)
-    .toBe(3);
-  expect(calls.filter((c) => c.path === "/api/context/inspect")).toHaveLength(
-    2,
-  );
+  expect(calls.filter((c) => c.path === "/api/chat")).toHaveLength(2);
+  expect(calls.filter((c) => c.path !== "/api/chat")).toHaveLength(0);
   expect(
-    calls.filter((c) => c.path === "/api/chat").at(-1)!.body.visual
+    calls.filter((c) => c.path === "/api/chat").at(-1)!.body.context.visual
       .imagePayloads,
   ).toHaveLength(0);
+  await send(page, "不需要图片");
+  await expect(
+    page.locator('[data-operation="selection"]').last(),
+  ).toContainText("本轮无需历史图");
   await expect(
     page.getByRole("button", { name: "发送消息", exact: true }),
   ).toBeVisible();
@@ -978,19 +953,40 @@ test("ambiguous image selection retains submitted input and exposes candidates",
   await expect(
     page.getByRole("button", { name: "发送消息", exact: true }),
   ).toBeVisible();
-  await page.route("**/api/context/inspect", async (route) => {
-    const context = route.request().postDataJSON();
-    await route.fulfill({
-      json: {
-        operationId: context.operationId,
-        status: "ambiguous",
-        selectedHistoricalImages: [],
-        candidateAssetIds: context.visual.assetCatalog.map(
-          (a: any) => a.assetId,
-        ),
-        message: "请说明你指哪张图片。",
-        contextFingerprint: "fixture",
+  await page.route("**/api/chat", async (route) => {
+    const request = route.request().postDataJSON();
+    const plan = {
+      operationId: request.context.operationId,
+      status: "ambiguous",
+      selectedHistoricalImages: [],
+      candidateAssetIds: request.context.visual.assetCatalog.map(
+        (a: any) => a.assetId,
+      ),
+      message: "请说明你指哪张图片。",
+      contextFingerprint: "fixture",
+    };
+    const snapshot = {
+      runId: request.runId,
+      revision: 1,
+      segments: [],
+      stages: {
+        selection: {
+          name: "selection",
+          status: "failed",
+          error: plan.message,
+          plan,
+        },
       },
+      budget: null,
+      plan,
+      body: null,
+      state: null,
+      terminal: true,
+      error: plan.message,
+    };
+    await route.fulfill({
+      contentType: "text/event-stream",
+      body: `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
     });
   });
   await send(page, "再看一下之前那张");
@@ -1037,7 +1033,7 @@ test("图库按图片编号数值排序后分页，img10不会排在img2之前",
       });
     }
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("roleplay-agent", 7);
+      const request = indexedDB.open("roleplay-agent", 8);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -1233,7 +1229,7 @@ test("精简目标详情、双方剧情状态、折叠消息预览及手动星�
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await page.getByRole("button", { name: "关闭剧情与记忆" }).click();
   const nextRequest = page.waitForRequest((request) =>
-    request.url().endsWith("/api/state/update"),
+    request.url().endsWith("/api/chat"),
   );
   await send(
     page,
@@ -1318,7 +1314,8 @@ test("角色照片草稿恢复、首次原图、后续选图与旧会话快照",
   const chats: any[] = [];
   let inspections = 0;
   page.on("request", (request) => {
-    if (request.url().endsWith("/api/chat")) chats.push(request.postDataJSON());
+    if (request.url().endsWith("/api/chat"))
+      chats.push(request.postDataJSON().context);
     if (request.url().endsWith("/api/context/inspect")) inspections++;
   });
   await page.goto("/");
@@ -1356,14 +1353,14 @@ test("角色照片草稿恢复、首次原图、后续选图与旧会话快照",
   expect(inspections).toBe(0);
   const first = chats[0];
   expect(first.character.appearancePhotoAssetId).toBe("img1");
-  expect(first.visual.imagePayloads).toHaveLength(1);
+  expect(first.visual.imagePayloads).toHaveLength(0);
   expect(first.visual.assetCatalog[0].sources[0].type).toBe("character_photo");
   expect(first.input.parts).toBeUndefined();
   await send(page, "不需要图片");
   await expect(
     page.locator('[data-operation="selection"]').last(),
   ).toContainText("本轮无需历史图");
-  expect(inspections).toBe(1);
+  expect(inspections).toBe(0);
   await expect.poll(() => chats.length).toBe(2);
   await expect(
     page.getByRole("button", { name: "发送消息", exact: true }),
@@ -1375,7 +1372,7 @@ test("角色照片草稿恢复、首次原图、后续选图与旧会话快照",
   await expect(
     page.locator('[data-operation="state_update"]').last(),
   ).toContainText("已记录 1 张图片");
-  expect(chats.at(-1).visual.imagePayloads[0].assetId).toBe(
+  expect(chats.at(-1).visual.assetCatalog[0].assetId).toBe(
     first.character.appearancePhotoAssetId,
   );
   await page.getByRole("button", { name: "角色与会话菜单" }).click();

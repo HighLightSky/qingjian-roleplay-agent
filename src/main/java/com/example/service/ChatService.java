@@ -20,15 +20,13 @@ public class ChatService {
     private final ContextBudgetService budgets;
     private final LLMClient llmClient;
     private final ImageValidationService images;
-    private final VisualSelectionService selection;
     private final ContextValidation contexts;
 
     public ChatService(ContextBudgetService budgets, LLMClient llmClient, ImageValidationService images,
-            VisualSelectionService selection, ContextValidation contexts) {
+            ContextValidation contexts) {
         this.budgets = budgets;
         this.llmClient = llmClient;
         this.images = images;
-        this.selection = selection;
         this.contexts = contexts;
     }
 
@@ -66,14 +64,10 @@ public class ChatService {
         return result;
     }
 
-    /** 在调用模型之前检查业务输入，参数错误统一使用 IllegalArgumentException。 */
     public void validateRequest(ChatApiRequest request) {
         contexts.validate(request);
-        InputDto input = request.input();
         images.validateReferences(request);
-        if (input.textOf().isBlank() && ImageValidationService.newIds(request).isEmpty()) {
+        if (request.input().textOf().isBlank() && ImageValidationService.newIds(request).isEmpty())
             throw new IllegalArgumentException("用户输入不能为空");
-        }
-        images.validatePayloads(request, selection.validatePlan(request));
     }
 }

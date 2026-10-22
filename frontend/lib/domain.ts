@@ -10,11 +10,6 @@ export type CharacterProfile = {
   description: string;
   appearancePhotoAssetId?: string;
 };
-export const PROFILE_LIMITS = {
-  name: 60,
-  identity: 2000,
-  description: 8000,
-} as const;
 export function parseCharacterProfile(
   value: unknown,
   allowEmptyName = false,
@@ -27,15 +22,9 @@ export function parseCharacterProfile(
     identity: "角色身份",
     description: "角色描述",
   };
-  for (const field of Object.keys(
-    PROFILE_LIMITS,
-  ) as (keyof typeof PROFILE_LIMITS)[]) {
+  for (const field of ["name", "identity", "description"] as const) {
     if (typeof profile[field] !== "string")
       throw new Error(`${labels[field]}必须是字符串，无内容时请填空字符串。`);
-    if (profile[field].length > PROFILE_LIMITS[field])
-      throw new Error(
-        `${labels[field]}不能超过 ${PROFILE_LIMITS[field]} 字符。`,
-      );
   }
   if (profile.appearancePhotoAssetId !== undefined)
     assertImageId(profile.appearancePhotoAssetId);
@@ -69,7 +58,6 @@ export type Session = {
   story: Story;
   storySources: StorySources;
   stateVersion: number;
-  stateProcessedThroughSeq: number;
   nextMessageSeq: number;
   createdAt: string;
   updatedAt: string;

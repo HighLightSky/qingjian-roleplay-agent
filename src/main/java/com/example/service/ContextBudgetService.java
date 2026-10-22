@@ -95,6 +95,10 @@ public class ContextBudgetService {
                 + budget.contextWindowTokens() + "，请先压缩较早历史或减少必需输入");
     }
 
+    public boolean modelRequestFits(ChatRequest request) throws IOException, InterruptedException {
+        return evaluate(counter.count(request), request.getMaxTokens(), 0).fits();
+    }
+
     public void checkModelRequest(ChatRequest request) throws IOException, InterruptedException {
         requireSendable(evaluate(counter.count(request), request.getMaxTokens(), 0));
     }

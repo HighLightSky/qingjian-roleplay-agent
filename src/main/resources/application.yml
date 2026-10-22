@@ -30,4 +30,15 @@ roleplay:
     max-images: 4
     max-image-bytes: 10485760
     max-pixels: 20000000
-    planning-input-chars: 48000
+
+  dispatch:
+    image-cache-bytes: 536870912
+    image-idle-seconds: 1800
+    image-lifetime-seconds: 7200
+    task-timeout-seconds: 600
+    result-retention-seconds: 7200
+    max-results: 32
+    result-cache-bytes: 67108864
+    cleanup-seconds: 60
+    selection-output-tokens: 4096
+    state-output-tokens: 8192

@@ -68,7 +68,7 @@ export type Snapshot = {
 };
 export type Backup = {
   format: "roleplay-agent-backup";
-  formatVersion: 8;
+  formatVersion: 9;
   exportedAt: string;
   data: Snapshot;
 };
@@ -81,7 +81,7 @@ export function validateBackup(value: unknown): Backup {
   object(value);
   if (new Blob([JSON.stringify(value)]).size > 50 * 1024 * 1024)
     throw new Error("备份不能超过 50 MiB。");
-  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 8)
+  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 9)
     throw new Error("不支持此备份格式或版本，请选择本应用导出的文件。");
   date(value.exportedAt);
   object(value.data);
@@ -103,6 +103,9 @@ export function validateBackup(value: unknown): Backup {
     }
   }
   const snapshot = data as unknown as Snapshot;
+  snapshot.settings = snapshot.settings.filter(
+    (s) => !s.key.startsWith("dispatch:"),
+  );
   const characters = new Map(
     snapshot.characters.map((character) => [character.id, character]),
   );
@@ -143,7 +146,6 @@ export function validateBackup(value: unknown): Backup {
     integer(session.profileVersion, 1);
     integer(session.nextMessageSeq, 1);
     integer(session.stateVersion);
-    integer(session.stateProcessedThroughSeq);
     validateStory(session.story);
   }
   for (const message of snapshot.messages) {
@@ -170,7 +172,7 @@ export function validateBackup(value: unknown): Backup {
       ].includes(message.status)
     )
       throw new Error("消息状态无效。");
-    if (message.role === "user") string(message.text, 2000);
+    if (message.role === "user") string(message.text);
     else if (message.role === "assistant" && Array.isArray(message.segments)) {
       for (const segment of message.segments) {
         object(segment);
@@ -187,10 +189,7 @@ export function validateBackup(value: unknown): Backup {
     }
   }
   for (const session of snapshot.sessions) {
-    if (
-      session.nextMessageSeq <= (maxSeq.get(session.id) ?? 0) ||
-      session.stateProcessedThroughSeq >= session.nextMessageSeq
-    )
+    if (session.nextMessageSeq <= (maxSeq.get(session.id) ?? 0))
       throw new Error("会话消息游标无效。");
   }
   for (const memory of snapshot.memories) {
@@ -225,7 +224,6 @@ export function validateBackup(value: unknown): Backup {
       characterId: character.id,
       sessionVersion: session.stateVersion,
       memoryVersion: character.memoryVersion,
-      processedThroughSeq: session.stateProcessedThroughSeq,
       story: session.story,
       storySources: session.storySources,
       memories: snapshot.memories.filter(
@@ -239,10 +237,10 @@ export function validateBackup(value: unknown): Backup {
   for (const draft of snapshot.drafts) {
     if (!sessions.has(draft.sessionId))
       throw new Error("草稿引用了不存在的会话。");
-    string(draft.text, 2000);
+    string(draft.text);
   }
   for (const setting of snapshot.settings) {
-    string(setting.value, 50_000);
+    string(setting.value);
     if (setting.key.startsWith("characterDraft:")) {
       parseCharacterProfile(JSON.parse(setting.value), true);
     }
@@ -262,7 +260,7 @@ export function validateBackup(value: unknown): Backup {
   validateImages(snapshot);
   return {
     format: "roleplay-agent-backup",
-    formatVersion: 8,
+    formatVersion: 9,
     exportedAt: value.exportedAt as string,
     data: snapshot,
   };
@@ -318,7 +316,7 @@ function validateImages(snapshot: Snapshot) {
     for (const part of parts) {
       object(part);
       if (part.type === "text") {
-        string(part.text, 2000);
+        string(part.text);
         texts.push(part.text);
       } else if (part.type === "image" && user) {
         string(part.assetId, 200);
@@ -477,9 +475,9 @@ function validateImages(snapshot: Snapshot) {
       o.extractedText,
       o.uncertainDetails,
     ]) {
-      if (!Array.isArray(field) || field.length > 20)
+      if (!Array.isArray(field) || field.length > 10000)
         throw new Error("视觉观察列表无效。");
-      field.forEach((v) => string(v, 300));
+      field.forEach((v) => string(v));
     }
     checkSources(o.sources, o.sessionId, o.assetId);
   }
@@ -490,7 +488,7 @@ function validateImages(snapshot: Snapshot) {
       u.id !== `${u.messageId}:${u.assetId}`
     )
       throw new Error("图片使用记录来源无效。");
-    string(u.purpose, 2000);
+    string(u.purpose);
   }
   const operations = new Map(snapshot.operations.map((o) => [o.id, o]));
   for (const op of snapshot.operations) {
@@ -627,7 +625,7 @@ function validateImages(snapshot: Snapshot) {
           !Array.isArray(selection.catalog)
         )
           throw new Error("选图操作结果无效。");
-        string(plan.message, 2000);
+        string(plan.message);
         string(plan.contextFingerprint, 200);
         const catalogIds = new Set<string>();
         for (const a of selection.catalog as unknown[]) {
@@ -646,7 +644,7 @@ function validateImages(snapshot: Snapshot) {
         for (const selected of plan.selectedHistoricalImages) {
           object(selected);
           string(selected.assetId, 200);
-          string(selected.purpose, 2000);
+          string(selected.purpose);
           if (
             !catalogIds.has(selected.assetId) ||
             selectedIds.has(selected.assetId)
@@ -681,7 +679,6 @@ function validateImages(snapshot: Snapshot) {
       operations.get(task.id)!.status === "committed"
     )
       throw new Error("整理任务来源无效。");
-    integer(task.automaticAttempts);
     validateFrozenContext(task.context, task.sessionId, messages);
     checkContextPhoto(task.context, task.sessionId);
     const user = messages.get(assistant.replyToMessageId!);
@@ -749,7 +746,7 @@ function validateFrozenContext(
   if (
     context.state.sessionId !== sessionId ||
     !Array.isArray(context.history) ||
-    context.history.length > 2000
+    context.history.length > 10000
   )
     throw new Error("冻结上下文会话或历史数量无效。");
   let previous = context.summary.throughSeq;
@@ -757,7 +754,7 @@ function validateFrozenContext(
   for (const message of context.history) {
     integer(message.seq, previous + 1);
     integer(message.checkpointVersion);
-    string(message.text, 2_000_000);
+    string(message.text);
     if (
       ids.has(message.id) ||
       messages.get(message.id)?.sessionId !== sessionId ||
@@ -771,10 +768,8 @@ function validateFrozenContext(
     ids.add(message.id);
     previous = message.seq;
   }
-  if (JSON.stringify(context).length > 2_000_000)
-    throw new Error("冻结上下文超过字符上限。");
   object(context.input);
-  string(context.input.text, 2000);
+  string(context.input.text);
 }
 export async function takeSnapshot(): Promise<Backup> {
   const db = await database();
@@ -799,7 +794,7 @@ export async function takeSnapshot(): Promise<Backup> {
   }
   const backup: Backup = {
     format: "roleplay-agent-backup",
-    formatVersion: 8,
+    formatVersion: 9,
     exportedAt: new Date().toISOString(),
     data: { ...data, assets: serialized },
   };

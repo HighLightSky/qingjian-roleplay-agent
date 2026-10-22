@@ -211,6 +211,20 @@ const AppOperation: ToolCallMessagePartComponent = (props) => {
           operation.anchorMessageId),
   );
   if (!operation) throw new Error("过程投影缺少操作记录。");
+  const latestState = useAppStore(
+    (state) =>
+      state.operations
+        .filter((o) => o.kind === "state_update")
+        .sort(
+          (a, b) =>
+            (state.messages.find((m) => m.id === a.anchorMessageId)?.seq ?? 0) -
+            (state.messages.find((m) => m.id === b.anchorMessageId)?.seq ?? 0),
+        )
+        .at(-1)?.id,
+  );
+  const retryable =
+    operation.kind !== "state_update" ||
+    (operation.id === latestState && operation.status !== "stale");
   const active =
     ["pending", "running", "computed"].includes(operation.status) &&
     !operation.error;
@@ -244,7 +258,7 @@ const AppOperation: ToolCallMessagePartComponent = (props) => {
             ) : (
               <StateDetails result={operation.result as StateResult} />
             ))}
-          {!active && operation.status !== "committed" && (
+          {!active && operation.status !== "committed" && retryable && (
             <Button
               variant="outline"
               size="sm"

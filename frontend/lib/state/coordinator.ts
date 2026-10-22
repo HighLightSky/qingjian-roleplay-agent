@@ -1,9 +1,8 @@
 import { database, allMessages, atomic } from "../db";
 import { now, plainText, errorText, type Message } from "../domain";
 import { stateSnapshot, type ChatContext } from "../chat/context";
-import { apiJson, buildCatalog, loadPayloads } from "../images/coordinator";
-import type { Commit } from "../images/types";
-import { validateStateResult } from "./validation";
+import { apiJson, buildCatalog, warmImageCache } from "../images/coordinator";
+import { imageIds, requiredImageIds, type Commit } from "../images/types";
 import type {
   StateTask,
   Operation,
@@ -31,7 +30,6 @@ export async function saveCompletedStateTask(
       assistantMessageId: assistant.id,
       throughSeq: assistant.seq,
       context: frozen,
-      automaticAttempts: 0,
       createdAt: now(),
       updatedAt: now(),
     };
@@ -46,10 +44,32 @@ export async function saveCompletedStateTask(
       createdAt: now(),
       updatedAt: now(),
     };
+    for (const previous of await tx
+      .objectStore("stateTasks")
+      .index("session")
+      .getAll(assistant.sessionId)) {
+      if (previous.id === task.id) continue;
+      const old = await tx.objectStore("operations").get(previous.id);
+      if (old)
+        await tx.objectStore("operations").put({
+          ...old,
+          status: "stale",
+          error: "已由后续轮次取代，不可重试。",
+          updatedAt: now(),
+        });
+      await tx.objectStore("stateTasks").delete(previous.id);
+    }
     await tx.objectStore("messages").put(assistant);
     await tx.objectStore("stateTasks").put(task);
     await tx.objectStore("operations").put(operation);
-    for (const p of context.visual?.imagePayloads ?? []) {
+    for (const assetId of new Set([
+      ...imageIds(context.input.parts),
+      ...requiredImageIds(context),
+      ...(context.visual?.plan?.selectedHistoricalImages ?? []).map(
+        (s) => s.assetId,
+      ),
+    ])) {
+      const p = { assetId };
       await tx.objectStore("imageUsages").put({
         id: `${assistant.id}:${p.assetId}`,
         assetId: p.assetId,
@@ -76,7 +96,6 @@ export async function runStateTask(
   signal: AbortSignal,
   commit: Commit,
   changed: () => Promise<void>,
-  manual = false,
 ) {
   const db = await database();
   let operation = await db.get("operations", task.id);
@@ -114,8 +133,7 @@ export async function runStateTask(
       result &&
       (cachedSourcesChanged ||
         result.sessionVersion !== state.sessionVersion ||
-        result.memoryVersion !== state.memoryVersion ||
-        result.fromExclusiveSeq !== state.processedThroughSeq)
+        result.memoryVersion !== state.memoryVersion)
     ) {
       operation = {
         ...operation,
@@ -125,11 +143,9 @@ export async function runStateTask(
       };
       await commit(() => db.put("operations", operation!));
       await changed();
-      result = undefined;
+      throw new StaleResult("整理结果已过期，不自动重新计算。");
     }
     if (!result) {
-      if (!manual && task.automaticAttempts >= 2)
-        throw new Error("自动整理已尝试两次，请在失败步骤中重试。");
       const assistant = messages.find((m) => m.id === task.assistantMessageId);
       if (
         !assistant ||
@@ -140,7 +156,9 @@ export async function runStateTask(
       const pending: SourceMessage[] = messages
         .filter(
           (m) =>
-            m.seq > state.processedThroughSeq &&
+            m.seq >=
+              messages.find((row) => row.id === assistant.replyToMessageId)!
+                .seq &&
             m.seq <= task.throughSeq &&
             m.status === "complete",
         )
@@ -167,7 +185,7 @@ export async function runStateTask(
             messages.filter((m) => m.seq < user.seq),
           ),
         };
-        context.visual.imagePayloads = await loadPayloads(context, signal);
+        context.visual.imagePayloads = [];
       }
       operation = {
         ...operation,
@@ -178,7 +196,6 @@ export async function runStateTask(
       };
       task = {
         ...task,
-        automaticAttempts: task.automaticAttempts + (manual ? 0 : 1),
         updatedAt: now(),
       };
       await commit(async () => {
@@ -193,21 +210,22 @@ export async function runStateTask(
       result = await apiJson<StateResult>(
         "/api/state/update",
         {
-          operationId: task.id,
-          context,
-          fromExclusiveSeq: state.processedThroughSeq,
-          throughSeq: task.throughSeq,
-          messages: pending,
+          request: {
+            operationId: task.id,
+            context,
+            fromExclusiveSeq: pending[0].seq - 1,
+            throughSeq: task.throughSeq,
+            messages: pending,
+          },
+          images: await warmImageCache(context, signal),
         },
         signal,
       );
       signal.throwIfAborted();
-      validateStateResult(result);
       if (
         result.operationId !== task.id ||
         result.sessionVersion !== state.sessionVersion ||
         result.memoryVersion !== state.memoryVersion ||
-        result.fromExclusiveSeq !== state.processedThroughSeq ||
         result.throughSeq !== task.throughSeq
       )
         throw new Error("服务端整理结果与操作快照不一致。");
@@ -217,8 +235,7 @@ export async function runStateTask(
         result,
         sourceVersions: messages
           .filter(
-            (m) =>
-              m.seq > state.processedThroughSeq && m.seq <= task.throughSeq,
+            (m) => m.seq > result!.fromExclusiveSeq && m.seq <= task.throughSeq,
           )
           .map((m) => ({ id: m.id, checkpointVersion: m.checkpointVersion })),
         updatedAt: now(),
@@ -255,8 +272,7 @@ export async function runStateTask(
           throw new Error("整理目标已删除。");
         if (
           currentSession.stateVersion !== result!.sessionVersion ||
-          currentCharacter.memoryVersion !== result!.memoryVersion ||
-          currentSession.stateProcessedThroughSeq !== result!.fromExclusiveSeq
+          currentCharacter.memoryVersion !== result!.memoryVersion
         ) {
           throw new StaleResult("结果已过期，等待重新整理。");
         }
@@ -347,7 +363,6 @@ export async function runStateTask(
           ...currentSession,
           story: updatedStory,
           storySources,
-          stateProcessedThroughSeq: task.throughSeq,
           stateVersion: currentSession.stateVersion + (domainChanged ? 1 : 0),
           ...(domainChanged ? { updatedAt: now() } : {}),
         });
@@ -386,26 +401,33 @@ export async function runStateTask(
       }),
     );
     await changed();
-    if (
-      error instanceof StaleResult &&
-      !signal.aborted &&
-      !manual &&
-      task.automaticAttempts < 2
-    )
-      return runStateTask(task, signal, commit, changed);
     throw error;
   }
 }
 
-export async function resumePendingTasks(
-  sessionId: string,
-  signal: AbortSignal,
+export async function acceptStateResult(
+  task: StateTask,
+  result: StateResult,
   commit: Commit,
   changed: () => Promise<void>,
 ) {
-  const tasks = await (
-    await database()
-  ).getAllFromIndex("stateTasks", "session", sessionId);
-  for (const task of tasks.sort((a, b) => a.throughSeq - b.throughSeq))
-    await runStateTask(task, signal, commit, changed);
+  const db = await database();
+  const operation = await db.get("operations", task.id);
+  if (!operation) throw new Error("整理操作不存在。");
+  if (operation.status === "committed") return;
+  const messages = await allMessages(task.sessionId);
+  await commit(() =>
+    db.put("operations", {
+      ...operation,
+      status: "computed",
+      result,
+      sourceVersions: messages
+        .filter(
+          (m) => m.seq > result.fromExclusiveSeq && m.seq <= result.throughSeq,
+        )
+        .map((m) => ({ id: m.id, checkpointVersion: m.checkpointVersion })),
+      updatedAt: now(),
+    }),
+  );
+  await runStateTask(task, new AbortController().signal, commit, changed);
 }

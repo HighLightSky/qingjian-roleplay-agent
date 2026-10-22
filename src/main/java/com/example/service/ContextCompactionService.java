@@ -25,10 +25,11 @@ public class ContextCompactionService {
     private final PromptBuilder chatPrompts;
     private final LLMClient client;
     private final ObjectMapper mapper;
+    private final ImageCache cache;
 
     public ContextCompactionService(ContextProperties properties, ContextValidation validation,
             ImageValidationService images, ContextBudgetService budgets, LlamaTokenCounter counter,
-            CompactionPromptBuilder prompts, PromptBuilder chatPrompts, LLMClient client, ObjectMapper mapper) {
+            CompactionPromptBuilder prompts, PromptBuilder chatPrompts, LLMClient client, ObjectMapper mapper, ImageCache cache) {
         this.properties = properties;
         this.validation = validation;
         this.images = images;
@@ -38,6 +39,7 @@ public class ContextCompactionService {
         this.chatPrompts = chatPrompts;
         this.client = client;
         this.mapper = mapper;
+        this.cache = cache;
     }
 
     public void validateRequest(CompactionRequest request) {
@@ -55,17 +57,10 @@ public class ContextCompactionService {
         var context = request.context();
         var batch = selectBatch(context);
         int through = batch.getLast().seq();
-        if (context.visual() != null) {
-            for (var asset : context.visual().assetCatalog()) {
-                if (asset.sources().stream().anyMatch(s -> s instanceof MessageSource m && m.seq() <= through) && asset.observation() == null)
-                    throw new IllegalArgumentException("压缩前需先完成图片观察：" + asset.assetId());
-            }
-        }
-        var modelRequest = prompts.build(context, batch);
+        var modelRequest = buildBatch(context, batch);
         budgets.checkModelRequest(modelRequest);
         var response = client.chat(modelRequest);
-        if (!"stop".equals(response.getFinishReason()) || response.getContent() == null
-                || response.getContent().length() > ContextLimits.CONTEXT_CHARS)
+        if (!"stop".equals(response.getFinishReason()) || response.getContent() == null)
             throw new IOException("摘要生成未完成或结果超限");
         String text = validateResult(response.getContent(), context, through);
         var summary = new HistorySummary(text, through, context.summary().version() + 1);
@@ -89,7 +84,12 @@ public class ContextCompactionService {
         int low = 0, high = ends.size() - 1, chosen = -1;
         while (low <= high) {
             int mid = (low + high) >>> 1;
-            ChatRequest modelRequest = prompts.build(context, eligible.subList(0, ends.get(mid)));
+            var candidate = eligible.subList(0, ends.get(mid));
+            if (unobserved(context, candidate.getLast().seq()).size() > images.properties().getMaxImages()) {
+                high = mid - 1;
+                continue;
+            }
+            ChatRequest modelRequest = buildBatch(context, candidate);
             long tokens = counter.count(modelRequest).inputTokens();
             if (tokens <= properties.compactionBatchInputTokens()
                     && tokens + modelRequest.getMaxTokens() + properties.safetyTokens() <= properties.contextWindowTokens()) {
@@ -99,6 +99,22 @@ public class ContextCompactionService {
         }
         if (chosen < 0) throw new ContextTooLargeException("最早一轮与已有摘要超过压缩批次预算，无法保持完整轮次进行压缩");
         return List.copyOf(eligible.subList(0, ends.get(chosen)));
+    }
+
+    private List<com.example.web.dto.VisualDtos.Asset> unobserved(ChatApiRequest context, int through) {
+        return ImageValidationService.catalog(context).stream().filter(a -> a.observation() == null
+                && a.sources().stream().anyMatch(s -> s instanceof MessageSource m && m.seq() <= through)).toList();
+    }
+
+    private ChatRequest buildBatch(ChatApiRequest context, List<HistoryMessageDto> batch) {
+        var missing = unobserved(context, batch.getLast().seq());
+        images.validateLimits(missing.stream().map(com.example.web.dto.VisualDtos.Asset::assetId).toList());
+        if (missing.isEmpty()) return prompts.build(context, batch);
+        var refs = missing.stream().map(a -> new com.example.web.dto.DispatchDtos.ImageRef(a.assetId(), a.sha256())).toList();
+        try (var pinned = cache.pin(refs)) {
+            return prompts.build(ChatDispatchService.withImages(context, null,
+                    pinned.payloads(missing.stream().map(com.example.web.dto.VisualDtos.Asset::assetId).toList())), batch);
+        }
     }
 
     private String validateResult(String content, ChatApiRequest context, int through)

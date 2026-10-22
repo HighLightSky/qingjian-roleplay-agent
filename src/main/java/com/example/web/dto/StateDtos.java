@@ -43,7 +43,7 @@ public final class StateDtos {
         public FieldSource { sourceMessageIds = list(sourceMessageIds); }
     }
     public record Snapshot(String sessionId, String characterId, int sessionVersion, int memoryVersion,
-            int processedThroughSeq, Story story, Map<String, FieldSource> storySources, List<Memory> memories, List<Goal> goals) {
+            Story story, Map<String, FieldSource> storySources, List<Memory> memories, List<Goal> goals) {
         public Snapshot {
             storySources = storySources == null ? Map.of() : Map.copyOf(storySources);
             memories = list(memories);

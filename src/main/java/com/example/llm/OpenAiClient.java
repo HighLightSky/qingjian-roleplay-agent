@@ -90,10 +90,12 @@ public class OpenAiClient implements LLMClient {
         ObjectNode jsonRequest = requests.chatBody(request, true);
         HttpRequest httpRequest = buildHttpRequest(jsonRequest, "text/event-stream");
 
+        long startedAt = System.nanoTime();
         HttpResponse<InputStream> httpResponse = httpClient.send(
                 httpRequest,
                 HttpResponse.BodyHandlers.ofInputStream());
 
+        com.example.service.UpstreamCancellation.register(httpResponse.body());
         if (!isSuccess(httpResponse.statusCode())) {
             try (InputStream body = httpResponse.body()) {
                 String errorBody = new String(body.readAllBytes(), StandardCharsets.UTF_8);
@@ -106,7 +108,9 @@ public class OpenAiClient implements LLMClient {
         TokenUsage usage = TokenUsage.unavailable();
         boolean ended = false;
 
-        try (BufferedReader reader = new BufferedReader(
+        StreamDeadline deadline = new StreamDeadline(httpResponse.body(),
+                Math.max(0, requestTimeout.toNanos() - (System.nanoTime() - startedAt)));
+        try (deadline; BufferedReader reader = new BufferedReader(
                 new InputStreamReader(httpResponse.body(), StandardCharsets.UTF_8))) {
 
             String line;
@@ -145,10 +149,44 @@ public class OpenAiClient implements LLMClient {
                     finishReason = reason.asText();
                 }
             }
+        } catch (IOException e) {
+            if (deadline.expired) throw new java.net.http.HttpTimeoutException("模型流式请求超过单次调用时间限制");
+            throw e;
         }
 
+
+        if (deadline.expired) throw new java.net.http.HttpTimeoutException("模型流式请求超过单次调用时间限制");
         if (!ended) throw new IOException("模型事件流缺少结束标记，连接已中断");
         return new ChatStreamResult(finishReason, usage);
+    }
+
+    private static final class StreamDeadline implements AutoCloseable {
+        private final InputStream body;
+        private final Thread target = Thread.currentThread();
+        private final Thread timer;
+        private boolean finished;
+        private volatile boolean expired;
+        StreamDeadline(InputStream body, long nanos) {
+            this.body = body;
+            timer = Thread.ofVirtual().name("model-stream-deadline").start(() -> {
+                try {
+                    Thread.sleep(Duration.ofNanos(nanos));
+                    expire();
+                } catch (InterruptedException ignored) {
+                    // 调用已完成，取消截止计时。
+                }
+            });
+        }
+        private synchronized void expire() {
+            if (finished) return;
+            expired = true;
+            target.interrupt();
+            try { body.close(); } catch (IOException ignored) { /* 连接已关闭。 */ }
+        }
+        @Override public synchronized void close() {
+            finished = true;
+            timer.interrupt();
+        }
     }
 
     private HttpRequest buildHttpRequest(ObjectNode jsonRequest, String accept) throws IOException {

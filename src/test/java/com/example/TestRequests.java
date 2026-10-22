@@ -5,6 +5,9 @@ import com.example.web.dto.StateDtos.*;
 
 /** 测试使用与浏览器一致的完整领域快照。 */
 public final class TestRequests {
+    public static com.example.config.DispatchProperties dispatch() {
+        return new com.example.config.DispatchProperties(536870912, 1800, 7200, 600, 7200, 32, 67108864, 60, 4096, 8192);
+    }
     private TestRequests() {}
     public static com.example.web.dto.ContextDtos.HistorySummary summary() {
         return new com.example.web.dto.ContextDtos.HistorySummary("", 0, 0);
@@ -23,7 +26,7 @@ public final class TestRequests {
         var vision = new com.example.config.VisionProperties();
         var llm = new com.example.config.LlmProperties("", "", "test-model", .8, 800, 120);
         return new com.example.service.ContextBudgetService(counter, new com.example.prompt.PromptBuilder(llm),
-                contextProperties(), vision, new com.example.service.ContextValidation(mapper),
+                contextProperties(), vision, new com.example.service.ContextValidation(),
                 new com.example.service.ImageValidationService(vision), mapper);
     }
     public static Snapshot state(List<String> contents) {
@@ -33,7 +36,7 @@ public final class TestRequests {
                     new MemoryValue(contents.get(i), "session", "fact", "established", "active"),
                     1, "manual", "session", List.of(), "2000-01-01T00:00:00Z"));
         }
-        return new Snapshot("session", "character", 0, 0, 0,
+        return new Snapshot("session", "character", 0, 0,
                 new Story("", "", "", "", List.of(), List.of(), List.of(), List.of()), Map.of(), memories, List.of());
     }
 }

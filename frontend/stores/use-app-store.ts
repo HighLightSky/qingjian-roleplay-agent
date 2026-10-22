@@ -2,13 +2,18 @@
 
 import { IMAGE_SEQUENCE_KEY } from "@/lib/images/ids";
 
-import { validateStory, validateGoalValue } from "@/lib/state/validation";
-
 import { create } from "zustand";
 import * as db from "@/lib/db";
-import { prepareImageContext } from "@/lib/images/coordinator";
+import { buildCatalog, warmImageCache } from "@/lib/images/coordinator";
 import {
-  resumePendingTasks,
+  followDispatch,
+  ResultExpired,
+  DispatchRejected,
+  type StoredRun,
+  type DispatchSnapshot,
+} from "@/lib/chat/dispatch";
+import {
+  acceptStateResult,
   runStateTask,
   saveCompletedStateTask,
 } from "@/lib/state/coordinator";
@@ -18,17 +23,20 @@ import type {
   GoalValue,
   MemoryValue,
   Story,
+  StateSnapshot,
 } from "@/lib/state/types";
 import { imageIds, type ContentPart } from "@/lib/images/types";
-import { chatContext } from "@/lib/chat/context";
-import { streamChat } from "@/lib/chat/sse";
+import {
+  chatContext,
+  stateSnapshot,
+  type ChatContext,
+} from "@/lib/chat/context";
 import {
   ensureContextBudget,
   resumeCompactionTasks,
 } from "@/lib/context/coordinator";
 import { unknownUsage, type ContextBudget } from "@/lib/context/types";
 import {
-  appendDelta,
   DEFAULT_INTERACTION_SETTINGS,
   errorText,
   now,
@@ -125,6 +133,7 @@ let initPromise: Promise<void> | undefined;
 let selection = 0;
 let controller: AbortController | null = null;
 let generation: Promise<void> | null = null;
+let dispatchRunId: string | null = null;
 let liveReply: Message | null = null;
 function readInteractionSettings(
   value: string | undefined,
@@ -179,7 +188,7 @@ export function initialize() {
         if (character)
           await selectCharacter(character.id, saved.get("sessionId"));
         set({ ready: true, bootError: "" });
-        void recoverStateTasks().catch(report);
+        void resumeDispatch().catch(report);
       } catch (error) {
         set({ bootError: `无法打开本地数据：${errorText(error)}` });
         initPromise = undefined;
@@ -265,7 +274,6 @@ export async function selectSession(sessionId: string) {
   });
   if (!get().readOnly) await write(() => db.setting("sessionId", sessionId));
   await refreshActivity();
-  void recoverStateTasks().catch(report);
 }
 export async function loadEarlier() {
   const { sessionId, messages } = get();
@@ -335,6 +343,11 @@ export async function saveProfile(
     existing?.id === get().characterId
       ? (get().sessionId ?? undefined)
       : undefined;
+  if (existing?.id === get().characterId) await cancelGeneration();
+  await validateEdit("character", {
+    ...profile,
+    profileVersion: existing?.profileVersion ?? 1,
+  });
   const character = await write(() =>
     db.saveCharacter(profile, existing, draftKey),
   );
@@ -408,9 +421,52 @@ async function recordOperation(operation: Operation) {
   );
   await refreshActivity();
 }
+async function validateEdit(kind: "character" | "state", value: unknown) {
+  const response = await fetch(`/api/validate/${kind}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(value),
+  });
+  if (!response.ok) throw new Error((await response.json()).message);
+}
+async function validateStateEdit(edit: (state: StateSnapshot) => void) {
+  await cancelGeneration();
+  await writes;
+  const database = await db.database();
+  const sessionId = get().sessionId;
+  const session = sessionId
+    ? await database.get("sessions", sessionId)
+    : undefined;
+  if (!session) throw new Error("当前会话不存在。");
+  const character = await database.get("characters", session.characterId);
+  if (!character) throw new Error("角色不存在。");
+  const state = stateSnapshot(
+    character,
+    session,
+    await database.getAllFromIndex("memories", "character", character.id),
+    await database.getAllFromIndex("goals", "session", session.id),
+  );
+  edit(state);
+  await validateEdit("state", state);
+}
+
 export async function saveMemory(value: MemoryValue, existing?: Memory) {
   const { characterId, sessionId } = get();
   if (!characterId || !sessionId) throw new Error("请先选择会话。");
+  await validateStateEdit((state) => {
+    state.memories = state.memories.filter((m) => m.id !== existing?.id);
+    state.memories.push({
+      id: existing?.id ?? id(),
+      characterId,
+      sessionId: value.scope === "character" ? null : sessionId,
+      value,
+      version: existing?.version ?? 1,
+      origin: "manual",
+      sourceSessionId: sessionId,
+      sourceMessageIds: [],
+      updatedAt: now(),
+    });
+  });
   await write(() => db.putMemory(characterId, sessionId, value, existing));
   await refreshActivity();
 }
@@ -418,7 +474,9 @@ export async function removeMemory(memory: Memory) {
   await saveMemory({ ...memory.value, status: "dismissed" }, memory);
 }
 export async function saveStory(story: Story, expectedVersion: number) {
-  validateStory(story);
+  await validateStateEdit((state) => {
+    state.story = story;
+  });
   const sessionId = get().sessionId;
   if (!sessionId) throw new Error("请先选择会话。");
   await write(async () => {
@@ -448,9 +506,20 @@ export async function saveStory(story: Story, expectedVersion: number) {
   await refreshActivity();
 }
 export async function saveGoal(value: GoalValue, existing?: Goal) {
+  await validateStateEdit((state) => {
+    state.goals = state.goals.filter((g) => g.id !== existing?.id);
+    state.goals.push({
+      id: existing?.id ?? id(),
+      sessionId: state.sessionId,
+      value,
+      version: existing?.version ?? 1,
+      origin: "manual",
+      sourceMessageIds: [],
+      updatedAt: now(),
+    });
+  });
   const sessionId = get().sessionId;
   if (!sessionId) throw new Error("请先选择会话。");
-  validateGoalValue(value);
   await write(async () => {
     const database = await db.database();
     const tx = database.transaction(["sessions", "goals"], "readwrite");
@@ -462,11 +531,6 @@ export async function saveGoal(value: GoalValue, existing?: Goal) {
         : undefined;
       if (existing && previous?.version !== existing.version)
         throw new Error("目标已变化，请重新打开编辑。");
-      if (
-        !existing &&
-        (await tx.objectStore("goals").index("session").count(sessionId)) >= 20
-      )
-        throw new Error("当前会话最多保留 20 个目标。");
       await tx.objectStore("goals").put({
         id: existing?.id ?? id(),
         sessionId,
@@ -513,43 +577,28 @@ export async function sendMessage(
   retryUserId?: string,
 ) {
   if (get().activeSessionId)
-    throw new Error("已有一段对话正在执行，请稍候或先停止。");
+    throw new Error("已有任务正在执行，请稍候或先停止。");
   const { sessionId, characterId, readOnly } = get();
   if (!sessionId || !characterId || readOnly)
     throw new Error("当前会话不可发送。");
-  if ((!text.trim() && !imageIds(parts).length) || text.length > 2000)
-    throw new Error("请输入文字或选择图片，文字最多 2000 个字符。");
-  set({ activeSessionId: sessionId, preparingInput: true, error: "" });
   const runController = new AbortController();
   controller = runController;
+  set({ activeSessionId: sessionId, preparingInput: true, error: "" });
   let reply: Message | undefined;
-  let completedSaved = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let paintTimer: ReturnType<typeof setTimeout> | undefined;
-  let queue: Promise<void> = Promise.resolve();
-  let storageError: unknown;
   let preparationError: unknown;
-  const publish = () => {
-    if (get().sessionId === sessionId && reply)
-      set((state) => ({
-        messages: state.messages.map((m) => (m.id === reply!.id ? reply! : m)),
-      }));
-  };
-  const persist = () => {
-    if (!reply || storageError) return;
-    const snapshot = structuredClone(reply);
-    queue = queue
-      .then(() => write(() => db.checkpoint(snapshot)))
-      .catch((error) => {
-        storageError = error;
-        runController.abort();
-      });
-  };
-  const run = async () => {
+  const run = (async () => {
     try {
       await flushDrafts();
       await writes;
       const database = await db.database();
+      for (const row of (await database.getAll("settings")).filter((row) =>
+        row.key.startsWith("dispatch:"),
+      )) {
+        const previous = JSON.parse(row.value) as StoredRun;
+        dispatchRunId = previous.runId;
+        await consumeRun(previous, runController.signal);
+        dispatchRunId = null;
+      }
       const historyAtSend = await db.allMessages(sessionId);
       const retryUser = retryUserId
         ? historyAtSend.find((m) => m.id === retryUserId && m.role === "user")
@@ -557,8 +606,8 @@ export async function sendMessage(
       if (
         retryUserId &&
         (!retryUser ||
-          retryUser.seq !==
-            historyAtSend.filter((m) => m.role === "user").at(-1)?.seq)
+          retryUser.id !==
+            historyAtSend.filter((m) => m.role === "user").at(-1)?.id)
       )
         throw new Error("仅支持重试最近一条用户消息。");
       const turn = await write(async () => {
@@ -587,22 +636,9 @@ export async function sendMessage(
         set((state) => ({
           messages: retryUser
             ? state.messages.map((m) => (m.id === reply!.id ? reply! : m))
-            : [...state.messages, turn.user, turn.assistant],
+            : [...state.messages, turn.user, reply!],
           draft: "",
         }));
-      await refreshActivity();
-      await resumePendingTasks(
-        sessionId,
-        runController.signal,
-        write,
-        refreshActivity,
-      );
-      await resumeCompactionTasks(
-        sessionId,
-        runController.signal,
-        write,
-        refreshActivity,
-      );
       const [character, session, memories, goals] = await Promise.all([
         database.get("characters", characterId),
         database.get("sessions", sessionId),
@@ -611,10 +647,8 @@ export async function sendMessage(
       ]);
       if (!character || !session) throw new Error("角色或会话不存在。");
       if (character.archived) throw new Error("请先恢复角色，再继续对话。");
-      const history = (await db.allMessages(sessionId)).filter(
-        (m) => m.seq < turn.user.seq,
-      );
-      let base = chatContext(
+      const history = historyAtSend.filter((m) => m.seq < turn.user.seq);
+      let context: ChatContext = chatContext(
         character,
         session,
         memories,
@@ -625,188 +659,294 @@ export async function sendMessage(
         goals,
         `select:${reply.id}`,
       );
-      const { buildCatalog } = await import("@/lib/images/coordinator");
-      base = {
-        ...base,
+      context = {
+        ...context,
         visual: {
           sessionId,
           assetCatalog: await buildCatalog(sessionId, history),
           plan: null,
           imagePayloads: [],
         },
-      } as typeof base;
-      const budgetRun = { batches: 0 };
-      let prepared = await ensureContextBudget(
-        base,
-        "required",
+      };
+      const prepared = await ensureContextBudget(
+        context,
+        "preview",
         reply.id,
         runController.signal,
         write,
         refreshActivity,
-        budgetRun,
+        { batches: 0 },
       );
-      let body;
-      for (;;) {
-        body = await prepareImageContext(
-          prepared.context,
-          sessionId,
-          history,
-          runController.signal,
-          reply.id,
-          recordOperation,
-        );
-        const checked = await ensureContextBudget(
-          body,
-          "final",
-          reply.id,
-          runController.signal,
-          write,
-          refreshActivity,
-          budgetRun,
-        );
-        set({ contextBudget: { sessionId, budget: checked.budget } });
-        if (!checked.compacted) break;
-        prepared = checked;
-      }
-      runController.signal.throwIfAborted();
-      set({ preparingInput: false });
-      const result = await streamChat(
-        body,
+      const images = await warmImageCache(
+        prepared.context,
         runController.signal,
-        (delta) => {
-          reply = appendDelta(reply!, delta);
-          liveReply = reply;
-          if (!paintTimer)
-            paintTimer = setTimeout(() => {
-              paintTimer = undefined;
-              publish();
-            }, 32);
-          if (!timer) {
-            persist();
-            timer = setTimeout(() => {
-              timer = undefined;
-              persist();
-            }, 500);
-          }
-        },
-        (budget) => set({ contextBudget: { sessionId, budget } }),
       );
-      const reason = result.finishReason;
-      clearTimeout(timer);
-      clearTimeout(paintTimer);
-      await queue;
-      if (storageError) throw storageError;
-      reply = {
-        ...reply,
-        status: reason === "stop" && plainText(reply) ? "complete" : "error",
-        finishReason: reason,
-        usage: result.usage,
-        error:
-          reason === "stop"
-            ? plainText(reply)
-              ? undefined
-              : "本次未返回正文。"
-            : reason === "length"
-              ? "输出达到模型长度限制。"
-              : `回复未正常完成（${reason}）。`,
-        checkpointVersion: reply.checkpointVersion + 1,
-        updatedAt: now(),
+      runController.signal.throwIfAborted();
+      const stored: StoredRun = {
+        runId: `run:${reply.id}:${id()}`,
+        sessionId,
+        assistantMessageId: reply.id,
+        context: prepared.context,
       };
-      if (reply.status === "complete") {
-        const task = await write(() => saveCompletedStateTask(body, reply!));
-        completedSaved = true;
-        publish();
-        await refreshActivity();
-        try {
-          await runStateTask(
-            task,
-            runController.signal,
-            write,
-            refreshActivity,
-          );
-        } catch (error) {
-          if (!runController.signal.aborted)
-            report(new Error(`正文已保存，整理待重试：${errorText(error)}`));
-        }
-      }
+      await write(() =>
+        db.setting(`dispatch:${stored.runId}`, JSON.stringify(stored)),
+      );
+      dispatchRunId = stored.runId;
+      set({ preparingInput: false });
+      await consumeRun(stored, runController.signal, {
+        runId: stored.runId,
+        context: prepared.context,
+        images,
+        user: {
+          id: turn.user.id,
+          seq: turn.user.seq,
+          createdAt: turn.user.createdAt,
+        },
+        assistant: { id: reply.id, seq: reply.seq, createdAt: reply.createdAt },
+      });
     } catch (error) {
-      const cancelled = runController.signal.aborted && !storageError;
       if (!reply) preparationError = error;
-      if (reply && !completedSaved)
+      if (!dispatchRunId && reply) {
         reply = {
           ...reply,
-          status: cancelled ? "cancelled" : "error",
-          error: cancelled
-            ? "已停止，保留已收到的内容。"
-            : errorText(storageError ?? error),
-          checkpointVersion: reply.checkpointVersion + 1,
+          status: runController.signal.aborted ? "cancelled" : "error",
+          error: errorText(error),
           updatedAt: now(),
         };
-      if (!cancelled) report(storageError ?? error);
-    } finally {
-      clearTimeout(timer);
-      clearTimeout(paintTimer);
-      await queue;
-      if (reply) {
-        publish();
-        try {
-          await write(() => db.checkpoint(reply!));
-        } catch (error) {
-          report(error);
-        }
+        await write(() => db.checkpoint(reply!));
+        if (get().sessionId === sessionId)
+          set((state) => ({
+            messages: state.messages.map((m) =>
+              m.id === reply!.id ? reply! : m,
+            ),
+          }));
       }
+      if (!runController.signal.aborted) report(error);
+    } finally {
       if (controller === runController) controller = null;
+      dispatchRunId = null;
       liveReply = null;
       set({ activeSessionId: null, preparingInput: false });
     }
-  };
-  const currentRun = run();
-  generation = currentRun;
+  })();
+  generation = run;
   try {
-    await currentRun;
+    await run;
   } finally {
-    if (generation === currentRun) generation = null;
+    if (generation === run) generation = null;
   }
   if (preparationError) throw preparationError;
 }
 
-export async function recoverStateTasks(operationId?: string) {
-  const sessionId = get().sessionId;
-  if (!sessionId || get().readOnly || get().activeSessionId) return;
-  const tasks = await (
-    await db.database()
-  ).getAllFromIndex("stateTasks", "session", sessionId);
-  if (!tasks.length || get().activeSessionId || get().sessionId !== sessionId)
-    return;
-  const runController = new AbortController();
-  controller = runController;
-  set({ activeSessionId: sessionId });
-  const currentRun = (async () => {
-    for (const task of tasks.sort((a, b) => a.throughSeq - b.throughSeq)) {
-      await runStateTask(
-        task,
-        runController.signal,
-        write,
-        refreshActivity,
-        task.id === operationId,
-      );
-      if (task.id === operationId) break;
+async function consumeRun(
+  run: StoredRun,
+  signal: AbortSignal,
+  request?: unknown,
+) {
+  const database = await db.database();
+  let reply = await database.get("messages", run.assistantMessageId);
+  if (!reply) throw new Error("后台任务对应的正文消息缺失。");
+  let lastCheckpoint = 0;
+  let lastStages = "";
+  let bodySaved = reply.status === "complete";
+  let task = await database.get("stateTasks", `state:${reply.id}`);
+  const apply = async (snapshot: DispatchSnapshot) => {
+    signal.throwIfAborted();
+    const completed =
+      snapshot.body?.finishReason === "stop" &&
+      snapshot.segments.some((s) => s.text.trim());
+    const terminalBody = !!snapshot.body || snapshot.terminal;
+    // 终态正文的检查点版本只推进一次，重订阅不会改变整理来源版本。
+    const firstTerminal =
+      terminalBody && ["pending", "streaming"].includes(reply!.status);
+    reply = {
+      ...reply!,
+      segments: snapshot.segments,
+      status: completed
+        ? "complete"
+        : snapshot.terminal
+          ? snapshot.stages.body?.status === "cancelled"
+            ? "cancelled"
+            : "error"
+          : "streaming",
+      usage: snapshot.body?.usage ?? unknownUsage(),
+      finishReason: snapshot.body?.finishReason,
+      checkpointVersion: reply!.checkpointVersion + (firstTerminal ? 1 : 0),
+      updatedAt: now(),
+      error: completed ? undefined : (snapshot.error ?? undefined),
+    };
+    liveReply = reply;
+    if (get().sessionId === run.sessionId)
+      set((state) => ({
+        messages: state.messages.map((m) => (m.id === reply!.id ? reply! : m)),
+        ...(snapshot.budget
+          ? {
+              contextBudget: {
+                sessionId: run.sessionId,
+                budget: snapshot.budget,
+              },
+            }
+          : {}),
+        preparingInput: request ? !snapshot.stages.body : get().preparingInput,
+      }));
+    const context = {
+      ...run.context,
+      visual: run.context.visual
+        ? { ...run.context.visual, plan: snapshot.plan, imagePayloads: [] }
+        : undefined,
+    };
+    if (completed && !bodySaved) {
+      task = await write(() => saveCompletedStateTask(context, reply!));
+      bodySaved = true;
+    } else if (
+      (!bodySaved && Date.now() - lastCheckpoint >= 500) ||
+      snapshot.terminal
+    ) {
+      await write(() => db.checkpoint(reply!));
+      lastCheckpoint = Date.now();
     }
-  })()
-    .catch((error) => {
-      if (!runController.signal.aborted) report(error);
-    })
-    .finally(() => {
-      if (controller === runController) controller = null;
-      set({ activeSessionId: null, preparingInput: false });
-    });
-  generation = currentRun;
+    const stageKey = JSON.stringify(snapshot.stages);
+    if (stageKey !== lastStages)
+      for (const stage of Object.values(snapshot.stages)) {
+        if (stage.name === "body") continue;
+        const operationId =
+          stage.name === "selection"
+            ? run.context.operationId
+            : `state:${reply.id}`;
+        const previous = await database.get("operations", operationId);
+        if (previous?.status === "committed" && stage.name === "state_update")
+          continue;
+        await recordOperation({
+          id: operationId,
+          sessionId: run.sessionId,
+          runId: reply.id,
+          anchorMessageId: reply.id,
+          placement: stage.name === "selection" ? "before" : "after",
+          kind: stage.name === "selection" ? "selection" : "state_update",
+          status:
+            stage.name === "state_update" && stage.status === "committed"
+              ? "computed"
+              : stage.status,
+          createdAt: previous?.createdAt ?? now(),
+          updatedAt: now(),
+          error: stage.error ?? undefined,
+          ...(stage.name === "selection" && snapshot.plan
+            ? {
+                result: {
+                  plan: snapshot.plan,
+                  catalog: context.visual?.assetCatalog ?? [],
+                },
+              }
+            : {}),
+        });
+      }
+    lastStages = stageKey;
+    if (snapshot.state) {
+      const operation = await database.get(
+        "operations",
+        snapshot.state.operationId,
+      );
+      if (operation?.status !== "committed") {
+        if (!task) throw new Error("整理结果对应的本地待办缺失。");
+        try {
+          await acceptStateResult(task, snapshot.state, write, refreshActivity);
+        } catch (error) {
+          const state = await database.get("operations", task.id);
+          if (state?.status !== "stale") throw error;
+          report(error);
+        }
+      }
+    }
+    if (snapshot.terminal && snapshot.stages.state_update?.status === "failed")
+      report(
+        new Error(
+          `正文已保存，整理失败：${snapshot.stages.state_update.error}`,
+        ),
+      );
+  };
   try {
-    await currentRun;
-  } finally {
-    if (generation === currentRun) generation = null;
+    await followDispatch(run, signal, apply, request);
+  } catch (error) {
+    if (error instanceof ResultExpired || error instanceof DispatchRejected) {
+      const current = await database.get("messages", run.assistantMessageId);
+      if (current && current.status !== "complete")
+        await write(() =>
+          db.checkpoint({
+            ...current,
+            status: error instanceof ResultExpired ? "interrupted" : "error",
+            error: error.message,
+            updatedAt: now(),
+          }),
+        );
+      const saved = await database.get("messages", run.assistantMessageId);
+      if (saved && get().sessionId === run.sessionId)
+        set((state) => ({
+          messages: state.messages.map((m) => (m.id === saved.id ? saved : m)),
+        }));
+      await write(() => database.delete("settings", `dispatch:${run.runId}`));
+    }
+    throw error;
+  }
+  // 保存完成再确认删除；确认失败保留本地任务元数据，下次只重取同一任务。
+  const response = await fetch(`/api/chat/${run.runId}/ack`, {
+    method: "POST",
+    signal,
+  });
+  if (!response.ok)
+    throw new Error("结果已保存，确认删除失败，稍后将再次确认。");
+  await write(() => database.delete("settings", `dispatch:${run.runId}`));
+  await refreshActivity();
+}
+
+export async function resumeDispatch() {
+  if (get().readOnly || get().activeSessionId) return;
+  const settings = await (await db.database()).getAll("settings");
+  for (const row of settings.filter((s) => s.key.startsWith("dispatch:"))) {
+    const run = JSON.parse(row.value) as StoredRun;
+    const abort = new AbortController();
+    controller = abort;
+    dispatchRunId = run.runId;
+    set({ activeSessionId: run.sessionId });
+    const current = consumeRun(run, abort.signal)
+      .catch(report)
+      .finally(() => {
+        controller = null;
+        dispatchRunId = null;
+        liveReply = null;
+        set({ activeSessionId: null, preparingInput: false });
+      });
+    generation = current;
+    try {
+      await current;
+    } finally {
+      if (generation === current) generation = null;
+    }
   }
 }
+
+export async function recoverStateTasks(operationId: string) {
+  const sessionId = get().sessionId;
+  if (!sessionId || get().readOnly || get().activeSessionId) return;
+  const database = await db.database();
+  const task = await database.get("stateTasks", operationId);
+  if (!task) throw new Error("整理步骤已失效，不能重试。");
+  const abort = new AbortController();
+  controller = abort;
+  set({ activeSessionId: sessionId });
+  const current = runStateTask(task, abort.signal, write, refreshActivity)
+    .catch(report)
+    .finally(() => {
+      controller = null;
+      set({ activeSessionId: null });
+    });
+  generation = current;
+  try {
+    await current;
+  } finally {
+    if (generation === current) generation = null;
+  }
+}
+
 export async function retryLastMessage() {
   const sessionId = get().sessionId;
   if (!sessionId) return;
@@ -844,7 +984,14 @@ export async function recoverCompactionTasks(operationId: string) {
   }
 }
 export async function cancelGeneration() {
-  controller?.abort();
+  if (dispatchRunId) {
+    const response = await fetch(`/api/chat/${dispatchRunId}/cancel`, {
+      method: "POST",
+    });
+    if (!response.ok && response.status !== 404)
+      throw new Error("无法取消后台任务，请确认后端连接。");
+    if (!generation) controller?.abort();
+  } else controller?.abort();
   await generation;
 }
 export async function exportBackup() {

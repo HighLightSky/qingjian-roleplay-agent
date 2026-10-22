@@ -21,6 +21,11 @@ import com.example.web.dto.ApiError;
 public class ApiExceptionHandler {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ApiExceptionHandler.class);
 
+    @ExceptionHandler(com.example.service.DispatchException.class)
+    public ResponseEntity<ApiError> dispatchError(com.example.service.DispatchException exception) {
+        return jsonError(exception.status(), new ApiError(exception.code(), exception.getMessage()));
+    }
+
     @ExceptionHandler(com.example.service.ContextTooLargeException.class)
     public ResponseEntity<ApiError> contextTooLarge(com.example.service.ContextTooLargeException exception) {
         return jsonError(HttpStatus.CONFLICT, new ApiError("CONTEXT_TOO_LARGE", exception.getMessage()));
@@ -45,7 +50,7 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler({IOException.class, InterruptedException.class, RuntimeException.class})
     public ResponseEntity<ApiError> modelError(Exception exception, HttpServletResponse response) {
-        log.error("模型处理失败：{}", exception.getMessage(), exception);
+        log.error("模型处理失败，异常类型：{}", exception.getClass().getName());
         // 已提交的 SSE 响应或已断开的连接不能再改成 JSON 响应。
         if (response.isCommitted()) {
             return null;

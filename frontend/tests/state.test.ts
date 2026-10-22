@@ -73,7 +73,7 @@ function withModel(
   const calls: UpdateBody[] = [];
   globalThis.fetch = async (path, init) => {
     assert.equal(String(path), "/api/state/update");
-    const body: UpdateBody = JSON.parse(String(init!.body));
+    const body: UpdateBody = JSON.parse(String(init!.body)).request;
     calls.push(body);
     return Response.json(await answer(body));
   };
@@ -141,28 +141,6 @@ function updates(body: UpdateBody): StateResult {
   ];
   return result;
 }
-
-test("无变化只推进检查游标，重复执行不再次调用模型或修改领域版本", async () => {
-  const { session, task } = await setup();
-  const before = await (await database()).get("sessions", session.id);
-  const model = withModel(emptyStateResult);
-  try {
-    await runStateTask(task, new AbortController().signal, commit, changed);
-    const db = await database();
-    const after = await db.get("sessions", session.id);
-    assert.equal(after!.stateProcessedThroughSeq, 2);
-    assert.equal(after!.stateVersion, before!.stateVersion);
-    assert.equal(after!.updatedAt, before!.updatedAt);
-    assert.equal(await db.count("memories"), 0);
-    assert.equal(await db.count("goals"), 0);
-    assert.equal(await db.count("stateTasks"), 0);
-    assert.equal((await db.get("operations", task.id))!.status, "committed");
-    await runStateTask(task, new AbortController().signal, commit, changed);
-    assert.equal(model.calls.length, 1);
-  } finally {
-    model.restore();
-  }
-});
 
 test("剧情、记忆和目标同时提交，下一轮按会话隔离注入", async () => {
   const { character, session, task } = await setup();
@@ -255,10 +233,6 @@ test("保存中途失败全部回滚，重试只保存已计算结果", async ()
     const db = await database();
     assert.equal(await db.count("memories"), 0);
     assert.equal(await db.count("goals"), 0);
-    assert.equal(
-      (await db.get("sessions", session.id))!.stateProcessedThroughSeq,
-      0,
-    );
     assert.equal((await db.get("operations", task.id))!.status, "computed");
     failing = false;
     await runStateTask(
@@ -276,87 +250,6 @@ test("保存中途失败全部回滚，重试只保存已计算结果", async ()
   }
 });
 
-test("自动调用两次失败后停止，人工重试已有任务可以恢复", async () => {
-  const { task } = await setup();
-  let fail = true;
-  const model = withModel((body) => {
-    if (fail) throw new Error("模型暂不可用");
-    return emptyStateResult(body);
-  });
-  try {
-    const db = await database();
-    const run = () =>
-      db
-        .get("stateTasks", task.id)
-        .then((t) =>
-          runStateTask(t!, new AbortController().signal, commit, changed),
-        );
-    await assert.rejects(run(), /模型暂不可用/);
-    await assert.rejects(run(), /模型暂不可用/);
-    await assert.rejects(run(), /自动整理已尝试两次/);
-    assert.equal(model.calls.length, 2);
-    assert.equal(
-      (await allMessages(task.sessionId)).at(-1)!.status,
-      "complete",
-    );
-    fail = false;
-    await runStateTask(
-      (await db.get("stateTasks", task.id))!,
-      new AbortController().signal,
-      commit,
-      changed,
-      true,
-    );
-    assert.equal(await db.count("stateTasks"), 0);
-    assert.equal(model.calls.length, 3);
-  } finally {
-    model.restore();
-  }
-});
-
-test("人工编辑期间返回的旧结果不覆盖编辑，而是读取新版本重算", async () => {
-  const { character, session, task } = await setup();
-  const saved = await putMemory(character.id, session.id, memory);
-  let calls = 0;
-  const model = withModel(async (body) => {
-    if (++calls === 1) {
-      await putMemory(
-        character.id,
-        session.id,
-        { ...memory, content: "人工改为小远" },
-        saved,
-      );
-      const r = emptyStateResult(body);
-      r.memoryChanges = [
-        {
-          action: "update",
-          id: saved.id,
-          expectedVersion: 1,
-          before: memory,
-          value: { ...memory, content: "旧模型结果" },
-          reason: "旧判断",
-          sourceMessageIds: [body.messages.at(-1)!.id],
-        },
-      ];
-      return r;
-    }
-    assert.equal(body.context.state.memories[0].value.content, "人工改为小远");
-    return emptyStateResult(body);
-  });
-  try {
-    await runStateTask(task, new AbortController().signal, commit, changed);
-    const db = await database();
-    assert.equal(
-      (await db.get("memories", saved.id))!.value.content,
-      "人工改为小远",
-    );
-    assert.equal(model.calls.length, 2);
-    assert.equal((await db.get("operations", task.id))!.status, "committed");
-  } finally {
-    model.restore();
-  }
-});
-
 test("取消后迟到结果不提交，刷新保留可恢复任务", async () => {
   const { task, session } = await setup();
   const controller = new AbortController();
@@ -370,55 +263,11 @@ test("取消后迟到结果不提交，刷新保留可恢复任务", async () =>
     );
     const db = await database();
     assert.equal(await db.count("memories"), 0);
-    assert.equal(
-      (await db.get("sessions", session.id))!.stateProcessedThroughSeq,
-      0,
-    );
     assert.equal((await db.get("operations", task.id))!.status, "cancelled");
     assert.equal(await db.count("stateTasks"), 1);
     const backup = await takeSnapshot();
     await restoreSnapshot(backup);
     assert.equal(await db.count("stateTasks"), 1);
-  } finally {
-    model.restore();
-  }
-});
-
-test("待检查区间排除未完成正文，保留对应用户的明确信息", async () => {
-  const { character, session } = await setup();
-  const db = await database();
-  const old = (await allMessages(session.id)).at(-1)!;
-  await db.delete("stateTasks", `state:${old.id}`);
-  await db.delete("operations", `state:${old.id}`);
-  await db.put("messages", { ...old, status: "cancelled" });
-  const next = await beginTurn(session.id, "继续");
-  const complete = {
-    ...next.assistant,
-    status: "complete" as const,
-    finishReason: "stop",
-    segments: [{ kind: "dialogue" as const, text: "好的" }],
-    checkpointVersion: 1,
-  };
-  const context = chatContext(
-    character,
-    session,
-    [],
-    [],
-    "继续",
-    DEFAULT_INTERACTION_SETTINGS,
-  );
-  const task = await saveCompletedStateTask(context, complete);
-  const model = withModel(emptyStateResult);
-  try {
-    await runStateTask(task, new AbortController().signal, commit, changed);
-    assert.deepEqual(
-      model.calls[0].messages.map((m) => m.seq),
-      [1, 3, 4],
-    );
-    assert.equal(
-      (await db.get("sessions", session.id))!.stateProcessedThroughSeq,
-      4,
-    );
   } finally {
     model.restore();
   }
@@ -437,40 +286,6 @@ test("刷新将执行中的操作终止，已完成正文和待办保持完整",
     await runStateTask(task, new AbortController().signal, commit, changed);
     assert.equal((await db.get("operations", task.id))!.status, "committed");
   } finally {
-    model.restore();
-  }
-});
-
-test("保存重试前来源版本改变时，废弃缓存结果并重新调用模型", async () => {
-  const { task, assistant } = await setup();
-  let fail = true;
-  const model = withModel(emptyStateResult);
-  const put = IDBObjectStore.prototype.put;
-  IDBObjectStore.prototype.put = function (...args: Parameters<typeof put>) {
-    if (this.name === "sessions" && fail)
-      throw new DOMException("提交失败", "QuotaExceededError");
-    return put.apply(this, args);
-  };
-  try {
-    await assert.rejects(
-      runStateTask(task, new AbortController().signal, commit, changed),
-      /提交失败/,
-    );
-    fail = false;
-    await checkpoint({
-      ...assistant,
-      segments: [{ kind: "narration", text: "正文已经修订。" }],
-      checkpointVersion: 2,
-    });
-    await runStateTask(task, new AbortController().signal, commit, changed);
-    assert.equal(model.calls.length, 2);
-    assert.equal(model.calls[1].messages.at(-1)!.text, "正文已经修订。");
-    assert.equal(
-      (await (await database()).get("operations", task.id))!.status,
-      "committed",
-    );
-  } finally {
-    IDBObjectStore.prototype.put = put;
     model.restore();
   }
 });

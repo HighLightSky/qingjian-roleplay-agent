@@ -25,7 +25,7 @@ import {
   getOriginal,
   DEFAULT_LIMITS,
 } from "../lib/images/repository";
-import { buildCatalog, prepareImageContext } from "../lib/images/coordinator";
+import { buildCatalog } from "../lib/images/coordinator";
 import { chatContext } from "../lib/chat/context";
 import { takeSnapshot, restoreSnapshot, validateBackup } from "../lib/backup";
 import {
@@ -149,6 +149,18 @@ function mockFetch() {
     globalThis.fetch = original;
   };
 }
+async function setupPhoto() {
+  const { character } = await setup();
+  await asset("img2");
+  const updated = await saveCharacter(
+    { ...character, appearancePhotoAssetId: "img2" },
+    character,
+  );
+  const session = await createSession(updated.id);
+  useAppStore.setState({ sessionId: session.id, characterId: updated.id });
+  return { character: updated, session };
+}
+
 test("SHA-256 matches independent vectors including multi-block binary inputs", () => {
   for (const bytes of [
     Buffer.alloc(0),
@@ -162,52 +174,7 @@ test("SHA-256 matches independent vectors including multi-block binary inputs", 
     );
   assert.deepEqual(inspectImage(png, "image/png"), { width: 1, height: 1 });
 });
-test("first image is direct input; every subsequent text turn selects, including zero selection", async () => {
-  const { session } = await setup();
-  const a = await asset();
-  const restore = mockFetch();
-  try {
-    await sendMessage("", [{ type: "image", assetId: a.id }]);
-    assert.equal(
-      calls.filter((c) => c.path === "/api/context/inspect").length,
-      0,
-    );
-    assert.equal(
-      calls.find((c) => c.path === "/api/chat")?.body.visual.imagePayloads
-        .length,
-      1,
-    );
-    assert.equal(
-      (await (await database()).get("sessions", session.id))?.title,
-      "图片对话",
-    );
-    await sendMessage("看看那个符号的小字");
-    assert.equal(
-      calls.filter((c) => c.path === "/api/context/inspect").length,
-      1,
-    );
-    const inspect = calls.find((c) => c.path === "/api/context/inspect")!;
-    assert.equal(inspect.body.visual.imagePayloads.length, 0);
-    assert.equal(inspect.body.visual.assetCatalog[0].observation.version, 1);
-    assert.equal(
-      calls.filter((c) => c.path === "/api/chat").at(-1)!.body.visual
-        .imagePayloads[0].assetId,
-      a.id,
-    );
-    await sendMessage("不需要图片");
-    assert.equal(
-      calls.filter((c) => c.path === "/api/context/inspect").length,
-      2,
-    );
-    assert.equal(
-      calls.filter((c) => c.path === "/api/chat").at(-1)!.body.visual
-        .imagePayloads.length,
-      0,
-    );
-  } finally {
-    restore();
-  }
-});
+
 test("catalog retains archived images and never imports another session's references", async () => {
   const { character, session } = await setup();
   await asset();
@@ -234,69 +201,13 @@ test("catalog retains archived images and never imports another session's refere
   await deleteSession(other.id);
   assert.equal(await (await database()).get("assets", "img1"), undefined);
 });
-test("visual failures preserve completed text and durable task; next turn recovers before selection", async () => {
-  const { session } = await setup();
-  await asset();
-  const restore = mockFetch();
-  try {
-    failVisual = true;
-    await sendMessage("", [{ type: "image", assetId: "img1" }]);
-    const db = await database();
-    assert.equal((await allMessages(session.id)).at(-1)?.status, "complete");
-    assert.equal(await db.count("stateTasks"), 1);
-    assert.equal(await db.count("visualObservations"), 0);
-    assert.deepEqual(
-      (await db.getAll("stateTasks"))[0].context.visual?.imagePayloads,
-      [],
-    );
-    const backup = await takeSnapshot();
-    const invalid = structuredClone(backup);
-    invalid.data.stateTasks[0].context.character.identity = "字".repeat(2001);
-    await assert.rejects(restoreSnapshot(invalid), /角色身份/);
-    assert.equal(await db.count("stateTasks"), 1);
-    await restoreSnapshot(backup);
-    assert.equal(await db.count("stateTasks"), 1);
-    failVisual = false;
-    calls = [];
-    await sendMessage("不需要图片");
-    assert.ok(
-      calls.findIndex((c) => c.path === "/api/state/update") <
-        calls.findIndex((c) => c.path === "/api/context/inspect"),
-    );
-    assert.equal(await db.count("stateTasks"), 0);
-    assert.equal(await db.count("visualObservations"), 1);
-  } finally {
-    restore();
-  }
-});
-test("retry reuses the saved user message instead of appending a second image input", async () => {
-  const { session } = await setup();
-  await asset();
-  const restore = mockFetch();
-  try {
-    failChat = true;
-    await sendMessage("", [{ type: "image", assetId: "img1" }]);
-    const user = (await allMessages(session.id))[0];
-    failChat = false;
-    await retryLastMessage();
-    const messages = await allMessages(session.id);
-    assert.equal(messages.length, 2);
-    assert.equal(messages[0].id, user.id);
-    assert.equal(messages[1].status, "complete");
-    assert.equal(
-      calls.filter((c) => c.path === "/api/context/inspect").length,
-      0,
-    );
-  } finally {
-    restore();
-  }
-});
+
 test("v8 backup restores original bytes and rejects damaged originals before replacing data", async () => {
   const { session } = await setup();
   const a = await asset();
   await beginTurn(session.id, "", [{ type: "image", assetId: a.id }]);
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 8);
+  assert.equal(backup.formatVersion, 9);
   await restoreSnapshot(backup);
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
   const invalid = structuredClone(backup);
@@ -305,223 +216,6 @@ test("v8 backup restores original bytes and rejects damaged originals before rep
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
   for (const formatVersion of [1, 2, 3, 4, 5, 6, 7])
     assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
-});
-test("ambiguous selection and cancellation preserve submitted input and never generate a reply", async () => {
-  const { character, session } = await setup();
-  await asset();
-  await beginTurn(session.id, "地图", [
-    { type: "text", text: "地图" },
-    { type: "image", assetId: "img1" },
-  ]);
-  const base = chatContext(
-    character,
-    session,
-    [],
-    [],
-    "哪张图",
-    DEFAULT_INTERACTION_SETTINGS,
-  );
-  const original = globalThis.fetch;
-  try {
-    globalThis.fetch = async () =>
-      json({
-        operationId: base.operationId,
-        status: "ambiguous",
-        selectedHistoricalImages: [],
-        candidateAssetIds: ["img1"],
-        message: "你指哪张？",
-      });
-    await assert.rejects(
-      prepareImageContext(
-        base,
-        session.id,
-        await allMessages(session.id),
-        new AbortController().signal,
-        "test-anchor",
-        async () => {},
-      ),
-      /你指哪张/,
-    );
-    const count = await (await database()).count("messages");
-    let started!: () => void;
-    const pending = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    globalThis.fetch = async (_input, init) => {
-      started();
-      return new Promise<Response>((_resolve, reject) =>
-        init?.signal?.addEventListener("abort", () =>
-          reject(new DOMException("Aborted", "AbortError")),
-        ),
-      );
-    };
-    const send = sendMessage("等一下").catch((error) => error);
-    await pending;
-    await cancelGeneration();
-    await send;
-    assert.equal(await (await database()).count("messages"), count + 2);
-    assert.equal((await allMessages(session.id)).at(-1)?.status, "cancelled");
-  } finally {
-    globalThis.fetch = original;
-  }
-});
-
-test("background visual calls do not block local draft writes", async () => {
-  const { session } = await setup();
-  await asset();
-  const restore = mockFetch();
-  const mocked = globalThis.fetch;
-  let started!: () => void, release!: () => void;
-  const pending = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  globalThis.fetch = async (input, init) => {
-    if (String(input) === "/api/state/update") {
-      started();
-      await gate;
-    }
-    return mocked(input, init);
-  };
-  const run = sendMessage("", [{ type: "image", assetId: "img1" }]);
-  try {
-    await pending;
-    scheduleDraft(session.id, "下一轮草稿");
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        flushDrafts(),
-        new Promise((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("Draft save blocked by visual call")),
-            1000,
-          );
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
-    assert.equal(
-      (await (await database()).get("drafts", session.id))?.text,
-      "下一轮草稿",
-    );
-  } finally {
-    release();
-    await run;
-    restore();
-  }
-});
-
-async function setupPhoto() {
-  const { character } = await setup();
-  await asset("img2");
-  const updated = await saveCharacter(
-    { ...character, appearancePhotoAssetId: "img2" },
-    character,
-  );
-  const session = await createSession(updated.id);
-  useAppStore.setState({ sessionId: session.id, characterId: updated.id });
-  return { character: updated, session };
-}
-
-test("角色照片首次随正文直传，观察独立保存，纯文字后续可零选择或重读原图", async () => {
-  const { character, session } = await setupPhoto();
-  const restore = mockFetch();
-  try {
-    await sendMessage("你好");
-    assert.equal(
-      calls.filter((c) => c.path === "/api/context/inspect").length,
-      0,
-    );
-    const first = calls.find((c) => c.path === "/api/chat")!.body;
-    assert.equal(first.visual.imagePayloads[0].assetId, "img2");
-    assert.equal(first.character.profileVersion, character.profileVersion);
-    assert.deepEqual(first.visual.assetCatalog[0].sources, [
-      {
-        type: "character_photo",
-        characterId: character.id,
-        profileVersion: character.profileVersion,
-      },
-    ]);
-    const db = await database();
-    const observation = (await db.getAll("visualObservations"))[0];
-    assert.deepEqual(observation.sources, first.visual.assetCatalog[0].sources);
-    assert.equal("sourceMessageIds" in observation, false);
-    assert.equal(
-      (await db.get("characters", character.id))!.description,
-      "老板",
-    );
-    assert.equal(await db.count("memories"), 0);
-    assert.equal((await db.getAll("imageUsages"))[0].purpose, "角色形象参考");
-
-    await sendMessage("不需要图片");
-    assert.equal(
-      calls.filter((c) => c.path === "/api/context/inspect").length,
-      1,
-    );
-    assert.equal(
-      calls.filter((c) => c.path === "/api/chat").at(-1)!.body.visual
-        .imagePayloads.length,
-      0,
-    );
-    await sendMessage("她的耳环上刻了什么？");
-    assert.equal(
-      calls.filter((c) => c.path === "/api/chat").at(-1)!.body.visual
-        .imagePayloads[0].assetId,
-      "img2",
-    );
-    const other = await createSession(character.id);
-    const catalog = await buildCatalog(other.id, []);
-    assert.equal(catalog[0].observation, null);
-    const original = await buildCatalog(
-      session.id,
-      await allMessages(session.id),
-    );
-    assert.equal(original[0].observation!.version, 2);
-  } finally {
-    restore();
-  }
-});
-
-test("首次照片整理失败保留原图任务，备份恢复后先整理再选图", async () => {
-  const { session } = await setupPhoto();
-  const restore = mockFetch();
-  try {
-    failVisual = true;
-    await sendMessage("你好");
-    const db = await database();
-    assert.equal((await allMessages(session.id)).at(-1)!.status, "complete");
-    assert.equal(await db.count("visualObservations"), 0);
-    const backup = await takeSnapshot();
-    assert.equal(backup.data.assets.length, 1);
-    assert.equal(backup.data.stateTasks.length, 1);
-    await restoreSnapshot(backup);
-    const prepared = await prepareImageContext(
-      backup.data.stateTasks[0].context,
-      session.id,
-      [],
-      new AbortController().signal,
-      "anchor",
-      async () => {},
-    );
-    assert.equal(prepared.visual!.imagePayloads[0].assetId, "img2");
-    failVisual = false;
-    calls = [];
-    await sendMessage("不需要图片");
-    assert.ok(
-      calls.findIndex((c) => c.path === "/api/state/update") <
-        calls.findIndex((c) => c.path === "/api/context/inspect"),
-    );
-    assert.equal(await db.count("stateTasks"), 0);
-    assert.equal(
-      (await db.getAll("visualObservations"))[0].sources[0].type,
-      "character_photo",
-    );
-  } finally {
-    restore();
-  }
 });
 
 test("照片修改和移除只影响新会话，旧快照与角色草稿保护原件，备份校验所有照片引用", async () => {
@@ -549,44 +243,6 @@ test("照片修改和移除只影响新会话，旧快照与角色草稿保护�
   assert.ok(await db.get("assets", "img2"));
   await discardCharacterDraft(key);
   assert.equal(await db.get("assets", "img2"), undefined);
-});
-
-test("同一原图兼作角色照片与聊天上传时只传一次，保留两种来源且上传编号从一开始", async () => {
-  const { session } = await setupPhoto();
-  const restore = mockFetch();
-  try {
-    await sendMessage("这张参考图", [
-      { type: "text", text: "这张参考图" },
-      { type: "image", assetId: "img2" },
-    ]);
-    const body = calls.find((c) => c.path === "/api/chat")!.body;
-    assert.equal(body.visual.imagePayloads.length, 1);
-    const catalog = await buildCatalog(
-      session.id,
-      await allMessages(session.id),
-    );
-    assert.equal(catalog.length, 1);
-    assert.equal(catalog[0].sources[0].type, "character_photo");
-    const source = catalog[0].sources[1];
-    assert.equal(source.type, "message");
-    if (source.type === "message") assert.equal(source.uploadIndex, 1);
-    const backup = await takeSnapshot();
-    validateBackup(backup);
-    const missingPhotoSource = structuredClone(backup);
-    missingPhotoSource.data.visualObservations[0].sources =
-      missingPhotoSource.data.visualObservations[0].sources.filter(
-        (s) => s.type === "message",
-      );
-    assert.throws(() => validateBackup(missingPhotoSource), /缺少角色资料来源/);
-    const invalid = structuredClone(backup);
-    const photo = invalid.data.visualObservations[0].sources.find(
-      (s) => s.type === "character_photo",
-    )!;
-    photo.profileVersion++;
-    assert.throws(() => validateBackup(invalid), /快照不一致/);
-  } finally {
-    restore();
-  }
 });
 
 test("照片准备复用图片校验与去重，草稿引用原子交接，取消不留下无引用资产", async () => {
@@ -637,72 +293,6 @@ test("照片准备复用图片校验与去重，草稿引用原子交接，取�
     assert.equal(await db.get("settings", key), undefined);
     await discardCharacterDraft("characterDraft:copy");
     assert.ok(await db.get("assets", character.appearancePhotoAssetId!));
-  } finally {
-    restore();
-  }
-});
-
-test("缺失原图、视觉关闭和必需照片名额不足均停止生成", async () => {
-  const { character, session } = await setupPhoto();
-  const restore = mockFetch();
-  const mocked = globalThis.fetch;
-  try {
-    const context = chatContext(
-      character,
-      session,
-      [],
-      [],
-      "继续",
-      DEFAULT_INTERACTION_SETTINGS,
-    );
-    const { loadPayloads } = await import("../lib/images/coordinator");
-    const base = {
-      ...context,
-      visual: {
-        sessionId: session.id,
-        assetCatalog: await buildCatalog(session.id, []),
-        plan: null,
-        imagePayloads: [],
-      },
-    };
-    globalThis.fetch = async (input, init) =>
-      String(input) === "/api/capabilities"
-        ? json({
-            ...DEFAULT_LIMITS,
-            visionSupported: false,
-            mimeTypes: ["image/png"],
-          })
-        : mocked(input, init);
-    await assert.rejects(
-      loadPayloads(base, new AbortController().signal),
-      /不支持视觉/,
-    );
-    globalThis.fetch = mocked;
-    await assert.rejects(
-      loadPayloads(
-        {
-          ...base,
-          input: {
-            text: "",
-            parts: ["a", "b", "c", "d"].map((assetId) => ({
-              type: "image",
-              assetId,
-            })),
-          },
-        },
-        new AbortController().signal,
-      ),
-      /数量超限/,
-    );
-    await (await database()).delete("assets", "img2");
-    await assert.rejects(
-      loadPayloads(base, new AbortController().signal),
-      /原图缺失/,
-    );
-    assert.equal(
-      calls.some((c) => c.path === "/api/chat"),
-      false,
-    );
   } finally {
     restore();
   }

@@ -10,7 +10,7 @@ export function validateSummary(
   value: unknown,
 ): asserts value is HistorySummary {
   object(value);
-  string(value.text, 2_000_000);
+  string(value.text);
   integer(value.throughSeq);
   integer(value.version);
   if (
@@ -77,7 +77,7 @@ export function validateCompaction(
   ])
     integer(value[field]);
   validateSummary(value.summary);
-  array(value.sourceMessageIds, 2000);
+  array(value.sourceMessageIds, 10000);
   for (const id of value.sourceMessageIds) string(id, 200);
   if (
     (value.throughSeq as number) <= (value.fromExclusiveSeq as number) ||

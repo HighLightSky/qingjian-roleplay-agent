@@ -16,31 +16,27 @@ public class StateUpdateService {
     private final LLMClient client;
     private final ObjectMapper mapper;
     private final StateUpdatePromptBuilder prompts;
-    private final ContextValidation contexts;
     private final ContextBudgetService budgets;
     private final ImageValidationService images;
 
     public StateUpdateService(LLMClient client, ObjectMapper mapper, StateUpdatePromptBuilder prompts,
-            ContextValidation contexts, ImageValidationService images, ContextBudgetService budgets) {
+            ImageValidationService images, ContextBudgetService budgets) {
         this.client = client;
         this.mapper = mapper;
         this.prompts = prompts;
-        this.contexts = contexts;
         this.budgets = budgets;
         this.images = images;
     }
 
     public Result update(UpdateRequest r) throws IOException, InterruptedException {
-        validateRequest(r);
         String material = prompts.material(r);
-        StateValidation.text(material, ContextLimits.CONTEXT_CHARS);
         List<Message> correction = List.of();
-        for (int attempt = 0; ; attempt++) {
+        for (int attempt = 0;; attempt++) {
             var modelRequest = prompts.build(r, material, correction);
             budgets.checkModelRequest(modelRequest);
             var response = client.chat(modelRequest);
-            if (response.getContent() == null || response.getContent().length() > ContextLimits.CONTEXT_CHARS)
-                throw new IOException("状态整理结果缺失或超过字符限制");
+            if (response.getContent() == null)
+                throw new IOException("状态整理结果缺失");
             if (!"stop".equals(response.getFinishReason()))
                 throw new IOException("状态整理输出未完成");
             try {
@@ -68,9 +64,11 @@ public class StateUpdateService {
             List<Change> goals = changes(result.goalChanges(), "goal", r);
             var state = r.context().state();
             if (state.memories().size()
-                    + memories.stream().filter(c -> "create".equals(c.action())).count() > ContextLimits.MEMORIES
+                    + memories.stream().filter(c -> "create".equals(c.action()))
+                            .count() > ContextLimits.COLLECTION_ITEMS
                     || state.goals().size()
-                            + goals.stream().filter(c -> "create".equals(c.action())).count() > ContextLimits.GOALS)
+                            + goals.stream().filter(c -> "create".equals(c.action()))
+                                    .count() > ContextLimits.COLLECTION_ITEMS)
                 throw new IOException("整理结果使记忆或目标数量超限");
             return new Result(r.operationId(), state.sessionVersion(), state.memoryVersion(), r.fromExclusiveSeq(),
                     r.throughSeq(), observations(result.visualObservations(), r), story, memories, goals);
@@ -79,15 +77,14 @@ public class StateUpdateService {
         }
     }
 
-    private void validateRequest(UpdateRequest r) {
+    public void validateRequest(UpdateRequest r) {
         if (r == null)
             throw new IllegalArgumentException("整理请求不能为空");
         StateValidation.id(r.operationId());
-        contexts.validate(r.context());
         if (!r.operationId().equals(r.context().operationId())
-                || r.fromExclusiveSeq() != r.context().state().processedThroughSeq()
+                || r.fromExclusiveSeq() < 0
                 || r.throughSeq() <= r.fromExclusiveSeq() || r.messages().isEmpty()
-                || r.messages().size() > ContextLimits.UPDATE_MESSAGES)
+                || r.messages().size() > ContextLimits.COLLECTION_ITEMS)
             throw new IllegalArgumentException("整理操作、消息区间或游标无效");
         Set<String> ids = new HashSet<>();
         int previous = r.fromExclusiveSeq();
@@ -98,15 +95,12 @@ public class StateUpdateService {
                 throw new IllegalArgumentException("整理消息来源、顺序或完成状态无效");
             StateValidation.id(m.id());
             StateValidation.date(m.createdAt());
-            StateValidation.nonblank(m.text(), ContextLimits.CONTEXT_CHARS);
+            StateValidation.nonblank(m.text());
             previous = m.seq();
         }
         SourceMessage last = r.messages().getLast();
         if (last.seq() != r.throughSeq() || !"assistant".equals(last.role()))
             throw new IllegalArgumentException("整理范围必须以完整正文结束");
-        if (mapper.valueToTree(r.messages()).toString().length() > ContextLimits.CONTEXT_CHARS)
-            throw new IllegalArgumentException("待整理消息超过请求材料字符上限");
-        images.validateReferences(r.context());
         Set<String> required = new HashSet<>(ImageValidationService.requiredIds(r.context()));
         if (r.context().visual() != null && r.context().visual().plan() != null) {
             for (Selected selected : r.context().visual().plan().selectedHistoricalImages()) {
@@ -117,13 +111,12 @@ public class StateUpdateService {
             }
         }
         images.validateLimits(required);
-        images.validatePayloads(r.context(), required);
     }
 
     private List<Change> changes(List<ProposedChange> proposals, String kind, UpdateRequest r) throws IOException {
         int limit = switch (kind) {
-            case "memory" -> ContextLimits.MEMORIES;
-            case "goal" -> ContextLimits.GOALS;
+            case "memory" -> ContextLimits.COLLECTION_ITEMS;
+            case "goal" -> ContextLimits.COLLECTION_ITEMS;
             default -> StateValidation.STORY_FIELDS.size();
         };
         if (proposals.size() > limit)
@@ -137,7 +130,7 @@ public class StateUpdateService {
             if (p == null || p.action() == null || !Set.of("create", "update").contains(p.action())
                     || p.value() == null || p.value().isNull())
                 throw new IOException("领域变更结构无效");
-            StateValidation.nonblank(p.reason(), ContextLimits.STATE_TEXT_CHARS);
+            StateValidation.nonblank(p.reason());
             StateValidation.sources(p.sourceMessageIds());
             if (p.sourceMessageIds().isEmpty() || !sources.containsAll(p.sourceMessageIds()))
                 throw new IOException("领域变更缺少有效的新消息来源");
@@ -177,7 +170,8 @@ public class StateUpdateService {
                 }
                 if (create) {
                     for (Memory existing : s.memories()) {
-                        if (existing.value().scope().equals(v.scope()) && existing.value().content().equals(v.content())) {
+                        if (existing.value().scope().equals(v.scope())
+                                && existing.value().content().equals(v.content())) {
                             if (!"dismissed".equals(existing.value().status())) {
                                 throw new IOException("不能重复新增相同记忆");
                             }
@@ -263,7 +257,8 @@ public class StateUpdateService {
                 int uploads = ImageValidationService.catalog(r.context()).stream().flatMap(a -> a.sources().stream())
                         .filter(s -> s instanceof MessageSource).mapToInt(s -> ((MessageSource) s).uploadIndex())
                         .max().orElse(0);
-                sources.add(new MessageSource(user.id(), user.seq(), r.context().input().textOf(), index, uploads + index));
+                sources.add(
+                        new MessageSource(user.id(), user.seq(), r.context().input().textOf(), index, uploads + index));
             }
             result.add(new Observation(o.assetId(), o.summary(), o.visibleDetails(), o.extractedText(),
                     o.uncertainDetails(), List.copyOf(sources), version));

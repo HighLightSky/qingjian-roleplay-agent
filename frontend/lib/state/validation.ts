@@ -17,7 +17,10 @@ export function object(
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("领域数据必须是对象。");
 }
-export function string(value: unknown, max = 100000): asserts value is string {
+export function string(
+  value: unknown,
+  max = Number.MAX_SAFE_INTEGER,
+): asserts value is string {
   if (typeof value !== "string" || value.length > max)
     throw new Error("文字字段缺失或过长。");
 }
@@ -29,7 +32,7 @@ export function integer(value: unknown, min = 0): asserts value is number {
   if (!Number.isSafeInteger(value) || (value as number) < min)
     throw new Error("领域序号或版本无效。");
 }
-function text(value: unknown, max = 2000) {
+function text(value: unknown, max = Number.MAX_SAFE_INTEGER) {
   string(value, max);
   if (!value.trim()) throw new Error("必需文字不能为空。");
 }
@@ -41,18 +44,18 @@ export function array(value: unknown, max: number): asserts value is unknown[] {
   if (!Array.isArray(value) || value.length > max)
     throw new Error("领域列表缺失或数量超限。");
 }
-function strings(value: unknown, max = 20, chars = 2000) {
+function strings(value: unknown, max = 10000, chars = Number.MAX_SAFE_INTEGER) {
   array(value, max);
   value.forEach((v) => text(v, chars));
 }
 export function sourceIds(value: unknown) {
-  strings(value, 200, 200);
+  strings(value, 10000, 200);
   if (new Set(value as string[]).size !== (value as string[]).length)
     throw new Error("来源 ID 重复。");
 }
 export function validateStory(value: unknown): asserts value is Story {
   object(value);
-  for (const key of STORY_TEXT_FIELDS) string(value[key], 2000);
+  for (const key of STORY_TEXT_FIELDS) string(value[key]);
   for (const key of [
     "presentCharacters",
     "relationships",
@@ -65,7 +68,7 @@ export function validateMemoryValue(
   value: unknown,
 ): asserts value is MemoryValue {
   object(value);
-  text(value.content, 300);
+  text(value.content);
   choice(value.scope, ["session", "character"]);
   choice(value.kind, ["preference", "fact", "agreement", "event"]);
   choice(value.epistemicStatus, ["established", "claim", "hypothesis"]);
@@ -75,8 +78,8 @@ export function validateGoalValue(value: unknown): asserts value is GoalValue {
   object(value);
   text(value.description);
   choice(value.status, Object.keys(GOAL_LABELS));
-  string(value.currentFocus, 2000);
-  string(value.progressSummary, 2000);
+  string(value.currentFocus);
+  string(value.progressSummary);
 }
 export function validateSnapshot(
   value: unknown,
@@ -86,7 +89,6 @@ export function validateSnapshot(
   text(value.characterId, 200);
   integer(value.sessionVersion);
   integer(value.memoryVersion);
-  integer(value.processedThroughSeq);
   validateStory(value.story);
   object(value.storySources);
   for (const [key, source] of Object.entries(value.storySources)) {
@@ -96,8 +98,8 @@ export function validateSnapshot(
     date(source.updatedAt);
     sourceIds(source.sourceMessageIds);
   }
-  array(value.memories, 50);
-  array(value.goals, 20);
+  array(value.memories, 10000);
+  array(value.goals, 10000);
   const ids = new Set<string>();
   for (const m of value.memories) {
     object(m);
@@ -145,8 +147,8 @@ export function validateStateResult(
     throw new Error("整理消息范围无效。");
   for (const [field, max] of [
     ["storyChanges", Object.keys(STORY_LABELS).length],
-    ["memoryChanges", 50],
-    ["goalChanges", 20],
+    ["memoryChanges", 10000],
+    ["goalChanges", 10000],
   ] as const) {
     const changes = value[field];
     array(changes, max);
@@ -177,7 +179,7 @@ export function validateStateResult(
         else if (field === "goalChanges") validateGoalValue(v);
         else {
           choice(c.id, Object.keys(STORY_LABELS));
-          if (STORY_TEXT_FIELDS.includes(c.id as string)) string(v, 2000);
+          if (STORY_TEXT_FIELDS.includes(c.id as string)) string(v);
           else strings(v);
         }
       };
@@ -195,14 +197,14 @@ export function validateStateResult(
     integer(o.version, 1);
     validateVisualSources(o.sources);
     for (const key of ["visibleDetails", "extractedText", "uncertainDetails"])
-      strings(o[key], 20, 300);
+      strings(o[key]);
   }
 }
 
 export function validateVisualSources(
   value: unknown,
 ): asserts value is VisualSource[] {
-  array(value, 2000);
+  array(value, 10000);
   if (!value.length) throw new Error("视觉记录缺少真实来源。");
   const keys = new Set<string>();
   for (const source of value) {
@@ -213,7 +215,7 @@ export function validateVisualSources(
       integer(source.seq, 1);
       integer(source.imageIndex, 1);
       integer(source.uploadIndex, 1);
-      string(source.text, 2000);
+      string(source.text);
     } else if (source.type === "character_photo") {
       string(source.characterId, 200);
       if (!source.characterId) throw new Error("角色照片来源 ID 不能为空。");

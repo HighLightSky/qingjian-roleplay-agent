@@ -11,7 +11,6 @@ public class VisionProperties {
     private int maxImages = 4;
     private long maxImageBytes = 10L * 1024 * 1024;
     private long maxPixels = 20_000_000;
-    private int planningInputChars = 48_000;
 
     public boolean isSupported() {
         return supported;
@@ -45,11 +44,4 @@ public class VisionProperties {
         maxPixels = value;
     }
 
-    public int getPlanningInputChars() {
-        return planningInputChars;
-    }
-
-    public void setPlanningInputChars(int value) {
-        planningInputChars = value;
-    }
 }

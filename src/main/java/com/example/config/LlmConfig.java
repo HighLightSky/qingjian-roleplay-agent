@@ -16,6 +16,9 @@ public class LlmConfig {
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
 
     @Bean
+    public java.time.Clock clock() { return java.time.Clock.systemUTC(); }
+
+    @Bean
     public HttpClient httpClient() {
         return HttpClient.newBuilder()
                 .connectTimeout(CONNECT_TIMEOUT)
@@ -27,10 +30,13 @@ public class LlmConfig {
             HttpClient httpClient,
             ObjectMapper objectMapper,
             LlmProperties properties,
-            LlmRequestMapper requests, ContextProperties context) {
+            LlmRequestMapper requests, ContextProperties context, DispatchProperties dispatch) {
         if (properties.maxTokens() < 1 || properties.maxTokens() + (long) context.safetyTokens() >= context.contextWindowTokens())
             throw new IllegalArgumentException("正文输出预留必须小于配置的上下文窗口");
 
+        if (Math.max(dispatch.selectionOutputTokens(), dispatch.stateOutputTokens()) + (long) context.safetyTokens()
+                >= context.contextWindowTokens())
+            throw new IllegalArgumentException("选图和整理输出预留必须小于配置的上下文窗口");
         return new OpenAiClient(
                 httpClient,
                 objectMapper,

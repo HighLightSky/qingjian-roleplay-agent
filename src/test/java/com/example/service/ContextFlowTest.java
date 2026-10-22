@@ -70,10 +70,10 @@ class ContextFlowTest {
         var vision = new VisionProperties();
         vision.setSupported(true);
         var images = new ImageValidationService(vision);
-        var validation = new ContextValidation(mapper);
+        var validation = new ContextValidation();
         budgets = new ContextBudgetService(counter, prompts, properties, vision, validation, images, mapper);
         compaction = new ContextCompactionService(properties, validation, images, budgets, counter,
-                new CompactionPromptBuilder(mapper, properties), prompts, model, mapper);
+                new CompactionPromptBuilder(mapper, properties), prompts, model, mapper, new ImageCache(com.example.TestRequests.dispatch(), vision, java.time.Clock.systemUTC()));
     }
 
     @AfterEach void close() { http.close(); server.stop(0); }

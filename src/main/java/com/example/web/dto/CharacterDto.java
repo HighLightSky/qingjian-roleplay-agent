@@ -4,8 +4,6 @@ package com.example.web.dto;
 public record CharacterDto(String name, String identity, String description, String appearancePhotoAssetId,
         int profileVersion) {
     public static final int MAX_NAME_CHARS = 60;
-    public static final int MAX_IDENTITY_CHARS = 2000;
-    public static final int MAX_DESCRIPTION_CHARS = 8000;
 
     /** 聊天、选图和视觉整理入口共用同一份角色约束。 */
     public static void validate(CharacterDto character) {
@@ -22,8 +20,8 @@ public record CharacterDto(String name, String identity, String description, Str
         if (character.name().isBlank()) {
             throw new IllegalArgumentException("角色名称不能为空");
         }
-        validateField(character.identity(), "角色身份", MAX_IDENTITY_CHARS);
-        validateField(character.description(), "角色描述", MAX_DESCRIPTION_CHARS);
+        com.example.service.StateValidation.text(character.identity());
+        com.example.service.StateValidation.text(character.description());
     }
 
     private static void validateField(String value, String label, int maxChars) {

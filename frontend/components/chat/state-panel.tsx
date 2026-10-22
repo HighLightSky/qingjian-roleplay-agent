@@ -120,7 +120,6 @@ function StoryEditor({
           <Textarea
             rows={2}
             aria-label={STORY_LABELS[key]}
-            maxLength={40_000}
             value={value[key]}
             onChange={(event) =>
               setValue((v) => ({ ...v, [key]: event.target.value }))
@@ -156,7 +155,6 @@ function MemoryEditor({
         <Textarea
           autoFocus
           aria-label="记忆内容"
-          maxLength={300}
           value={value.content}
           onChange={(e) => setValue((v) => ({ ...v, content: e.target.value }))}
         />
@@ -236,7 +234,6 @@ function GoalEditor({
         <Textarea
           autoFocus
           aria-label="目标描述"
-          maxLength={2000}
           value={value.description}
           onChange={(e) =>
             setValue((v) => ({ ...v, description: e.target.value }))
@@ -267,7 +264,6 @@ function GoalEditor({
       <Field label="当前关注点">
         <Textarea
           aria-label="当前关注点"
-          maxLength={2000}
           value={value.currentFocus}
           onChange={(e) =>
             setValue((v) => ({ ...v, currentFocus: e.target.value }))
@@ -278,7 +274,6 @@ function GoalEditor({
         <Textarea
           aria-label="完成过程"
           rows={5}
-          maxLength={2000}
           placeholder="用一小段话记录从目标开始以来的重要行动、信息与进展"
           value={value.progressSummary}
           onChange={(e) =>

@@ -1,368 +1,193 @@
 package com.example.web;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.verifyNoInteractions;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.net.http.HttpTimeoutException;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import static org.mockito.Mockito.*;
+import java.io.*;
+import java.net.*;
+import java.net.http.*;
+import java.time.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
-
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-
+import com.example.TestRequests;
 import com.example.llm.LLMClient;
-import com.example.llm.model.ChatStreamResult;
-import com.example.llm.model.TokenUsage;
+import com.example.llm.model.*;
+import com.example.service.*;
+import com.example.web.dto.*;
+import com.example.web.dto.DispatchDtos.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 
-/** 使用真实 HTTP 连接验证 SSE，而不调用外部模型服务。 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {"roleplay.llm.timeout-seconds=2", "logging.level.org.springframework=WARN"})
-@Timeout(15)
+        properties = {"roleplay.llm.timeout-seconds=3", "roleplay.dispatch.task-timeout-seconds=4", "roleplay.dispatch.max-results=4", "logging.level.root=ERROR", "logging.level.com.example.service.SegmentStreamParser=WARN"})
+@Timeout(20)
 class ChatControllerTest {
-    @LocalServerPort
-    private int port;
-
-    @Autowired
-    private ObjectMapper objectMapper;
-
-    @MockitoBean
-    private LLMClient llmClient;
-
-    @MockitoBean
-    private com.example.service.LlamaTokenCounter counter;
-
-    @org.junit.jupiter.api.BeforeEach
-    void counts() throws Exception {
-        org.mockito.Mockito.when(counter.count(any())).thenReturn(
-                new com.example.web.dto.ContextDtos.TokenCount(100, "exact", "test", "fingerprint"));
+    @LocalServerPort int port;
+    @Autowired ObjectMapper mapper;
+    @Autowired ChatDispatchService dispatch;
+    @MockitoBean LLMClient model;
+    @MockitoBean LlamaTokenCounter counter;
+    @MockitoBean Clock clock;
+    final AtomicLong time = new AtomicLong(1000);
+    final List<String> ids = new ArrayList<>();
+    static final String EMPTY = "{\"visualObservations\":[],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}";
+    @BeforeEach void setup() throws Exception {
+        when(clock.millis()).thenAnswer(i -> time.get());
+        when(counter.count(any())).thenReturn(new ContextDtos.TokenCount(100, "exact", "test", "fp"));
+        when(model.chat(any())).thenReturn(new ChatResponse(EMPTY, "stop", TokenUsage.unavailable()));
+        doAnswer(i -> { Consumer<String> out = i.getArgument(1); out.accept("[台词]你好\n[描写]她挥手。");
+            return new ChatStreamResult("stop", TokenUsage.unavailable()); }).when(model).chatStream(any(), any());
     }
-
-    @Test
-    void streamsBeforeGenerationCompletesAndThenSendsDone() throws Exception {
-        CountDownLatch continueGeneration = new CountDownLatch(1);
-        doAnswer(invocation -> {
-            Consumer<String> onText = invocation.getArgument(1);
-            onText.accept("[台词]“你好。”");
-            assertTrue(continueGeneration.await(5, TimeUnit.SECONDS));
-            onText.accept("\n[描写]（她挥手。）");
-            return new ChatStreamResult("stop", TokenUsage.unavailable());
-        }).when(llmClient).chatStream(any(), any());
-
-        try (HttpClient client = HttpClient.newHttpClient()) {
-            HttpResponse<InputStream> response = client.send(request(validJson()), HttpResponse.BodyHandlers.ofInputStream());
-            assertEquals(200, response.statusCode());
-            assertTrue(response.headers().firstValue("Content-Type").orElseThrow().startsWith("text/event-stream"));
-            assertEquals("no-store", response.headers().firstValue("Cache-Control").orElseThrow());
-            assertEquals("no", response.headers().firstValue("X-Accel-Buffering").orElseThrow());
-            try (BufferedReader reader = reader(response)) {
-                // 模型尚未结束时已经能读到首个事件，证明没有缓冲整段回复。
-                String contextEvent = readEvent(reader);
-                assertTrue(contextEvent.contains("event:context"), contextEvent);
-                String firstEvent = readEvent(reader);
-                assertTrue(firstEvent.contains("event:delta"), firstEvent);
-                assertTrue(firstEvent.contains("\"kind\":\"dialogue\""), firstEvent);
-                continueGeneration.countDown();
-                String remaining = readRemaining(reader);
-                assertTrue(remaining.contains("\"kind\":\"narration\""), remaining);
-                assertTrue(remaining.contains("event:done"), remaining);
-                assertTrue(remaining.contains("\"finishReason\":\"stop\""), remaining);
-                assertFalse(remaining.contains("event:error"), remaining);
-            } finally {
-                continueGeneration.countDown();
-            }
+    @AfterEach void cleanup() throws Exception {
+        for (String id : ids) {
+            try { dispatch.cancel(id); dispatch.acknowledge(id); } catch (DispatchException ignored) { }
+        }
+        ids.clear();
+    }
+    private Request request(String text) {
+        String id = UUID.randomUUID().toString(); ids.add(id);
+        var context = new ChatApiRequest(new CharacterDto("林溪", "", "", null, 1), TestRequests.state(List.of()),
+                TestRequests.summary(), List.of(), new InputDto(text, null),
+                new InteractionSettingsDto(InteractionSettingsDto.ReplyLength.STANDARD, InteractionSettingsDto.NarrativeMode.SCENE), null, id);
+        return new Request(id, context, new MessageMeta("user-" + id, 1, "2026-10-22T00:00:00Z"),
+                new MessageMeta("assistant-" + id, 2, "2026-10-22T00:00:01Z"), List.of());
+    }
+    private HttpRequest postRequest(String path, Object value) throws Exception {
+        return HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).timeout(Duration.ofSeconds(10))
+                .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(value))).build();
+    }
+    private HttpResponse<String> post(String path, Object value) throws Exception {
+        try (var client = HttpClient.newHttpClient()) { return client.send(postRequest(path, value), HttpResponse.BodyHandlers.ofString()); }
+    }
+    private String resume(String id) throws Exception {
+        try (var client = HttpClient.newHttpClient()) {
+            return client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/chat/" + id + "/events"))
+                    .timeout(Duration.ofSeconds(10)).GET().build(), HttpResponse.BodyHandlers.ofString()).body();
         }
     }
-
-    @Test
-    void rejectsInvalidInputWithJsonEvenWhenAcceptingSse() throws Exception {
-        ObjectNode blank = (ObjectNode) objectMapper.readTree(validJson());
-        ((ObjectNode) blank.get("input")).put("text", "  ");
-        ObjectNode invalidRole = (ObjectNode) objectMapper.readTree(validJson());
-        invalidRole.withArray("history").addObject().put("role", "system").put("text", "不合法");
-        ObjectNode oversized = (ObjectNode) objectMapper.readTree(validJson());
-        ((ObjectNode) oversized.get("input")).put("text", "字".repeat(2001));
-
-        for (String body : new String[] { blank.toString(), invalidRole.toString(), oversized.toString(), "{", "" }) {
-            HttpResponse<String> response = post(body);
-            assertJsonError(response, 400, "BAD_REQUEST");
-        }
-        verifyNoInteractions(llmClient);
-    }
-
-    @Test
-    void sendsModelErrorAfterContextWithUpstreamDetails() throws Exception {
-        doAnswer(invocation -> { throw new IOException("模型接口返回 HTTP 503"); })
-                .when(llmClient).chatStream(any(), any());
-        HttpResponse<String> response = post(validJson());
-        assertEquals(200, response.statusCode());
-        assertTrue(response.body().contains("event:context"));
-        assertTrue(response.body().contains("MODEL_ERROR"));
-        assertTrue(response.body().contains("模型接口返回 HTTP 503"));
-    }
-
-    @Test
-    void sendsTimeoutAfterContext() throws Exception {
-        doAnswer(invocation -> { throw new HttpTimeoutException("upstream timed out"); })
-                .when(llmClient).chatStream(any(), any());
-        var response = post(validJson());
-        assertEquals(200, response.statusCode());
-        assertTrue(response.body().contains("MODEL_TIMEOUT"));
-        assertTrue(response.body().contains("upstream timed out"));
-    }
-
-    @Test
-    void sendsErrorInsteadOfDoneAfterPartialOutput() throws Exception {
-        doAnswer(invocation -> {
-            Consumer<String> onText = invocation.getArgument(1);
-            onText.accept("[描写]部分内容");
-            throw new IOException("模型事件流读取失败", new IOException("连接已重置"));
-        }).when(llmClient).chatStream(any(), any());
-        HttpResponse<String> response = post(validJson());
+    @Test void oneRequestRunsBodyAndStateAndAckDeletesOnlyAfterCompletion() throws Exception {
+        var request = request("字".repeat(3000));
+        var response = post("/api/chat", request);
         assertEquals(200, response.statusCode());
         assertTrue(response.body().contains("event:delta"));
-        assertTrue(response.body().contains("event:error"));
-        assertTrue(response.body().contains("MODEL_ERROR"));
-        assertFalse(response.body().contains("event:done"));
-        assertTrue(response.body().contains("模型事件流读取失败"));
-        assertTrue(response.body().contains("连接已重置"));
+        assertTrue(response.body().contains("event:body_done"));
+        assertTrue(response.body().contains("event:state_result"));
+        assertTrue(response.body().contains("event:done"));
+        verify(model).chatStream(any(), any()); verify(model).chat(any());
+        assertTrue(resume(request.runId()).contains("你好"));
+        assertEquals(200, post("/api/chat/" + request.runId() + "/ack", Map.of()).statusCode());
+        assertTrue(resume(request.runId()).contains("RESULT_EXPIRED"));
+        assertEquals(200, post("/api/chat/" + request.runId() + "/ack", Map.of()).statusCode());
     }
-
-    @Test
-    void deadlineAfterContextSendsTimeoutAndInterruptsWorker() throws Exception {
-        CountDownLatch stopped = new CountDownLatch(1);
-        blockModel(false, stopped);
-        var response = post(validJson());
-        assertEquals(200, response.statusCode());
-        assertTrue(response.body().contains("MODEL_TIMEOUT"));
-        assertTrue(stopped.await(3, TimeUnit.SECONDS));
+    @Test void disconnectDoesNotCancelAndResubscribeDoesNotRestartTheModel() throws Exception {
+        var release = new CountDownLatch(1); var started = new CountDownLatch(1);
+        doAnswer(i -> { Consumer<String> out = i.getArgument(1); out.accept("[台词]先说\n"); started.countDown();
+            release.await(); out.accept("[描写]然后继续。"); return new ChatStreamResult("stop", TokenUsage.unavailable());
+        }).when(model).chatStream(any(), any());
+        var request = request("继续");
+        try (var client = HttpClient.newHttpClient()) {
+            var response = client.send(postRequest("/api/chat", request), HttpResponse.BodyHandlers.ofInputStream());
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            response.body().close();
+            assertEquals(409, post("/api/chat", request("另一个任务")).statusCode());
+            release.countDown();
+            assertTrue(resume(request.runId()).contains("然后继续"));
+            verify(model).chatStream(any(), any());
+            assertTrue(post("/api/chat", request).body().contains("然后继续"));
+            verify(model).chatStream(any(), any());
+        } finally { release.countDown(); }
     }
-
-    @Test
-    void deadlineAfterFirstEventSendsErrorAndInterruptsWorker() throws Exception {
-        CountDownLatch stopped = new CountDownLatch(1);
-        blockModel(true, stopped);
-        HttpResponse<String> response = post(validJson());
-        assertEquals(200, response.statusCode());
-        assertTrue(response.body().contains("event:delta"));
-        assertTrue(response.body().contains("event:error"));
-        assertTrue(response.body().contains("MODEL_TIMEOUT"));
-        assertFalse(response.body().contains("event:done"));
-        assertTrue(stopped.await(3, TimeUnit.SECONDS));
+    @Test void failedStateKeepsBodyAndDoesNotBlockNextRequest() throws Exception {
+        when(model.chat(any())).thenThrow(new IOException("整理连接失败"));
+        String first = post("/api/chat", request("第一轮")).body();
+        assertTrue(first.contains("body_done")); assertTrue(first.contains("整理连接失败"));
+        assertTrue(post("/api/chat", request("第二轮")).body().contains("body_done"));
     }
-
-    @Test
-    void closingClientConnectionStopsGeneration() throws Exception {
-        CountDownLatch stopped = new CountDownLatch(1);
-        doAnswer(invocation -> {
-            Consumer<String> onText = invocation.getArgument(1);
-            try {
-                onText.accept("[台词]开始");
-                while (true) {
-                    Thread.sleep(20);
-                    onText.accept("继续");
-                }
-            } finally {
-                stopped.countDown();
-            }
-        }).when(llmClient).chatStream(any(), any());
-
-        try (HttpClient client = HttpClient.newHttpClient()) {
-            HttpResponse<InputStream> response = client.send(request(validJson()), HttpResponse.BodyHandlers.ofInputStream());
-            try (BufferedReader reader = reader(response)) {
-                assertTrue(readEvent(reader).contains("event:context"));
-                assertTrue(readEvent(reader).contains("event:delta"));
-            }
-            assertTrue(stopped.await(1, TimeUnit.SECONDS), "连接断开后应停止生成，无需等待两秒截止时间");
+    @Test void resultReadsDoNotRenewRetentionAndCleanupReclaimsIt() throws Exception {
+        var request = request("继续"); post("/api/chat", request);
+        time.addAndGet(Duration.ofMinutes(119).toMillis());
+        assertTrue(resume(request.runId()).contains("你好"));
+        time.addAndGet(Duration.ofMinutes(1).toMillis()); dispatch.cleanup();
+        assertTrue(resume(request.runId()).contains("RESULT_EXPIRED"));
+    }
+    @Test void explicitCancelInterruptsModelAndRetainsPartialResult() throws Exception {
+        var started = new CountDownLatch(1); var interrupted = new CountDownLatch(1);
+        doAnswer(i -> { Consumer<String> out = i.getArgument(1); out.accept("[台词]已有内容\n"); started.countDown();
+            try { new CountDownLatch(1).await(); } finally { interrupted.countDown(); }
+            return null;
+        }).when(model).chatStream(any(), any());
+        var request = request("继续");
+        try (var client = HttpClient.newHttpClient()) {
+            var response = client.send(postRequest("/api/chat", request), HttpResponse.BodyHandlers.ofInputStream());
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            assertEquals(200, post("/api/chat/" + request.runId() + "/cancel", Map.of()).statusCode());
+            assertTrue(interrupted.await(1, TimeUnit.SECONDS));
+            response.body().close();
+            assertTrue(resume(request.runId()).contains("已有内容"));
+            assertTrue(resume(request.runId()).contains("cancelled"));
         }
     }
-
-    private void blockModel(boolean emitFirst, CountDownLatch stopped) throws Exception {
-        doAnswer(invocation -> {
-            Consumer<String> onText = invocation.getArgument(1);
-            try {
-                if (emitFirst) {
-                    onText.accept("[台词]部分回复");
-                }
-                new CountDownLatch(1).await();
-                return new ChatStreamResult("stop", TokenUsage.unavailable());
-            } finally {
-                stopped.countDown();
-            }
-        }).when(llmClient).chatStream(any(), any());
+    @Test void deadlineInterruptsWithoutDeletingPartialResult() throws Exception {
+        doAnswer(i -> { Consumer<String> out = i.getArgument(1); out.accept("[台词]尚未结束\n"); new CountDownLatch(1).await(); return null; })
+                .when(model).chatStream(any(), any());
+        var request = request("继续");
+        String output = post("/api/chat", request).body();
+        assertTrue(output.contains("超时")); assertTrue(resume(request.runId()).contains("尚未结束"));
     }
-
-    @Test
-    void rejectsMissingNullAndUnknownInteractionSettingsWithoutCallingModel() throws Exception {
-        List<ObjectNode> invalid = new ArrayList<>();
-        ObjectNode missing = (ObjectNode) objectMapper.readTree(validJson());
-        missing.remove("interactionSettings");
-        invalid.add(missing);
-        ObjectNode nullSettings = (ObjectNode) objectMapper.readTree(validJson());
-        nullSettings.putNull("interactionSettings");
-        invalid.add(nullSettings);
-        for (String field : List.of("replyLength", "narrativeMode")) {
-            for (String value : new String[] {null, "unknown", "auto", "STANDARD", "", "1"}) {
-                ObjectNode body = (ObjectNode) objectMapper.readTree(validJson());
-                ((ObjectNode) body.get("interactionSettings")).put(field, value);
-                invalid.add(body);
-            }
-            ObjectNode body = (ObjectNode) objectMapper.readTree(validJson());
-            ((ObjectNode) body.get("interactionSettings")).remove(field);
-            invalid.add(body);
+    @Test void tokenCapacityIsCheckedBeforeGeneration() throws Exception {
+        when(counter.count(any())).thenReturn(new ContextDtos.TokenCount(193024, "exact", "test", "fp"));
+        String output = post("/api/chat", request("继续")).body();
+        assertTrue(output.contains("超过窗口")); verify(model, never()).chatStream(any(), any());
+    }
+    @Test void cachedOriginalIsReadByBodyAndStateWithoutAnotherUpload() throws Exception {
+        var bytes = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(3, 2, java.awt.image.BufferedImage.TYPE_INT_RGB), "png", bytes);
+        String hash = ImageValidationService.sha256(bytes.toByteArray());
+        try (var client = HttpClient.newHttpClient()) {
+            var upload = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/images/" + hash))
+                    .PUT(HttpRequest.BodyPublishers.ofByteArray(bytes.toByteArray())).build();
+            assertEquals(200, client.send(upload, HttpResponse.BodyHandlers.ofString()).statusCode());
         }
-        for (ObjectNode body : invalid) {
-            assertJsonError(post(body.toString()), 400, "BAD_REQUEST");
+        assertTrue(post("/api/images/missing", Map.of("hashes", List.of(hash))).body().contains("[]"));
+        var base = request("看图");
+        var context = base.context();
+        var visual = new VisualDtos.Context("session", List.of(), null, List.of());
+        var input = new InputDto("看图", List.of(ContentPartDto.text("看图"), new ContentPartDto("image", null, "img1")));
+        var imageRequest = new Request(base.runId(), new ChatApiRequest(context.character(), context.state(), context.summary(),
+                context.history(), input, context.interactionSettings(), visual, context.operationId()), base.user(), base.assistant(), List.of(new ImageRef("img1", hash)));
+        when(model.chat(any())).thenReturn(new ChatResponse(EMPTY.replace("\"visualObservations\":[]", "\"visualObservations\":[{\"assetId\":\"img1\",\"summary\":\"黑色图片\",\"visibleDetails\":[],\"extractedText\":[],\"uncertainDetails\":[]}]"), "stop", TokenUsage.unavailable()));
+        String output = post("/api/chat", imageRequest).body();
+        assertTrue(output.contains("event:state_result"), output);
+        var bodyCall = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        var stateCall = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model).chatStream(bodyCall.capture(), any()); verify(model).chat(stateCall.capture());
+        for (var call : List.of(bodyCall.getValue(), stateCall.getValue()))
+            assertTrue(call.getMessages().stream().filter(m -> m.getParts() != null).flatMap(m -> m.getParts().stream())
+                    .anyMatch(part -> "image_url".equals(part.type()) && part.imageUrl().contains(Base64.getEncoder().encodeToString(bytes.toByteArray()))));
+        post("/api/chat/" + imageRequest.runId() + "/ack", Map.of());
+        assertTrue(post("/api/images/missing", Map.of("hashes", List.of(hash))).body().contains("[]"));
+    }
+    @Test void resultCapacityRejectsNewTasksWithoutEvictingUnreadResults() throws Exception {
+        var retained = new ArrayList<Request>();
+        for (int i = 0; i < 4; i++) {
+            var request = request("保留结果"); retained.add(request);
+            assertEquals(200, post("/api/chat", request).statusCode());
         }
-        verifyNoInteractions(llmClient);
+        assertEquals(507, post("/api/chat", request("超过数量")).statusCode());
+        assertTrue(resume(retained.getFirst().runId()).contains("你好"));
+        post("/api/chat/" + retained.getFirst().runId() + "/ack", Map.of());
+        assertEquals(200, post("/api/chat", request("释放后继续")).statusCode());
     }
 
-    @Test
-    void acceptsEverySettingsCombinationAndPassesItToThePrompt() throws Exception {
-        doAnswer(invocation -> {
-            com.example.llm.model.ChatRequest modelRequest = invocation.getArgument(0);
-            String prompt = modelRequest.getMessages().getFirst().getContent();
-            assertTrue(prompt.contains("【回复长度】"));
-            assertTrue(prompt.contains("【叙事推进】"));
-            Consumer<String> onText = invocation.getArgument(1);
-            onText.accept("[台词]我来看看地图。\n[描写]她展开地图。");
-            return new ChatStreamResult("stop", TokenUsage.unavailable());
-        }).when(llmClient).chatStream(any(), any());
-        for (String length : List.of("short", "standard", "detailed")) {
-            for (String mode : List.of("interactive", "scene")) {
-                ObjectNode body = (ObjectNode) objectMapper.readTree(validJson());
-                ObjectNode settings = (ObjectNode) body.get("interactionSettings");
-                settings.put("replyLength", length).put("narrativeMode", mode);
-                HttpResponse<String> response = post(body.toString());
-                assertEquals(200, response.statusCode());
-                assertTrue(response.body().contains("event:done"));
-                assertFalse(response.body().contains("event:error"));
-            }
-        }
-    }
-
-    @Test
-    void validatesCharacterAtChatAndSelectionEntriesBeforeCallingModel() throws Exception {
-        List<ObjectNode> invalid = new ArrayList<>();
-        for (String field : List.of("name", "identity", "description")) {
-            ObjectNode missing = (ObjectNode) objectMapper.readTree(validJson());
-            ((ObjectNode) missing.get("character")).remove(field);
-            invalid.add(missing);
-            ObjectNode nullField = (ObjectNode) objectMapper.readTree(validJson());
-            ((ObjectNode) nullField.get("character")).putNull(field);
-            invalid.add(nullField);
-            int length = switch (field) {
-                case "name" -> 61;
-                case "identity" -> 2001;
-                default -> 8001;
-            };
-            ObjectNode oversized = (ObjectNode) objectMapper.readTree(validJson());
-            ((ObjectNode) oversized.get("character")).put(field, "字".repeat(length));
-            invalid.add(oversized);
-        }
-        ObjectNode blank = (ObjectNode) objectMapper.readTree(validJson());
-        ((ObjectNode) blank.get("character")).put("name", " ");
-        invalid.add(blank);
-        try (HttpClient client = HttpClient.newHttpClient()) {
-            for (String path : List.of("/api/chat", "/api/context/inspect")) {
-                for (ObjectNode body : invalid) {
-                    var response = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
-                            .header("Content-Type", "application/json")
-                            .POST(HttpRequest.BodyPublishers.ofString(body.toString())).build(),
-                            HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-                    assertJsonError(response, 400, "BAD_REQUEST");
-                    assertTrue(response.body().contains("角色"));
-                }
-            }
-        }
-        verifyNoInteractions(llmClient);
-    }
-
-    @Test
-    void acceptsNameOnlyAndExactCharacterLimits() throws Exception {
-        doAnswer(invocation -> new ChatStreamResult("stop", TokenUsage.unavailable())).when(llmClient).chatStream(any(), any());
-        for (boolean full : List.of(false, true)) {
-            ObjectNode body = (ObjectNode) objectMapper.readTree(validJson());
-            ((ObjectNode) body.get("character")).put("name", "名".repeat(full ? 60 : 1))
-                    .put("identity", full ? "身".repeat(2000) : "")
-                    .put("description", full ? "描".repeat(8000) : "");
-            HttpResponse<String> response = post(body.toString());
-            assertEquals(200, response.statusCode(), response.body());
-            assertTrue(response.body().contains("event:done"));
-        }
-    }
-
-    private HttpResponse<String> post(String body) throws Exception {
-        try (HttpClient client = HttpClient.newHttpClient()) {
-            return client.send(request(body), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        }
-    }
-
-    private HttpRequest request(String body) {
-        return HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/chat"))
-                .timeout(Duration.ofSeconds(8))
-                .header("Content-Type", "application/json")
-                .header("Accept", "text/event-stream")
-                .POST(HttpRequest.BodyPublishers.ofString(body))
-                .build();
-    }
-
-    private void assertJsonError(HttpResponse<String> response, int status, String code) throws Exception {
-        assertEquals(status, response.statusCode(), response.body());
-        assertTrue(response.headers().firstValue("Content-Type").orElseThrow().startsWith("application/json"));
-        assertEquals(code, objectMapper.readTree(response.body()).path("code").asText());
-    }
-
-    private BufferedReader reader(HttpResponse<InputStream> response) {
-        return new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8));
-    }
-
-    private String readEvent(BufferedReader reader) throws IOException {
-        StringBuilder event = new StringBuilder();
-        String line;
-        while ((line = reader.readLine()) != null && !line.isEmpty()) {
-            event.append(line).append('\n');
-        }
-        return event.toString();
-    }
-
-    private String readRemaining(BufferedReader reader) throws IOException {
-        StringBuilder result = new StringBuilder();
-        String line;
-        while ((line = reader.readLine()) != null) {
-            result.append(line).append('\n');
-        }
-        return result.toString();
-    }
-
-    private String validJson() {
-        return """
-                {"character":{"profileVersion":1,"name":"林溪","identity":"老板","description":"好奇，说话简短，生活在山城。"},
-                "operationId":"operation","state":{"sessionId":"session","characterId":"character","sessionVersion":0,"memoryVersion":0,"processedThroughSeq":0,
-                "story":{"location":"","storyTime":"","characterState":"","userState":"","presentCharacters":[],"relationships":[],"items":[],"openThreads":[]},"memories":[],"goals":[]},"summary":{"text":"","throughSeq":0,"version":0},"history":[],"input":{"text":"你好"},
-                "interactionSettings":{"replyLength":"standard","narrativeMode":"scene"}}
-                """;
+    @Test void missingRequiredFieldsFailBeforeAnyModelCall() throws Exception {
+        var request = request("  ");
+        assertEquals(400, post("/api/chat", request).statusCode());
+        verifyNoInteractions(model);
     }
 }
