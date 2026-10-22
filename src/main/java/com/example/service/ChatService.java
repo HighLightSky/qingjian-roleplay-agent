@@ -8,10 +8,8 @@ import org.springframework.stereotype.Service;
 
 import com.example.llm.LLMClient;
 import com.example.llm.model.ChatStreamResult;
-import com.example.web.dto.ContextDtos.ContextBudget;
-import com.example.prompt.PromptBuilder;
 import com.example.web.dto.ChatApiRequest;
-import com.example.web.dto.InputDto;
+import com.example.web.dto.ContextDtos.ContextBudget;
 import com.example.web.dto.SegmentDelta;
 
 /** 串起一次聊天的校验、提示词构建、模型调用与流式解析，不保存会话状态。 */
@@ -36,10 +34,11 @@ public class ChatService {
      * @param request 已由入口调用 {@link #validateRequest} 校验的完整上下文
      * @param onDelta 解析出正文时执行的回调，由 Controller 负责发送 SSE
      * @return 模型返回的结束原因，供 Controller 构造 done 事件
-     * @throws IOException 模型请求或响应读取失败
+     * @throws IOException          模型请求或响应读取失败
      * @throws InterruptedException 当前模型请求被中断
      */
-    public ChatStreamResult chatStream(ChatApiRequest request, Consumer<SegmentDelta> onDelta, Consumer<ContextBudget> onContext)
+    public ChatStreamResult chatStream(ChatApiRequest request, Consumer<SegmentDelta> onDelta,
+            Consumer<ContextBudget> onContext)
             throws IOException, InterruptedException {
         Objects.requireNonNull(onDelta, "onDelta 不能为空");
 

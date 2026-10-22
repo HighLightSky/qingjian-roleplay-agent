@@ -48,6 +48,6 @@ public class CompactionPromptBuilder {
             parts.add(Message.Part.image(payload.dataUrl()));
         }
         return new ChatRequest(List.of(new Message("system", rules), new Message("user", parts)),
-                properties.compactionMaxOutputTokens(), 0.0);
+                properties.compactionMaxOutputTokens(), 0.0, true);
     }
 }

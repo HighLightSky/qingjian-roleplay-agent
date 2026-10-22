@@ -39,7 +39,7 @@ class StateUpdateServiceTest {
     StateUpdateServiceTest() {
         vision.setSupported(true);
         service = new StateUpdateService(model, mapper, new StateUpdatePromptBuilder(mapper, com.example.TestRequests.dispatch()),
-                new ImageValidationService(vision), com.example.TestRequests.budgets());
+                new ImageValidationService(vision), com.example.TestRequests.budgets(), TestRequests.auxiliaryContexts());
     }
 
     private UpdateRequest request(Snapshot state, List<ContentPartDto> parts, List<Payload> payloads) {
@@ -70,7 +70,12 @@ class StateUpdateServiceTest {
     }
     private String change(String id, String value) {
         return "{\"action\":\"" + (id.isEmpty() ? "create" : "update") + "\",\"id\":\"" + id
-                + "\",\"expectedVersion\":0,\"value\":" + value + ",\"reason\":\"本轮明确发生\",\"sourceMessageIds\":[\"assistant\"]}";
+                + "\",\"value\":" + value + ",\"reason\":\"本轮明确发生\",\"sourceMessageIds\":[\"msg2\"]}";
+    }
+    private String withProgressEvidence(String change) throws Exception {
+        var value = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(change);
+        value.putObject("progressEvidence").put("type", "discovery").put("sourceMessageId", "msg2").put("quote", "她走入旅馆。");
+        return value.toString();
     }
     private String memoryValue(String scope) {
         return "{\"content\":\"用户喜欢被叫阿远\",\"scope\":\"" + scope
@@ -149,7 +154,7 @@ class StateUpdateServiceTest {
         String goalJson = mapper.writeValueAsString(new GoalValue("寻找哥哥", "active", "核实码头消息", progress));
         answer(output("[" + change("characterState", "\"穿着灰色外套，神情平静，手腕受伤\"") + ","
                 + change("userState", "\"穿着校服，自述紧张，身体状态未明确\"") + "]", "[]",
-                "[" + change("goal", goalJson).replace("expectedVersion\":0", "expectedVersion\":1") + "]"));
+                "[" + withProgressEvidence(change("goal1", goalJson)) + "]"));
         var result = update(request(snapshot, null, List.of()));
         assertEquals(2, result.storyChanges().size());
         assertEquals("", result.storyChanges().getFirst().before().asText());
@@ -170,10 +175,59 @@ class StateUpdateServiceTest {
 
     @Test void rejectsInventedReferencesUnknownFieldsAndDuplicateChanges() throws Exception {
         String valid = change("location", "\"旅馆\"");
-        for (String changes : List.of("[" + valid.replace("assistant", "other-session") + "]",
+        for (String changes : List.of("[" + valid.replace("msg2", "other-session") + "]",
                 "[" + valid.replace("location", "character") + "]", "[" + valid + "," + valid + "]",
-                "[" + valid.replace("expectedVersion\":0", "expectedVersion\":3") + "]")) {
+                "[" + valid.replace("msg2", "mem1") + "]")) {
             answer(output(changes, "[]", "[]"));
+            assertThrows(IOException.class, () -> update(request()));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"missing", "null"})
+    void textOnlyTurnsNormalizeAbsentVisualObservationsWithoutCorrection(String field) throws Exception {
+        var response = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(output(
+                "[" + change("location", "\"旅馆\"") + "]", "[]", "[]"));
+        if ("missing".equals(field)) response.remove("visualObservations");
+        else response.putNull("visualObservations");
+        var base = request();
+        var c = base.context();
+        var emptyVisual = new ChatApiRequest(c.character(), c.state(), c.summary(), c.history(), c.input(),
+                c.interactionSettings(), new Context("session", List.of(), null, List.of()), c.operationId());
+        for (var request : List.of(base, new UpdateRequest(base.operationId(), emptyVisual, base.fromExclusiveSeq(),
+                base.throughSeq(), base.messages()))) {
+            clearInvocations(model);
+            answer(response.toString());
+            var result = update(request);
+            assertTrue(result.visualObservations().isEmpty());
+            assertEquals("旅馆", result.storyChanges().getFirst().value().asText());
+            verify(model).chat(any());
+        }
+    }
+
+    @Test void actualPhotosAndChatAttachmentsStillRequireVisualObservations() throws Exception {
+        var response = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(output("[]", "[]", "[]"));
+        response.remove("visualObservations");
+        var attachment = request(TestRequests.state(List.of()), List.of(ContentPartDto.text("我们到了旅馆"),
+                new ContentPartDto("image", null, "img1")), List.of(payload("img1")));
+        for (var request : List.of(photoRequest(), attachment)) {
+            clearInvocations(model);
+            answer(response.toString());
+            var error = assertThrows(IOException.class, () -> update(request));
+            assertTrue(error.getMessage().contains("缺少数组：visualObservations"));
+            verify(model, times(2)).chat(any());
+        }
+    }
+
+    @Test void textOnlyTurnsStillRejectMalformedVisualFieldAndMissingDomainArrays() throws Exception {
+        for (String invalid : List.of("{}", "0", "\"错误类型\"")) {
+            answer(output("[]", "[]", "[]").replace("\"visualObservations\":[]", "\"visualObservations\":" + invalid));
+            assertThrows(IOException.class, () -> update(request()));
+        }
+        for (String missing : List.of("storyChanges", "memoryChanges", "goalChanges")) {
+            var response = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(output("[]", "[]", "[]"));
+            response.remove(List.of("visualObservations", missing));
+            answer(response.toString());
             assertThrows(IOException.class, () -> update(request()));
         }
     }
@@ -242,7 +296,7 @@ class StateUpdateServiceTest {
         verifyNoInteractions(model);
     }
 
-    @Test void dismissedMemoryCannotBeRestoredAndOldVersionCannotBeOverwritten() throws Exception {
+    @Test void dismissedMemoryCannotBeRestored() throws Exception {
         var state = TestRequests.state(List.of("用户喜欢被叫阿远"));
         var old = state.memories().getFirst();
         var deleted = new Memory(old.id(), old.characterId(), old.sessionId(),
@@ -250,7 +304,7 @@ class StateUpdateServiceTest {
         var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(deleted), List.of());
         answer(output("[]", "[" + change("", memoryValue("session")) + "]", "[]"));
         assertThrows(IOException.class, () -> update(request(snapshot, null, List.of())));
-        answer(output("[]", "[" + change(old.id(), memoryValue("session")) + "]", "[]"));
+        answer(output("[]", "[" + change("mem1", memoryValue("session")) + "]", "[]"));
         assertThrows(IOException.class, () -> update(request(snapshot, null, List.of())));
     }
 
@@ -263,7 +317,7 @@ class StateUpdateServiceTest {
         answer(output("[" + change("location", "\"旅馆\"") + "]", "[]", "[]"));
         var storyError = assertThrows(IOException.class, () -> update(request(snapshot, null, List.of())));
         assertTrue(storyError.getMessage().contains("人工修改"));
-        answer(output("[]", "[" + change(old.id(), memoryValue("session")).replace("expectedVersion\":0", "expectedVersion\":1") + "]", "[]"));
+        answer(output("[]", "[" + change("mem1", memoryValue("session")) + "]", "[]"));
         assertThrows(IOException.class, () -> update(request(snapshot, null, List.of())));
         var prior = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), state.memories(), List.of());
         assertEquals(1, update(request(prior, null, List.of())).memoryChanges().size());
@@ -274,8 +328,8 @@ class StateUpdateServiceTest {
         var value = new GoalValue("寻找哥哥", "active", "问掌柜", "已来到旅馆寻找哥哥。");
         var goal = new Goal("goal", "session", value, 1, "manual", List.of(), "2027-01-01T00:00:00Z");
         var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(), List.of(goal));
-        String update = change("goal", "{\"description\":\"寻找哥哥\",\"status\":\"completed\",\"currentFocus\":\"\",\"progressSummary\":\"已找到哥哥。\"}")
-                .replace("expectedVersion\":0", "expectedVersion\":1");
+        String update = change("goal1", "{\"status\":\"completed\",\"currentFocus\":\"\"}")
+                ;
         answer(output("[]", "[]", "[" + update + "]"));
         assertThrows(IOException.class, () -> update(request(snapshot, null, List.of())));
     }

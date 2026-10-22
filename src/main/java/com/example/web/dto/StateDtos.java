@@ -61,8 +61,8 @@ public final class StateDtos {
         }
     }
 
-    public record ProposedChange(String action, String id, int expectedVersion, JsonNode value, String reason,
-            List<String> sourceMessageIds) {
+    public record ProposedChange(String action, String id, JsonNode value, String reason,
+            List<String> sourceMessageIds, JsonNode progressEvidence) {
         public ProposedChange {
             sourceMessageIds = list(sourceMessageIds);
         }

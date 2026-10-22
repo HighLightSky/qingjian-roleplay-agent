@@ -39,7 +39,7 @@ public class ChatDispatchService {
             ImageCache cache, ModelGate gate, ChatService chat, VisualSelectionService selection,
             StateUpdateService state) {
         this.config = config;
-        
+
         this.clock = clock;
         this.mapper = mapper;
         this.cache = cache;
@@ -118,7 +118,8 @@ public class ChatDispatchService {
         Thread worker = task.worker;
         task.cancel("已停止，保留已收到的内容。");
         try {
-            if (worker != null) worker.join();
+            if (worker != null)
+                worker.join();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("取消等待被中断", e);
@@ -272,7 +273,8 @@ public class ChatDispatchService {
                     StringBuilder plain = new StringBuilder();
                     String previousKind = "";
                     for (SegmentDelta segment : segments) {
-                        if (!previousKind.isEmpty() && !previousKind.equals(segment.kind())) plain.append('\n');
+                        if (!previousKind.isEmpty() && !previousKind.equals(segment.kind()))
+                            plain.append('\n');
                         plain.append(segment.text());
                         previousKind = segment.kind();
                     }

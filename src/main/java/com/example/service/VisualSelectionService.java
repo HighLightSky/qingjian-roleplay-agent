@@ -3,140 +3,206 @@ package com.example.service;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+
 import com.example.llm.LLMClient;
+import com.example.llm.model.Message;
+import com.example.prompt.StateUpdateMaterial;
 import com.example.prompt.VisualSelectionPromptBuilder;
-import com.example.web.dto.*;
+import com.example.web.dto.ChatApiRequest;
 import com.example.web.dto.VisualDtos.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Service;
 
-/** 每个有图片历史的输入均通过模型选图；本类只校验协议，不以关键词推断相关性。 */
+/** 挑图只读取专用语义材料，不向模型暴露存储字段。 */
 @Service
 public class VisualSelectionService {
     private final LLMClient client;
     private final ObjectMapper mapper;
     private final VisualSelectionPromptBuilder prompts;
     private final ImageValidationService images;
-    private final ContextBudgetService budgets;
+    private final AuxiliaryContextService contexts;
 
     public VisualSelectionService(LLMClient client, ObjectMapper mapper, VisualSelectionPromptBuilder prompts,
-            ImageValidationService images, ContextBudgetService budgets) {
+            ImageValidationService images, AuxiliaryContextService contexts) {
         this.client = client;
         this.mapper = mapper;
         this.prompts = prompts;
         this.images = images;
-        this.budgets = budgets;
+        this.contexts = contexts;
     }
 
-    /** 绑定发送前上下文及观察版本；排除随后补传的字节和计划自身，便于无状态复核。 */
     public String fingerprint(ChatApiRequest request) {
         var node = mapper.valueToTree(request);
-        if (node.path("visual").isObject()) {
-            var visual = (com.fasterxml.jackson.databind.node.ObjectNode) node.path("visual");
-            visual.remove(List.of("plan", "imagePayloads"));
-        }
+        if (node.path("visual").isObject())
+            ((ObjectNode) node.path("visual")).remove(List.of("plan", "imagePayloads"));
         return ImageValidationService.sha256(node.toString().getBytes(StandardCharsets.UTF_8));
     }
 
-    /** 按目录顺序分批选候选，再统一决策；无历史图时不调用模型。 */
     public Plan select(ChatApiRequest request) throws IOException, InterruptedException {
         images.validateLimits(ImageValidationService.requiredIds(request));
-        List<Asset> catalog = ImageValidationService.selectableCatalog(request);
-        if (catalog.isEmpty())
-            return new Plan("ready", List.of(), List.of(), "", fingerprint(request), request.operationId());
-        List<List<Asset>> batches = new ArrayList<>();
+        var catalog = ImageValidationService.selectableCatalog(request);
+        if (catalog.isEmpty()) return withFingerprint(new Plan("ready", List.of(), List.of(), "", null, null), request);
+        int slots = images.properties().getMaxImages() - ImageValidationService.requiredIds(request).size();
+        ObjectNode background = background(request);
+        // 背景最多占一半文字预算，为目录及纠错留出空间，所有批次复用同一投影。
+        contexts.fit(background, "选图背景", request.operationId(), contexts.config().selectionInputTokens() / 2,
+                data -> prompts.build(data, slots, true, List.of()));
+        List<ObjectNode> rows = new ArrayList<>();
+        for (Asset asset : catalog) rows.add(catalogEntry(asset, request.operationId()));
+        List<List<ObjectNode>> batches = new ArrayList<>();
         int offset = 0;
-        while (offset < catalog.size()) {
-            int low = offset + 1, high = catalog.size(), chosen = offset;
+        while (offset < rows.size()) {
+            int low = offset + 1, high = rows.size(), chosen = offset;
             while (low <= high) {
                 int mid = (low + high) >>> 1;
-                if (budgets.modelRequestFits(prompts.build(request, catalog.subList(offset, mid),
-                        images.properties().getMaxImages(), "目录分批"))) {
+                var material = material(background, rows.subList(offset, mid));
+                if (contexts.fits(prompts.build(material, slots, true, List.of()), contexts.config().selectionInputTokens())) {
                     chosen = mid;
                     low = mid + 1;
                 } else high = mid - 1;
             }
-            if (chosen == offset) throw new ContextTooLargeException("单张图片目录与上下文超过选图 token 预算");
-            batches.add(List.copyOf(catalog.subList(offset, chosen)));
-            offset = chosen;
-        }
-        int slots = images.properties().getMaxImages() - ImageValidationService.requiredIds(request).size();
-        Plan plan;
-        if (batches.size() == 1)
-            plan = call(request, catalog, slots, false);
-        else {
-            Set<String> candidates = new HashSet<>();
-            for (List<Asset> group : batches) {
-                Plan result = call(request, group, slots, true);
-                if ("over_limit".equals(result.status()))
-                    return withFingerprint(result, request);
-                result.selectedHistoricalImages().forEach(s -> candidates.add(s.assetId()));
-                candidates.addAll(result.candidateAssetIds());
+            if (chosen == offset) {
+                // 单项本身过长时同样裁减投影，不让文字容量阻塞正文。
+                var material = material(background, rows.subList(offset, offset + 1));
+                contexts.fit(material, "选图单项", request.operationId(), contexts.config().selectionInputTokens(),
+                        data -> prompts.build(data, slots, true, List.of()));
+                batches.add(List.of((ObjectNode) material.path("catalog").get(0)));
+                offset++;
+            } else {
+                batches.add(List.copyOf(rows.subList(offset, chosen)));
+                offset = chosen;
             }
-            List<Asset> merged = catalog.stream().filter(a -> candidates.contains(a.assetId())).toList();
-            plan = merged.isEmpty() ? new Plan("ready", List.of(), List.of(), "", null, request.operationId())
-                    : call(request, merged, slots, false);
         }
-        return withFingerprint(plan, request);
+        Plan result;
+        if (batches.size() == 1) result = call(request, material(background, batches.getFirst()), slots, false);
+        else {
+            Set<String> selected = new LinkedHashSet<>();
+            Set<String> ambiguous = new LinkedHashSet<>();
+            for (var batch : batches) {
+                Plan candidates = call(request, material(background, batch), slots, true);
+                candidates.selectedHistoricalImages().forEach(s -> selected.add(s.assetId()));
+                ambiguous.addAll(candidates.candidateAssetIds());
+            }
+            List<ObjectNode> merged = new ArrayList<>();
+            rows.stream().filter(a -> selected.contains(a.path("assetId").asText())).forEach(merged::add);
+            rows.stream().filter(a -> !selected.contains(a.path("assetId").asText())
+                    && ambiguous.contains(a.path("assetId").asText())).forEach(merged::add);
+            result = merged.isEmpty() ? new Plan("ready", List.of(), List.of(), "", null, null)
+                    : call(request, material(background, merged), slots, false);
+        }
+        return withFingerprint(result, request);
     }
 
-    /** 恢复上传顺序，使多图比较不受模型返回顺序影响。 */
-    private Plan withFingerprint(Plan p, ChatApiRequest r) {
-        List<Selected> ordered = ImageValidationService.catalog(r).stream()
-                .flatMap(a -> p.selectedHistoricalImages().stream()
-                        .filter(s -> s.assetId().equals(a.assetId())))
-                .toList();
-        return new Plan(p.status(), ordered, p.candidateAssetIds(), p.message(), fingerprint(r), r.operationId());
+    private ObjectNode background(ChatApiRequest request) throws IOException, InterruptedException {
+        ObjectNode data = contexts.background(request, "选图");
+        data.set("story", mapper.valueToTree(request.state().story()));
+        var memories = data.putArray("memories");
+        request.state().memories().stream().filter(m -> "active".equals(m.value().status()))
+                .sorted(Comparator.comparing((com.example.web.dto.StateDtos.Memory m) -> !"manual".equals(m.origin()))
+                        .thenComparing(com.example.web.dto.StateDtos.Memory::updatedAt, Comparator.reverseOrder())
+                        .thenComparing(com.example.web.dto.StateDtos.Memory::id))
+                .forEach(m -> memories.addObject().set("value", mapper.valueToTree(m.value())));
+        var goals = data.putArray("goals");
+        request.state().goals().stream().filter(g -> !"dismissed".equals(g.value().status()))
+                .sorted(Comparator.comparing((com.example.web.dto.StateDtos.Goal g) ->
+                        Set.of("completed", "abandoned").contains(g.value().status()))
+                        .thenComparing(g -> !"manual".equals(g.origin()))
+                        .thenComparing(com.example.web.dto.StateDtos.Goal::updatedAt, Comparator.reverseOrder())
+                        .thenComparing(com.example.web.dto.StateDtos.Goal::id))
+                .forEach(g -> goals.addObject().set("value", mapper.createObjectNode()
+                        .put("description", g.value().description()).put("status", g.value().status())
+                        .put("currentFocus", g.value().currentFocus())));
+        var message = data.putArray("currentMessages").addObject().put("role", "user")
+                .put("text", request.input().textOf());
+        var ids = message.putArray("images");
+        ImageValidationService.newIds(request).forEach(ids::add);
+        var required = data.putArray("requiredImageAssetIds");
+        ImageValidationService.requiredIds(request).forEach(required::add);
+        contexts.boundCurrentMessages(data, request.operationId());
+        return data;
     }
 
-    /** 格式或引用错误最多纠正一次；不使用规则匹配作为降级选图方案。 */
-    private Plan call(ChatApiRequest r, List<Asset> catalog, int slots, boolean candidatePhase)
+    private ObjectNode catalogEntry(Asset asset, String task) throws IOException, InterruptedException {
+        ObjectNode row = mapper.createObjectNode().put("assetId", asset.assetId());
+        var sources = row.putArray("sources");
+        for (Source source : asset.sources()) {
+            if (source instanceof CharacterPhotoSource) sources.addObject().put("type", "character_photo");
+            else if (source instanceof MessageSource message)
+                sources.addObject().put("type", "message").put("seq", message.seq()).put("text", message.text())
+                        .put("imageIndex", message.imageIndex()).put("uploadIndex", message.uploadIndex());
+        }
+        if (asset.observation() != null) row.set("observation", StateUpdateMaterial.observation(mapper, asset.observation()));
+        var uses = row.putArray("recentUses");
+        asset.recentUses().forEach(use -> uses.addObject().put("purpose", use.purpose()));
+        contexts.boundCatalogEntry(row, task);
+        return row;
+    }
+
+    private ObjectNode material(ObjectNode background, List<ObjectNode> catalog) {
+        ObjectNode data = background.deepCopy();
+        var rows = data.putArray("catalog");
+        catalog.forEach(row -> rows.add(row.deepCopy()));
+        return data;
+    }
+
+    private Plan withFingerprint(Plan plan, ChatApiRequest request) {
+        var ordered = ImageValidationService.catalog(request).stream().flatMap(a -> plan.selectedHistoricalImages()
+                .stream().filter(s -> s.assetId().equals(a.assetId()))).toList();
+        return new Plan(plan.status(), ordered, plan.candidateAssetIds(), plan.message(), fingerprint(request), request.operationId());
+    }
+
+    private Plan call(ChatApiRequest request, ObjectNode material, int slots, boolean candidatePhase)
             throws IOException, InterruptedException {
-        String phase = candidatePhase ? "当前为目录分批候选提取。只判断当前批次中相关的图，不因其他图片未在本批出现而猜测其 ID；候选之后会统一决策。" : "当前为最终选图，判断完整候选中本次真正需要的原图。";
-        String correction = phase;
+        List<Message> correction = List.of();
         for (int attempt = 0; attempt < 2; attempt++) {
-            var modelRequest = prompts.build(r, catalog, slots, correction);
-            budgets.checkModelRequest(modelRequest);
+            var previous = correction;
+            var modelRequest = contexts.fit(material, "选图", request.operationId(), contexts.config().selectionInputTokens(),
+                    data -> prompts.build(data, slots, candidatePhase, previous));
             var response = client.chat(modelRequest);
+            if (!"stop".equals(response.getFinishReason()) || response.getContent() == null)
+                throw new IOException("选图输出未完成");
             try {
-                if (!"stop".equals(response.getFinishReason()))
-                    throw new IllegalArgumentException("选图输出未完成");
-                Plan plan = mapper.readValue(response.getContent(), Plan.class);
-                validateSelection(plan, catalog, images.properties().getMaxImages());
-                var union = new HashSet<>(ImageValidationService.requiredIds(r));
-                plan.selectedHistoricalImages().forEach(s -> union.add(s.assetId()));
-                if ("ready".equals(plan.status())) images.validateLimits(union);
+                Plan plan = mapper.readerFor(Plan.class)
+                        .with(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                        .readValue(response.getContent());
+                Set<String> allowed = new HashSet<>();
+                material.path("catalog").forEach(a -> allowed.add(a.path("assetId").asText()));
+                validateSelection(plan, allowed, slots, candidatePhase);
+                if (!candidatePhase && "ready".equals(plan.status())) {
+                    var union = new HashSet<>(ImageValidationService.requiredIds(request));
+                    plan.selectedHistoricalImages().forEach(s -> union.add(s.assetId()));
+                    images.validateLimits(union);
+                }
                 return plan;
             } catch (IOException | IllegalArgumentException e) {
-                correction = phase + "上次输出无效，请纠正并仅返回完整合法 JSON。";
+                if (attempt == 1) throw new IOException("图片选择纠正后仍无效：" + e.getMessage(), e);
+                correction = contexts.correction(response.getContent(), e.getMessage());
             }
         }
-        throw new IOException("图片选择结果无效，请重试");
+        throw new IllegalStateException("选图纠错循环未产生结果");
     }
 
-    /** 只验证结构、来源、重复项与预算，不改写模型的语义选择。 */
-    public void validateSelection(Plan p, List<Asset> catalog, int slots) {
-        if (p == null || !Set.of("ready", "ambiguous", "over_limit").contains(p.status() == null ? "" : p.status())
-                || p.selectedHistoricalImages() == null || p.candidateAssetIds() == null)
+    private void validateSelection(Plan plan, Set<String> allowed, int slots, boolean candidatePhase) {
+        if (plan == null || !Set.of("ready", "ambiguous", "over_limit").contains(plan.status() == null ? "" : plan.status())
+                || plan.selectedHistoricalImages() == null || plan.candidateAssetIds() == null)
             throw new IllegalArgumentException("选图结果结构无效");
-        Set<String> allowed = new HashSet<>();
-        catalog.forEach(a -> allowed.add(a.assetId()));
+        if (candidatePhase && "over_limit".equals(plan.status()))
+            throw new IllegalArgumentException("候选提取阶段不判断最终图片名额");
         Set<String> seen = new HashSet<>();
-        for (Selected s : p.selectedHistoricalImages()) {
-            if (s == null || !allowed.contains(s.assetId()) || !seen.add(s.assetId()) || s.purpose() == null
-                    || s.purpose().isBlank())
-                throw new IllegalArgumentException("选图包含非法或重复 ID");
-        }
-        if (!allowed.containsAll(p.candidateAssetIds())
-                || new HashSet<>(p.candidateAssetIds()).size() != p.candidateAssetIds().size())
-            throw new IllegalArgumentException("候选图片无效");
-        if ("ready".equals(p.status())
-                && (p.selectedHistoricalImages().size() > slots || !p.candidateAssetIds().isEmpty()))
-            throw new IllegalArgumentException("选图数量超限或状态矛盾");
-        if (!"ready".equals(p.status()) && (p.message() == null || p.message().isBlank()))
+        for (Selected selected : plan.selectedHistoricalImages())
+            if (selected == null || !allowed.contains(selected.assetId()) || !seen.add(selected.assetId())
+                    || selected.purpose() == null || selected.purpose().isBlank())
+                throw new IllegalArgumentException("选图包含非法或重复 ID，允许编号：" + allowed);
+        if (!allowed.containsAll(plan.candidateAssetIds())
+                || new HashSet<>(plan.candidateAssetIds()).size() != plan.candidateAssetIds().size())
+            throw new IllegalArgumentException("候选图片编号无效，允许编号：" + allowed);
+        if (!candidatePhase && "ready".equals(plan.status())
+                && (plan.selectedHistoricalImages().size() > slots || !plan.candidateAssetIds().isEmpty()))
+            throw new IllegalArgumentException("选图数量超过剩余名额或状态矛盾，剩余名额：" + slots);
+        if (!"ready".equals(plan.status()) && (plan.message() == null || plan.message().isBlank()))
             throw new IllegalArgumentException("缺少选图提示");
-        if ("ambiguous".equals(p.status()) && p.candidateAssetIds().isEmpty())
+        if ("ambiguous".equals(plan.status()) && plan.candidateAssetIds().isEmpty())
             throw new IllegalArgumentException("缺少歧义候选");
     }
-
 }

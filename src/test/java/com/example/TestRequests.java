@@ -29,6 +29,19 @@ public final class TestRequests {
                 contextProperties(), vision, new com.example.service.ContextValidation(),
                 new com.example.service.ImageValidationService(vision), mapper);
     }
+    public static com.example.service.AuxiliaryContextService auxiliaryContexts() {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var counter = org.mockito.Mockito.mock(com.example.service.LlamaTokenCounter.class);
+        try {
+            var count = new com.example.web.dto.ContextDtos.TokenCount(100, "exact", "test-model", "test-fingerprint");
+            org.mockito.Mockito.when(counter.count(org.mockito.ArgumentMatchers.any())).thenReturn(count);
+            org.mockito.Mockito.when(counter.countTextOnly(org.mockito.ArgumentMatchers.any())).thenReturn(count);
+            org.mockito.Mockito.when(counter.tokenize(org.mockito.ArgumentMatchers.anyString())).thenAnswer(i ->
+                    (long) ((String) i.getArgument(0)).codePointCount(0, ((String) i.getArgument(0)).length()));
+        } catch (Exception e) { throw new AssertionError(e); }
+        return new com.example.service.AuxiliaryContextService(mapper, counter, contextProperties(),
+                new com.example.config.AuxiliaryContextProperties(4, 8192, 8192, 32768, 32768, 2048, 2048));
+    }
     public static Snapshot state(List<String> contents) {
         List<Memory> memories = new ArrayList<>();
         for (int i = 0; i < contents.size(); i++) {

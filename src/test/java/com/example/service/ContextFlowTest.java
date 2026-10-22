@@ -80,25 +80,46 @@ class ContextFlowTest {
 
     @Test void countsChineseEmojiAndTypedHistoryWithTheDeploymentTemplate() throws Exception {
         var request = new ChatRequest(List.of(new Message("system", "角色设定"), new Message("user", "你好🌱"),
-                new Message("assistant", "[台词]你好"), new Message("user", "看这段代码：x=1")), 1000, .8);
+                new Message("assistant", "[台词]你好"), new Message("user", "看这段代码：x=1")), 1000, .8, true);
         var count = counter.count(request);
         String rendered = "<system>角色设定<user>你好🌱<assistant>[台词]你好<user>看这段代码：x=1<assistant>";
         assertEquals(rendered.codePointCount(0, rendered.length()), count.inputTokens());
         assertEquals("exact", count.accuracy());
         assertTrue(lastTemplate.contains("add_generation_prompt"));
-        assertNotEquals(count.requestFingerprint(), counter.count(new ChatRequest(List.of(new Message("user", "变更")), 1000, .8)).requestFingerprint());
+        assertNotEquals(count.requestFingerprint(), counter.count(new ChatRequest(List.of(new Message("user", "变更")), 1000, .8, true)).requestFingerprint());
     }
 
     @Test void imageBytesNeverEnterTextTokenizerAndTheEstimateUsesDecodedDimensions() throws Exception {
         var bytes = new ByteArrayOutputStream();
         ImageIO.write(new BufferedImage(1024, 512, BufferedImage.TYPE_INT_RGB), "png", bytes);
         String uri = "data:image/png;base64," + Base64.getEncoder().encodeToString(bytes.toByteArray());
-        var request = new ChatRequest(List.of(new Message("user", List.of(Message.Part.text("地图"), Message.Part.image(uri)))), 1000, .8);
+        var request = new ChatRequest(List.of(new Message("user", List.of(Message.Part.text("地图"), Message.Part.image(uri)))), 1000, .8, true);
         var count = counter.count(request);
         assertEquals("estimated", count.accuracy());
         assertEquals("<user>地图<assistant>".length() + (long) Math.ceil(512 * 1.1) + 64, count.inputTokens());
         assertFalse(lastTemplate.contains("base64"));
         assertFalse(lastTemplate.contains("image_url"));
+    }
+
+    @Test void thinkingModeSurvivesImageStrippingAndMatchesTheActualRequest() throws Exception {
+        var bytes = new ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(32, 32, BufferedImage.TYPE_INT_RGB), "png", bytes);
+        String image = "data:image/png;base64," + Base64.getEncoder().encodeToString(bytes.toByteArray());
+        var llm = new LlmProperties("", "", "test", .8, 1000, 5);
+        var requests = new LlmRequestMapper(mapper, llm);
+        for (boolean thinking : List.of(false, true)) {
+            var request = new ChatRequest(List.of(new Message("user", List.of(Message.Part.text("地图"), Message.Part.image(image)))),
+                    1000, .8, thinking);
+            request.setResponseSchema(mapper.readTree("{\"type\":\"object\",\"properties\":{\"answer\":{\"type\":\"string\"}},\"required\":[\"answer\"],\"additionalProperties\":false}"));
+            counter.count(request);
+            assertEquals(requests.chatBody(request, false).path("response_format"), mapper.readTree(lastTemplate).path("response_format"));
+            assertEquals(thinking, mapper.readTree(lastTemplate).path("chat_template_kwargs").path("enable_thinking").asBoolean());
+            assertEquals(requests.chatBody(request, false).path("chat_template_kwargs"),
+                    mapper.readTree(lastTemplate).path("chat_template_kwargs"));
+            counter.countTextOnly(request);
+            assertEquals(requests.chatBody(request, false).path("response_format"), mapper.readTree(lastTemplate).path("response_format"));
+            assertEquals(thinking, mapper.readTree(lastTemplate).path("chat_template_kwargs").path("enable_thinking").asBoolean());
+        }
     }
 
     @Test void thresholdAndHardCapacityUseTheConfiguredFullWindow() {

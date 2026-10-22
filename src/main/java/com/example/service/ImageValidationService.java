@@ -51,7 +51,9 @@ public class ImageValidationService {
     }
 
     public static List<Asset> selectableCatalog(ChatApiRequest request) {
-        return catalog(request).stream().filter(a -> a.observation() != null || a.sources().stream()
+        Set<String> required = new HashSet<>(requiredIds(request));
+        return catalog(request).stream().filter(a -> !required.contains(a.assetId()))
+                .filter(a -> a.observation() != null || a.sources().stream()
                 .anyMatch(s -> s instanceof MessageSource)).toList();
     }
 

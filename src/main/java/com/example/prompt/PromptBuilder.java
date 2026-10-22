@@ -63,7 +63,7 @@ public class PromptBuilder {
         messages.addFirst(new Message("system", systemPrompt.toString()));
 
         return new ChatRequest(
-                messages, llmProperties.maxTokens(), llmProperties.temperature());
+                messages, llmProperties.maxTokens(), llmProperties.temperature(), true);
     }
 
     /**
