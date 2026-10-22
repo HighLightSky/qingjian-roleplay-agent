@@ -64,64 +64,90 @@
   }
 }
 
+:root,
+[data-theme-color="teal"] {
+  --theme-light: #0f766e;
+  --theme-dark: #2dd4bf;
+  --theme-swatch: #14b8a6;
+}
+
+[data-theme-color="magenta"] {
+  --theme-light: #a21caf;
+  --theme-dark: #e879f9;
+  --theme-swatch: #d946ef;
+}
+
+[data-theme-color="pink"] {
+  --theme-light: #be185d;
+  --theme-dark: #f472b6;
+  --theme-swatch: #f472b6;
+}
+
+[data-theme-color="violet"] {
+  --theme-light: #7c3aed;
+  --theme-dark: #a78bfa;
+  --theme-swatch: #a78bfa;
+}
+
+[data-theme-color="blue"] {
+  --theme-light: #1d4ed8;
+  --theme-dark: #60a5fa;
+  --theme-swatch: #60a5fa;
+}
+
+[data-theme-color="orange"] {
+  --theme-light: #c2410c;
+  --theme-dark: #fb923c;
+  --theme-swatch: #fb923c;
+}
+
 :root {
   --radius: 0.5rem;
-  --background: #fafcfa;
-  --foreground: #20382b;
-  --card: #fafcfa;
-  --card-foreground: #20382b;
-  --popover: #fafcfa;
-  --popover-foreground: #20382b;
-  --primary: #276749;
+  --background: #fcfcfd;
+  --foreground: #18181b;
+  --card: #ffffff;
+  --card-foreground: var(--foreground);
+  --popover: #ffffff;
+  --popover-foreground: var(--foreground);
+  --primary: var(--theme-light);
   --primary-foreground: #ffffff;
-  --secondary: #eef5ef;
-  --secondary-foreground: #20382b;
-  --muted: #eef5ef;
-  --muted-foreground: #52695b;
-  --accent: #e3f2e6;
-  --accent-foreground: #20382b;
+  --secondary: #f0f0f2;
+  --secondary-foreground: var(--foreground);
+  --muted: #f0f0f2;
+  --muted-foreground: #62626b;
+  --accent: color-mix(in srgb, var(--primary) 11%, #ffffff);
+  --accent-foreground: var(--foreground);
   --destructive: #b53038;
-  --border: #d4e3d7;
-  --input: #d4e3d7;
-  --ring: #40865e;
-  --sidebar: #f1f7f2;
-  --sidebar-foreground: #20382b;
-  --sidebar-primary: #276749;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #e3f2e6;
-  --sidebar-accent-foreground: #20382b;
-  --sidebar-border: #d4e3d7;
-  --sidebar-ring: #40865e;
+  --border: #dedee3;
+  --input: #d4d4dc;
+  --ring: var(--primary);
+  --glow: color-mix(in srgb, var(--primary) 18%, transparent);
+  --sidebar: color-mix(in srgb, var(--primary) 5%, #fcfcfd);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
 }
 
 .dark {
-  --radius: 0.5rem;
-  --background: #111a15;
-  --foreground: #e4eee7;
-  --card: #111a15;
-  --card-foreground: #e4eee7;
-  --popover: #19271f;
-  --popover-foreground: #e4eee7;
-  --primary: #a3d9b3;
-  --primary-foreground: #102318;
-  --secondary: #192c20;
-  --secondary-foreground: #e4eee7;
-  --muted: #192c20;
-  --muted-foreground: #a8b9ac;
-  --accent: #203b2b;
-  --accent-foreground: #e4eee7;
+  --background: #09090b;
+  --foreground: #f4f4f5;
+  --card: #111113;
+  --popover: #18181b;
+  --primary: var(--theme-dark);
+  --primary-foreground: #09090b;
+  --secondary: #202023;
+  --muted: #202023;
+  --muted-foreground: #a1a1aa;
+  --accent: color-mix(in srgb, var(--primary) 18%, #101012);
   --destructive: #ff9ca2;
-  --border: #344b3b;
-  --input: #344b3b;
-  --ring: #a3d9b3;
-  --sidebar: #16231b;
-  --sidebar-foreground: #e4eee7;
-  --sidebar-primary: #a3d9b3;
-  --sidebar-primary-foreground: #102318;
-  --sidebar-accent: #203b2b;
-  --sidebar-accent-foreground: #e4eee7;
-  --sidebar-border: #344b3b;
-  --sidebar-ring: #a3d9b3;
+  --border: #2c2c31;
+  --input: #3c3c43;
+  --glow: color-mix(in srgb, var(--primary) 22%, transparent);
+  --sidebar: #111113;
 }
 
 @layer base {
@@ -170,14 +196,14 @@
   padding: 0.625rem 0.75rem;
   border: 1px solid var(--input);
   border-radius: var(--radius);
-  background: transparent;
+  background: var(--background);
   color: var(--foreground);
   font-size: 1rem;
   outline: none;
 }
 .app-input:focus-visible {
   border-color: var(--ring);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 25%, transparent);
+  box-shadow: 0 0 0 3px var(--glow);
 }
 .app-input::placeholder {
   color: var(--muted-foreground);
@@ -191,6 +217,12 @@
 }
 .aui-user-message-content {
   background: var(--accent);
+}
+[data-slot="aui_composer-shell"]:focus-within {
+  border-color: var(--ring);
+  box-shadow:
+    0 0 0 3px var(--glow),
+    0 6px 28px -10px var(--glow);
 }
 .aui-composer-input {
   border: 0;

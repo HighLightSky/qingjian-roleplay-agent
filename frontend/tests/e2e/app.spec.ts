@@ -729,7 +729,7 @@ test("chat, shared memory, one-click sessions, theme, drafts and browser recover
     .getByRole("button", { name: "设置与数据", exact: true })
     .filter({ visible: true })
     .click();
-  await page.getByRole("combobox", { name: "外观" }).selectOption("dark");
+  await page.getByText("深色", { exact: true }).click();
   await expect(page.locator("html")).toHaveClass(/dark/);
   await page
     .getByRole("dialog")
@@ -1487,6 +1487,24 @@ test("角色照片草稿恢复、首次原图、后续选图与旧会话快照",
   ).toHaveValue("银发，谨慎好奇。");
   await page.getByRole("button", { name: "保存角色", exact: true }).click();
   await page.getByRole("button", { name: "开始对话", exact: true }).click();
+  await nav(page);
+  const switcher = page
+    .getByRole("button", { name: "切换角色", exact: true })
+    .filter({ visible: true });
+  await expect(
+    switcher.getByRole("img", { name: "林溪的形象缩略图" }),
+  ).toBeVisible();
+  await switcher.click();
+  const library = page.getByRole("dialog").last();
+  await expect(
+    library.getByRole("img", { name: "林溪的形象缩略图" }),
+  ).toBeVisible();
+  await library.getByRole("button", { name: "关闭", exact: true }).click();
+  if ((page.viewportSize()?.width ?? 1440) < 768)
+    await page
+      .getByRole("dialog", { name: "角色与对话导航" })
+      .getByRole("button", { name: "关闭", exact: true })
+      .click();
   await send(page, "你好");
   await expect(page.locator('[data-operation="state_update"]')).toContainText(
     "已记录 1 张图片",

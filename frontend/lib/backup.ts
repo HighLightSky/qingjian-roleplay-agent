@@ -37,6 +37,7 @@ import {
   type ImageUsage,
 } from "./images/types";
 import { database, TABLES, atomic } from "./db";
+import { parseThemeColor } from "./theme";
 import {
   parseCharacterProfile,
   parseInteractionSettings,
@@ -256,6 +257,7 @@ export function validateBackup(value: unknown): Backup {
       !["system", "light", "dark"].includes(setting.value)
     )
       throw new Error("主题设置无效。");
+    if (setting.key === "themeColor") parseThemeColor(setting.value);
   }
   validateImages(snapshot);
   return {

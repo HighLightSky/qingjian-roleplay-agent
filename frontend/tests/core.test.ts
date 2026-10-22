@@ -38,6 +38,7 @@ import {
   useAppStore,
   importBackup,
   clearData,
+  changeThemeColor,
 } from "../stores/use-app-store";
 
 beforeEach(async () => {
@@ -441,6 +442,29 @@ test("queued settings changes merge, survive backup import, and reset on clear",
   );
   await importBackup(backup);
   assert.deepEqual(useAppStore.getState().interactionSettings, expected);
+});
+
+test("主题色随备份恢复，清空后回到青绿，拒绝无效备份主题色", async () => {
+  await changeThemeColor("violet");
+  const backup = await takeSnapshot();
+  await clearData();
+  assert.equal(useAppStore.getState().themeColor, "teal");
+  await importBackup(validateBackup(backup));
+  assert.equal(useAppStore.getState().themeColor, "violet");
+  const invalid = structuredClone(backup);
+  invalid.data.settings.find((setting) => setting.key === "themeColor")!.value =
+    "unknown";
+  assert.throws(() => validateBackup(invalid), /主题色设置无效/);
+  assert.equal(
+    (await (await database()).get("settings", "themeColor"))!.value,
+    "violet",
+  );
+  const previous = structuredClone(backup);
+  previous.data.settings = previous.data.settings.filter(
+    (setting) => setting.key !== "themeColor",
+  );
+  await importBackup(validateBackup(previous));
+  assert.equal(useAppStore.getState().themeColor, "teal");
 });
 
 test("invalid interaction settings in backups are rejected without replacing current data", async () => {

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { database } from "@/lib/db";
+import { report } from "@/stores/use-app-store";
 export function useImageUrl(assetId: string | undefined, thumbnail = false) {
   const [entry, setEntry] = useState<{ key: string; url: string }>();
   const key = `${assetId}:${thumbnail}`;
@@ -11,7 +12,9 @@ export function useImageUrl(assetId: string | undefined, thumbnail = false) {
     void database()
       .then((db) => db.get("assets", assetId))
       .then((asset) => {
-        if (disposed || !asset) return;
+        if (disposed) return;
+        if (!asset)
+          throw new Error(`找不到图片原件：${assetId}，请从完整备份恢复。`);
         url = URL.createObjectURL(
           thumbnail
             ? (asset.thumbnailBlob ?? asset.originalBlob)
@@ -19,7 +22,9 @@ export function useImageUrl(assetId: string | undefined, thumbnail = false) {
         );
         setEntry({ key, url });
       })
-      .catch(() => {});
+      .catch((error) => {
+        if (!disposed) report(error);
+      });
     return () => {
       disposed = true;
       if (url) URL.revokeObjectURL(url);

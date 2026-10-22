@@ -10,7 +10,16 @@ import {
 import { useImageUrl } from "@/hooks/use-image-url";
 import { prepareCharacterPhoto } from "@/lib/images/repository";
 import { ImageGallery } from "@/components/chat/image-gallery";
-import { DownloadIcon, LeafIcon, UploadIcon } from "lucide-react";
+import {
+  CheckIcon,
+  DownloadIcon,
+  MonitorIcon,
+  MoonIcon,
+  SunIcon,
+  UploadIcon,
+} from "lucide-react";
+import { CharacterThumbnail } from "@/components/character-thumbnail";
+import { THEME_COLORS } from "@/lib/theme";
 import {
   Dialog,
   DialogContent,
@@ -43,6 +52,7 @@ import {
 import {
   archiveCharacter,
   changeTheme,
+  changeThemeColor,
   clearData,
   exportBackup,
   importBackup,
@@ -325,7 +335,7 @@ function SnapshotPhoto({ assetId }: { assetId: string }) {
   );
 }
 function DataSettings({ open }: { open: (state: DialogState) => void }) {
-  const { themeMode, readOnly, characters } = useAppStore();
+  const { themeMode, themeColor, readOnly, characters } = useAppStore();
   const [working, setWorking] = useState(false);
   const [storage, setStorage] = useState<{
     usage?: number;
@@ -414,21 +424,83 @@ function DataSettings({ open }: { open: (state: DialogState) => void }) {
           故事保存在当前浏览器，备份让它们可以迁移。
         </DialogDescription>
       </DialogHeader>
-      <Field label="外观">
-        <select
-          className="app-input"
-          aria-label="外观"
-          disabled={readOnly}
-          value={themeMode}
-          onChange={(event) => {
-            void changeTheme(event.target.value as ThemeMode).catch(report);
-          }}
-        >
-          <option value="system">跟随系统</option>
-          <option value="light">浅色 · 淡绿</option>
-          <option value="dark">深色 · 淡绿</option>
-        </select>
-      </Field>
+      <section className="grid gap-5" aria-label="外观设置">
+        <fieldset disabled={readOnly}>
+          <legend className="mb-3 text-sm font-medium">外观</legend>
+          <div className="grid grid-cols-3 gap-2">
+            {(
+              [
+                { value: "system", label: "跟随系统", Icon: MonitorIcon },
+                { value: "light", label: "浅色", Icon: SunIcon },
+                { value: "dark", label: "深色", Icon: MoonIcon },
+              ] satisfies {
+                value: ThemeMode;
+                label: string;
+                Icon: typeof SunIcon;
+              }[]
+            ).map(({ value, label, Icon }) => (
+              <label
+                key={value}
+                className="cursor-pointer has-disabled:cursor-default has-disabled:opacity-50"
+              >
+                <input
+                  type="radio"
+                  name="themeMode"
+                  value={value}
+                  checked={themeMode === value}
+                  onChange={() => void changeTheme(value).catch(report)}
+                  className="peer sr-only"
+                />
+                <span className="flex min-h-20 flex-col items-center justify-center gap-2 rounded-lg border text-sm text-muted-foreground transition-colors hover:bg-accent/50 peer-checked:border-primary peer-checked:bg-accent peer-checked:text-primary peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-background">
+                  <Icon className="size-5" aria-hidden />
+                  {label}
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <fieldset disabled={readOnly} aria-describedby="theme-color-hint">
+          <legend className="mb-3 text-sm font-medium">主题色</legend>
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+            {THEME_COLORS.map(({ value, label }) => (
+              <label
+                key={value}
+                className="cursor-pointer has-disabled:cursor-default has-disabled:opacity-50"
+              >
+                <input
+                  type="radio"
+                  name="themeColor"
+                  value={value}
+                  checked={themeColor === value}
+                  onChange={() => void changeThemeColor(value).catch(report)}
+                  className="peer sr-only"
+                />
+                <span className="flex min-h-20 flex-col items-center justify-center gap-2 rounded-lg border border-transparent text-xs text-muted-foreground transition-colors hover:bg-accent/50 peer-checked:border-primary peer-checked:bg-accent peer-checked:text-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-background">
+                  <span
+                    data-theme-color={value}
+                    className="flex size-7 items-center justify-center rounded-full bg-(--theme-swatch)"
+                  >
+                    {themeColor === value && (
+                      <CheckIcon
+                        className="size-4 text-[#09090b]"
+                        strokeWidth={3}
+                        aria-hidden
+                      />
+                    )}
+                  </span>
+                  {label}
+                </span>
+              </label>
+            ))}
+          </div>
+          <p
+            id="theme-color-hint"
+            className="mt-3 text-xs leading-5 text-muted-foreground"
+          >
+            主题色用于按钮、气泡与聚焦光晕。浅色侧栏轻染色，深色背景保持纯净黑灰。
+          </p>
+        </fieldset>
+      </section>
       <section className="border-t pt-5">
         <h3 className="text-sm font-medium">本地数据</h3>
         <p className="mt-2 text-sm text-muted-foreground">
@@ -585,7 +657,11 @@ export function AppDialogs({
         <div className="divide-y">
           {app.characters.map((character) => (
             <div key={character.id} className="flex items-center gap-3 py-4">
-              <LeafIcon className="size-5 shrink-0 text-primary" />
+              <CharacterThumbnail
+                assetId={character.appearancePhotoAssetId}
+                name={character.name}
+                className="size-10"
+              />
               <button
                 className="min-w-0 flex-1 text-left"
                 onClick={() => void submit(() => selectCharacter(character.id))}

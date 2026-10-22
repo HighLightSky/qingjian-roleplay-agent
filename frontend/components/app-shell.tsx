@@ -38,6 +38,7 @@ import { OperationTool } from "@/components/chat/operation-tool";
 import { ChatRuntimeProvider } from "@/components/chat/runtime-provider";
 import { InteractionSettingsControls } from "@/components/chat/interaction-settings";
 import { AppDialogs, type DialogState } from "@/components/app-dialogs";
+import { CharacterThumbnail } from "@/components/character-thumbnail";
 import {
   cancelGeneration,
   initialize,
@@ -137,7 +138,6 @@ function Navigation() {
       <div className="flex items-center gap-2 px-3 text-primary">
         <LeafIcon className="size-5" />
         <span className="text-lg font-semibold tracking-widest">青笺</span>
-
       </div>
       <Button
         variant="ghost"
@@ -145,17 +145,16 @@ function Navigation() {
         onClick={() => open({ kind: "characters" })}
         aria-label="切换角色"
       >
-        <span className="min-w-0">
+        <span className="flex min-w-0 items-center gap-3">
+          {character && (
+            <CharacterThumbnail
+              assetId={character.appearancePhotoAssetId}
+              name={character.name}
+            />
+          )}
           <span className="block truncate text-base font-medium">
             {character?.name ?? "选择角色"}
           </span>
-          {/* <span className="mt-1 block truncate text-xs font-normal text-muted-foreground">
-            {character
-              ? character.archived
-                ? "已归档 · 可阅读已有对话"
-                : "每段故事，都有自己的经历"
-              : "开启一个新的故事"}
-          </span> */}
         </span>
         <ChevronDownIcon />
       </Button>
@@ -218,6 +217,10 @@ function Navigation() {
 }
 function useTheme() {
   const mode = useAppStore((state) => state.themeMode);
+  const color = useAppStore((state) => state.themeColor);
+  useEffect(() => {
+    document.documentElement.dataset.themeColor = color;
+  }, [color]);
   useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {

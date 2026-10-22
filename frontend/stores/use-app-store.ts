@@ -3,6 +3,11 @@
 import { IMAGE_SEQUENCE_KEY } from "@/lib/images/ids";
 
 import { create } from "zustand";
+import {
+  DEFAULT_THEME_COLOR,
+  parseThemeColor,
+  type ThemeColor,
+} from "@/lib/theme";
 import * as db from "@/lib/db";
 import { buildCatalog, warmImageCache } from "@/lib/images/coordinator";
 import {
@@ -75,6 +80,7 @@ type AppState = {
   loadingMessages: boolean;
   draft: string;
   themeMode: ThemeMode;
+  themeColor: ThemeColor;
   interactionSettings: InteractionSettings;
   activeSessionId: string | null;
   preparingInput: boolean;
@@ -100,6 +106,7 @@ export const useAppStore = create<AppState>(() => ({
   loadingMessages: false,
   draft: "",
   themeMode: "system",
+  themeColor: DEFAULT_THEME_COLOR,
   interactionSettings: { ...DEFAULT_INTERACTION_SETTINGS },
   activeSessionId: null,
   preparingInput: false,
@@ -179,6 +186,9 @@ export function initialize() {
         set({
           characters,
           themeMode: mode === "dark" || mode === "light" ? mode : "system",
+          themeColor: parseThemeColor(
+            saved.get("themeColor") ?? DEFAULT_THEME_COLOR,
+          ),
           interactionSettings: readInteractionSettings(
             saved.get("interactionSettings"),
           ),
@@ -554,6 +564,11 @@ export async function saveGoal(value: GoalValue, existing?: Goal) {
 export async function changeTheme(themeMode: ThemeMode) {
   await write(() => db.setting("themeMode", themeMode));
   set({ themeMode });
+}
+
+export async function changeThemeColor(themeColor: ThemeColor) {
+  await write(() => db.setting("themeColor", themeColor));
+  set({ themeColor });
 }
 
 export async function updateInteractionSettings(
@@ -1015,6 +1030,9 @@ export async function importBackup(backup: Backup) {
   set({
     characters,
     themeMode: mode === "light" || mode === "dark" ? mode : "system",
+    themeColor: parseThemeColor(
+      settings.get("themeColor") ?? DEFAULT_THEME_COLOR,
+    ),
     interactionSettings: readInteractionSettings(
       settings.get("interactionSettings"),
     ),
@@ -1058,6 +1076,7 @@ export async function clearData() {
     draft: "",
     hasEarlier: false,
     themeMode: "system",
+    themeColor: DEFAULT_THEME_COLOR,
     interactionSettings: { ...DEFAULT_INTERACTION_SETTINGS },
     error: "",
   });
