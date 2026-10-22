@@ -17,6 +17,8 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-state-warning: var(--state-warning);
+  --color-state-warning-surface: var(--state-warning-surface);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
@@ -118,6 +120,8 @@
   --accent: color-mix(in srgb, var(--primary) 11%, #ffffff);
   --accent-foreground: var(--foreground);
   --destructive: #b53038;
+  --state-warning: #92400e;
+  --state-warning-surface: #fffbeb;
   --border: #dedee3;
   --input: #d4d4dc;
   --ring: var(--primary);
@@ -144,6 +148,8 @@
   --muted-foreground: #a1a1aa;
   --accent: color-mix(in srgb, var(--primary) 18%, #101012);
   --destructive: #ff9ca2;
+  --state-warning: #fcd34d;
+  --state-warning-surface: #292214;
   --border: #2c2c31;
   --input: #3c3c43;
   --glow: color-mix(in srgb, var(--primary) 22%, transparent);

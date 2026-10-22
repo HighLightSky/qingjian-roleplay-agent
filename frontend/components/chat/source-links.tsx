@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ChevronRightIcon, MessageSquareQuoteIcon } from "lucide-react";
 import { database } from "@/lib/db";
 import {
   errorText,
@@ -71,10 +72,18 @@ export function SourceLinks({ ids }: { ids: string[] }) {
       className="group/sources text-xs text-muted-foreground"
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary className="w-fit cursor-pointer rounded py-1 outline-offset-2 hover:text-foreground focus-visible:outline-2">
-        参考消息 · {ids.length}
+      <summary className="flex min-h-8 w-fit cursor-pointer list-none items-center gap-1.5 rounded px-1 text-xs outline-offset-2 transition-colors hover:bg-primary/5 hover:text-primary focus-visible:outline-2 focus-visible:outline-primary [&::-webkit-details-marker]:hidden">
+        <MessageSquareQuoteIcon
+          aria-hidden="true"
+          className="size-3.5 text-primary/80"
+        />
+        <span>参考消息 · {ids.length}</span>
+        <ChevronRightIcon
+          aria-hidden="true"
+          className="size-3 transition-transform group-open/sources:rotate-90 motion-reduce:transition-none"
+        />
       </summary>
-      <div className="mt-1 grid gap-1 border-l pl-3">
+      <div className="mt-1 grid gap-1 border-l border-primary/20 pl-3">
         {error ? (
           <p role="alert">{error}</p>
         ) : loaded?.key !== key ? (

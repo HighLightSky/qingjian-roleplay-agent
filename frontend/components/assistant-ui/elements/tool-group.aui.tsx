@@ -96,12 +96,15 @@ function ToolGroupTrigger({
   count,
   label = `${count} 项操作`,
   active = false,
+  children,
+  icon,
   className,
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
   count: number;
   label?: string;
   active?: boolean;
+  icon?: React.ReactNode;
 }) {
   return (
     <CollapsibleTrigger
@@ -115,11 +118,13 @@ function ToolGroupTrigger({
       )}
       {...props}
     >
-      {active && (
+      {active ? (
         <LoaderIcon
           data-slot="tool-group-trigger-loader"
           className="aui-tool-group-trigger-loader size-3 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:0.6s]"
         />
+      ) : (
+        icon
       )}
       <span
         data-slot="tool-group-trigger-label"
@@ -131,7 +136,7 @@ function ToolGroupTrigger({
           active && "shimmer motion-reduce:animate-none",
         )}
       >
-        {label}
+        {children ?? label}
       </span>
       <ChevronDownIcon
         data-slot="tool-group-trigger-chevron"

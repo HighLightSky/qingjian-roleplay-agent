@@ -136,6 +136,11 @@ test("上下文环位于32px发送按钮左侧，支持查看预留，本轮usag
   else await ring.hover();
   await expect(page.getByText("输出预留：8,192 token")).toBeVisible();
   await expect(page.getByText(/精确计数/)).toBeVisible();
+  await expect(
+    page.locator(
+      '[data-slot="context-display-popover"] [data-slot="tooltip-arrow"]',
+    ),
+  ).toHaveCount(0);
   await page.getByRole("textbox", { name: "消息内容" }).click();
   await send(page, "你好");
   await expect(
@@ -1260,7 +1265,17 @@ test("自动整理过程可展开，结果持久化且只有统一人工维护�
   await expect(result).toBeVisible();
   await result.click();
   await expect(page.getByText("依据：本轮明确说明").first()).toBeVisible();
-  await expect(page.getByText(/^新内容：寻找失踪的哥哥/)).toBeVisible();
+  await expect(
+    page
+      .locator('[data-slot="change-current"]')
+      .getByText("寻找失踪的哥哥", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("无需更新。", { exact: true })).toHaveCount(0);
+  await expect(
+    page
+      .getByRole("region", { name: "记忆变更" })
+      .getByText("查看原内容", { exact: true }),
+  ).toHaveCount(0);
   await page.reload();
   await expect(result).toBeVisible();
   await page.getByRole("button", { name: "打开剧情与记忆" }).click();
@@ -1387,6 +1402,21 @@ test("精简目标详情、双方剧情状态、折叠消息预览及手动星�
   await expect(
     page.getByRole("button", { name: "已更新：目标 1 项" }),
   ).toBeVisible();
+  await page
+    .getByRole("button", { name: "已更新：目标 1 项", exact: true })
+    .click();
+  const goalChanges = page.getByRole("region", { name: "目标变更" });
+  await expect(
+    goalChanges.locator('[data-slot="change-current"]'),
+  ).toContainText("核实码头消息");
+  await expect(
+    goalChanges.locator('[data-slot="change-before"]'),
+  ).not.toBeVisible();
+  await goalChanges.getByText("查看原内容", { exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    goalChanges.locator('[data-slot="change-before"]'),
+  ).toContainText("继续询问掌柜");
   await page.reload();
   await page.getByRole("button", { name: "打开剧情与记忆" }).click();
   await expect(

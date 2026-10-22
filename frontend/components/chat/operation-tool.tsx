@@ -1,4 +1,24 @@
 "use client";
+import type { ReactNode } from "react";
+import {
+  BookOpenIcon,
+  BrainIcon,
+  CircleCheckIcon,
+  CircleDashedIcon,
+  ClockIcon,
+  FlagIcon,
+  PauseIcon,
+  TriangleAlertIcon,
+  ChevronRightIcon,
+  type LucideIcon,
+} from "lucide-react";
+import {
+  GoalDetails,
+  GoalStatus,
+  MemoryMeta,
+  StateTag,
+  StoryValue,
+} from "./state-presentation";
 import type { ToolCallMessagePartComponent } from "@assistant-ui/react";
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui";
 import {
@@ -16,7 +36,8 @@ import {
 import { SourceLinks } from "./source-links";
 import {
   STORY_LABELS,
-  GOAL_LABELS,
+  type Change,
+  type Story,
   type StateResult,
   type SelectionResult,
   type Operation,
@@ -43,36 +64,6 @@ function Picture({ id }: { id: string }) {
   ) : (
     <span role="status">正在读取图片…</span>
   );
-}
-function describe(value: unknown): string {
-  if (value === null) return "无";
-  if (typeof value === "string") return value || "未记录";
-  if (Array.isArray(value)) return value.join("；") || "无";
-  if (value && typeof value === "object") {
-    if ("content" in value) {
-      const m = value as MemoryValue;
-      const kind = {
-        fact: "事实",
-        preference: "偏好",
-        agreement: "约定",
-        event: "关键经历",
-      }[m.kind];
-      const epistemic = {
-        established: "已确认",
-        claim: "陈述",
-        hypothesis: "推测",
-      }[m.epistemicStatus];
-      const status = {
-        active: "有效",
-        superseded: "已替代",
-        dismissed: "已删除",
-      }[m.status];
-      return `${m.content}\n使用范围：${m.scope === "character" ? "角色共享" : "当前会话"}；类型：${kind}；事实类别：${epistemic}；状态：${status}`;
-    }
-    const g = value as GoalValue;
-    return `${g.description}\n状态：${GOAL_LABELS[g.status]}；当前关注点：${g.currentFocus || "无"}\n完成过程：${g.progressSummary || "尚未记录"}`;
-  }
-  throw new Error("整理结果包含无效的领域值。");
 }
 function summary(op: Operation) {
   const label =
@@ -150,54 +141,196 @@ function VisualSources({ sources }: { sources: VisualSource[] }) {
     </>
   );
 }
-function StateDetails({ result }: { result: StateResult }) {
-  const groups = [
-    ["剧情", result.storyChanges],
-    ["记忆", result.memoryChanges],
-    ["目标", result.goalChanges],
-  ] as const;
+function ChangeGroup<T>({
+  label,
+  Icon,
+  changes,
+  title,
+  render,
+}: {
+  label: string;
+  Icon: LucideIcon;
+  changes: Change<T>[];
+  title: (change: Change<T>) => string;
+  render: (value: T, change: Change<T>) => ReactNode;
+}) {
+  if (!changes.length) return null;
   return (
-    <div className="space-y-4">
+    <section className="space-y-3" aria-label={`${label}变更`}>
+      <h4 className="flex items-center gap-2 text-sm font-medium">
+        <Icon aria-hidden="true" className="size-4 text-primary" />
+        {label}
+        <span className="text-xs font-normal text-muted-foreground">
+          {changes.length} 项
+        </span>
+      </h4>
+      <div className="divide-y divide-border/60">
+        {changes.map((change) => (
+          <article
+            key={change.id}
+            data-state-change={change.id}
+            className="space-y-2.5 py-4 first:pt-0 last:pb-0"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <h5 className="text-xs font-medium text-muted-foreground">
+                {title(change)}
+              </h5>
+              <StateTag>
+                {change.action === "create" ? "新增" : "更新"}
+              </StateTag>
+            </div>
+            <div
+              data-slot="change-current"
+              className="space-y-2 border-l-2 border-primary/40 bg-primary/5 px-3 py-2.5 text-sm leading-7 [overflow-wrap:anywhere]"
+            >
+              {render(change.value, change)}
+            </div>
+            <p className="text-xs leading-6 text-muted-foreground">
+              依据：{change.reason}
+            </p>
+            {change.action === "update" && (
+              <details className="group/before text-xs text-muted-foreground">
+                <summary className="flex min-h-8 w-fit cursor-pointer list-none items-center gap-1 rounded px-1 outline-offset-2 hover:bg-primary/5 hover:text-primary focus-visible:outline-2 [&::-webkit-details-marker]:hidden">
+                  <ChevronRightIcon
+                    aria-hidden="true"
+                    className="size-3 transition-transform group-open/before:rotate-90 motion-reduce:transition-none"
+                  />
+                  查看原内容
+                </summary>
+                <div
+                  data-slot="change-before"
+                  className="mt-1 space-y-2 border-l border-border pl-3 text-sm leading-7 [overflow-wrap:anywhere]"
+                >
+                  {render(change.before!, change)}
+                </div>
+              </details>
+            )}
+            <SourceLinks ids={change.sourceMessageIds} />
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MemoryContent({ value }: { value: MemoryValue }) {
+  return (
+    <>
+      <p className="whitespace-pre-wrap">{value.content}</p>
+      <MemoryMeta value={value} />
+    </>
+  );
+}
+
+function GoalContent({ value }: { value: GoalValue }) {
+  return (
+    <>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <p className="min-w-0 whitespace-pre-wrap font-medium">
+          {value.description}
+        </p>
+        <GoalStatus status={value.status} />
+      </div>
+      <GoalDetails value={value} />
+    </>
+  );
+}
+
+function StateDetails({ result }: { result: StateResult }) {
+  return (
+    <div className="space-y-5">
       <p className="text-xs text-muted-foreground">
         已检查消息范围：{result.fromExclusiveSeq + 1}—{result.throughSeq}
       </p>
-      <section>
-        <h4 className="font-medium">视觉观察</h4>
-        {!result.visualObservations.length && <p>本轮未使用原图。</p>}
-        {result.visualObservations.map((o) => (
-          <article key={o.assetId} className="mt-2 space-y-1">
-            <Picture id={o.assetId} />
-            <p>{o.summary}</p>
-            <p>可见细节：{o.visibleDetails.join("；") || "无新增"}</p>
-            <p>图片文字：{o.extractedText.join("；") || "无"}</p>
-            <p>不确定项：{o.uncertainDetails.join("；") || "无"}</p>
-            <VisualSources sources={o.sources} />
-          </article>
-        ))}
-      </section>
-      {groups.map(([label, changes]) => (
-        <section key={label}>
-          <h4 className="font-medium">{label}</h4>
-          {!changes.length && <p>无需更新。</p>}
-          {changes.map((c) => (
-            <article key={c.id} className="mt-2 space-y-1 rounded border p-2">
-              {label === "剧情" && (
-                <p>{STORY_LABELS[c.id as keyof typeof STORY_LABELS]}</p>
-              )}
-              <p className="whitespace-pre-wrap text-muted-foreground">
-                原内容：{describe(c.before)}
-              </p>
-              <p className="whitespace-pre-wrap">新内容：{describe(c.value)}</p>
-
-              <p>依据：{c.reason}</p>
-              <SourceLinks ids={c.sourceMessageIds} />
+      {result.visualObservations.length ? (
+        <section className="space-y-3">
+          <h4 className="font-medium">视觉观察</h4>
+          {result.visualObservations.map((o) => (
+            <article key={o.assetId} className="space-y-1">
+              <Picture id={o.assetId} />
+              <p>{o.summary}</p>
+              <p>可见细节：{o.visibleDetails.join("；") || "无新增"}</p>
+              <p>图片文字：{o.extractedText.join("；") || "无"}</p>
+              <p>不确定项：{o.uncertainDetails.join("；") || "无"}</p>
+              <VisualSources sources={o.sources} />
             </article>
           ))}
         </section>
-      ))}
+      ) : (
+        <p className="text-xs text-muted-foreground">本轮未使用原图。</p>
+      )}
+      <ChangeGroup
+        label="剧情"
+        Icon={BookOpenIcon}
+        changes={result.storyChanges}
+        title={(change) => STORY_LABELS[change.id as keyof Story]}
+        render={(value, change) => (
+          <StoryValue field={change.id as keyof Story} value={value} />
+        )}
+      />
+      <ChangeGroup
+        label="记忆"
+        Icon={BrainIcon}
+        changes={result.memoryChanges}
+        title={() => "记忆内容"}
+        render={(value) => <MemoryContent value={value} />}
+      />
+      <ChangeGroup
+        label="目标"
+        Icon={FlagIcon}
+        changes={result.goalChanges}
+        title={() => "目标内容"}
+        render={(value) => <GoalContent value={value} />}
+      />
     </div>
   );
 }
+
+function OperationIcon({ operation }: { operation: Operation }) {
+  const Icon =
+    operation.error || operation.status === "failed"
+      ? TriangleAlertIcon
+      : operation.status === "committed"
+        ? CircleCheckIcon
+        : operation.status === "pending"
+          ? ClockIcon
+          : operation.status === "cancelled"
+            ? PauseIcon
+            : CircleDashedIcon;
+  return (
+    <Icon
+      aria-hidden="true"
+      className={`size-3.5 shrink-0 ${operation.error || operation.status === "failed" ? "text-destructive" : operation.status === "committed" ? "text-primary" : "text-muted-foreground"}`}
+    />
+  );
+}
+
+function UpdatedSummary({ result }: { result: StateResult }) {
+  const counts = [
+    ["剧情", result.storyChanges.length],
+    ["记忆", result.memoryChanges.length],
+    ["目标", result.goalChanges.length],
+  ] as const;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1.5 py-0.5 leading-5">
+      <span className="font-medium text-primary">已更新</span>
+      {counts
+        .filter(([, count]) => count > 0)
+        .map(([label, count]) => (
+          <StateTag key={label}>
+            {label} {count}
+          </StateTag>
+        ))}
+      <span className="text-xs text-muted-foreground group-data-open/trigger:hidden">
+        展开
+      </span>
+      <span className="hidden text-xs text-muted-foreground group-data-open/trigger:inline">
+        收起
+      </span>
+    </span>
+  );
+}
+
 const AppOperation: ToolCallMessagePartComponent = (props) => {
   const operation = useAppStore((state) =>
     state.operations.find((o) => o.id === props.args.operationId),
@@ -228,9 +361,30 @@ const AppOperation: ToolCallMessagePartComponent = (props) => {
   const active =
     ["pending", "running", "computed"].includes(operation.status) &&
     !operation.error;
+  const updated =
+    operation.kind === "state_update" &&
+    operation.status === "committed" &&
+    (operation.result as StateResult).storyChanges.length +
+      (operation.result as StateResult).memoryChanges.length +
+      (operation.result as StateResult).goalChanges.length >
+      0;
+  const operationSummary = summary(operation);
   return (
     <ToolGroupRoot variant="ghost" data-operation={operation.kind}>
-      <ToolGroupTrigger count={1} active={active} label={summary(operation)} />
+      <ToolGroupTrigger
+        count={1}
+        active={active}
+        label={operationSummary}
+        aria-label={operationSummary}
+        icon={<OperationIcon operation={operation} />}
+        className="max-w-full rounded-md px-1 text-left hover:bg-primary/5 [&_[data-slot=tool-group-trigger-label]]:min-w-0 [&_[data-slot=tool-group-trigger-label]]:leading-5"
+      >
+        {updated ? (
+          <UpdatedSummary result={operation.result as StateResult} />
+        ) : (
+          operationSummary
+        )}
+      </ToolGroupTrigger>
       <ToolGroupContent>
         <div className="space-y-3 break-words py-3 text-sm leading-6">
           {operation.error && (

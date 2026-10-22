@@ -1,6 +1,12 @@
 "use client";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { XIcon, PlusIcon, StarIcon } from "lucide-react";
+import {
+  BookOpenIcon,
+  PencilIcon,
+  XIcon,
+  PlusIcon,
+  StarIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -14,8 +20,8 @@ import {
 import { errorText } from "@/lib/domain";
 import {
   STORY_LABELS,
-  STORY_TEXT_FIELDS,
   GOAL_LABELS,
+  STORY_TEXT_FIELDS,
   type Story,
   type Memory,
   type Goal,
@@ -23,6 +29,14 @@ import {
   type GoalValue,
 } from "@/lib/state/types";
 import { SourceLinks } from "./source-links";
+import {
+  GoalDetails,
+  GoalStatus,
+  MemoryMeta,
+  STATE_TABS,
+  STORY_ICONS,
+  StoryValue,
+} from "./state-presentation";
 
 const selectClass = "min-h-10 rounded border bg-background px-2 text-sm";
 const lines = (value: string) =>
@@ -297,10 +311,15 @@ export function StatePanel() {
   );
   const goals = app.goals.filter((g) => g.value.status !== "dismissed");
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div className="flex h-full min-h-0 min-w-0 flex-col bg-background">
       <div className="flex items-start justify-between border-b p-5">
         <div>
-          <h2 className="text-base font-semibold tracking-wide">剧情与记忆</h2>
+          <h2 className="flex items-center gap-2 text-base font-semibold tracking-wide">
+            <span className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <BookOpenIcon aria-hidden="true" className="size-4" />
+            </span>
+            剧情与记忆
+          </h2>
           <p className="mt-1 text-xs text-muted-foreground">
             记录当下，延续故事
           </p>
@@ -319,13 +338,7 @@ export function StatePanel() {
         aria-label="剧情状态管理"
         className="grid grid-cols-3 border-b px-5"
       >
-        {(
-          [
-            ["story", "剧情"],
-            ["memory", "记忆"],
-            ["goal", "目标"],
-          ] as const
-        ).map(([key, label]) => (
+        {STATE_TABS.map(({ key, label, Icon }) => (
           <Button
             key={key}
             id={`state-tab-${key}`}
@@ -333,12 +346,13 @@ export function StatePanel() {
             aria-selected={tab === key}
             aria-controls={`state-panel-${key}`}
             variant="ghost"
-            className={`h-12 rounded-none border-b-2 hover:bg-transparent ${tab === key ? "border-foreground text-foreground" : "border-transparent text-muted-foreground"}`}
+            className={`h-12 gap-1.5 rounded-none border-b-2 px-2 ${tab === key ? "border-primary bg-primary/5 text-primary hover:bg-primary/10 hover:text-primary" : "border-transparent text-muted-foreground hover:bg-primary/5"}`}
             onClick={() => {
               setTab(key);
               setEditing(undefined);
             }}
           >
+            <Icon aria-hidden="true" className="size-3.5" />
             {label}
           </Button>
         ))}
@@ -347,7 +361,7 @@ export function StatePanel() {
         role="tabpanel"
         id={`state-panel-${tab}`}
         aria-labelledby={`state-tab-${tab}`}
-        className="min-h-0 flex-1 overflow-y-auto break-words p-5"
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5 [overflow-wrap:anywhere]"
       >
         {tab === "story" &&
           (editing === "story" ? (
@@ -365,41 +379,52 @@ export function StatePanel() {
                 disabled={app.readOnly}
                 onClick={() => setEditing("story")}
               >
+                <PencilIcon
+                  aria-hidden="true"
+                  className="size-3.5 text-primary"
+                />
                 修改剧情
               </Button>
               <dl className="mt-4 divide-y">
-                {(Object.keys(STORY_LABELS) as (keyof Story)[]).map((key) => (
-                  <div
-                    key={key}
-                    className="py-4 first:pt-1"
-                    data-story-field={key}
-                  >
-                    <dt className="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
-                      {STORY_LABELS[key]}
-                      {session.storySources[key]?.origin === "manual" && (
-                        <StarIcon
-                          className="size-3 fill-current"
-                          aria-label="手动修改"
-                          role="img"
-                        >
-                          <title>手动修改</title>
-                        </StarIcon>
+                {(Object.keys(STORY_LABELS) as (keyof Story)[]).map((key) => {
+                  const Icon = STORY_ICONS[key];
+                  return (
+                    <div
+                      key={key}
+                      className="py-4 first:pt-1"
+                      data-story-field={key}
+                    >
+                      <dt className="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
+                        <span className="flex items-center gap-2">
+                          <Icon
+                            aria-hidden="true"
+                            className="size-3.5 text-primary"
+                          />
+                          {STORY_LABELS[key]}
+                        </span>
+                        {session.storySources[key]?.origin === "manual" && (
+                          <StarIcon
+                            className="size-3 fill-current text-primary"
+                            aria-label="手动修改"
+                            role="img"
+                          >
+                            <title>手动修改</title>
+                          </StarIcon>
+                        )}
+                      </dt>
+                      <dd className="mt-2 whitespace-pre-wrap text-sm leading-7">
+                        <StoryValue field={key} value={session.story[key]} />
+                      </dd>
+                      {session.storySources[key] && (
+                        <div className="mt-1">
+                          <SourceLinks
+                            ids={session.storySources[key]!.sourceMessageIds}
+                          />
+                        </div>
                       )}
-                    </dt>
-                    <dd className="mt-2 whitespace-pre-wrap text-sm leading-7">
-                      {(Array.isArray(session.story[key])
-                        ? session.story[key].join("\n")
-                        : session.story[key]) || "尚未记录"}
-                    </dd>
-                    {session.storySources[key] && (
-                      <div className="mt-1">
-                        <SourceLinks
-                          ids={session.storySources[key]!.sourceMessageIds}
-                        />
-                      </div>
-                    )}
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
               </dl>
             </>
           ))}
@@ -430,36 +455,31 @@ export function StatePanel() {
                   close={() => setEditing(undefined)}
                 />
               ) : (
-                <article key={m.id} className="space-y-2 border-b py-4">
-                  <p className="whitespace-pre-wrap text-sm leading-6">
+                <article key={m.id} className="space-y-3 border-b py-5">
+                  <p className="whitespace-pre-wrap text-sm leading-7">
                     {m.value.content}
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    {m.value.scope === "character" ? "角色共享" : "当前会话"} ·{" "}
-                    {m.value.epistemicStatus === "established"
-                      ? "已确认"
-                      : m.value.epistemicStatus === "claim"
-                        ? "陈述"
-                        : "推测"}
-                  </p>
-                  <SourceLinks ids={m.sourceMessageIds} />
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={app.readOnly}
-                      onClick={() => setEditing(m.id)}
-                    >
-                      编辑
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={app.readOnly}
-                      onClick={() => void removeMemory(m).catch(report)}
-                    >
-                      删除
-                    </Button>
+                  <MemoryMeta value={m.value} />
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <SourceLinks ids={m.sourceMessageIds} />
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={app.readOnly}
+                        onClick={() => setEditing(m.id)}
+                      >
+                        编辑
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={app.readOnly}
+                        onClick={() => void removeMemory(m).catch(report)}
+                      >
+                        删除
+                      </Button>
+                    </div>
                   </div>
                 </article>
               ),
@@ -495,60 +515,40 @@ export function StatePanel() {
               ) : (
                 <article
                   key={g.id}
-                  className="space-y-2 border-b py-4 text-sm leading-6"
+                  className="space-y-3 border-b py-5 text-sm leading-7"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <h3 className="min-w-0 font-medium">
                       {g.value.description}
                     </h3>
-                    <span
-                      className="mt-0.5 shrink-0 rounded-full border px-2 py-0.5 text-[11px] leading-4 text-muted-foreground"
-                      data-goal-status={g.value.status}
-                    >
-                      {GOAL_LABELS[g.value.status]}
-                    </span>
+                    <GoalStatus status={g.value.status} />
                   </div>
-                  <dl className="space-y-3 pt-2">
-                    <div>
-                      <dt className="text-xs text-muted-foreground">
-                        当前关注点
-                      </dt>
-                      <dd className="mt-1 whitespace-pre-wrap">
-                        {g.value.currentFocus || "尚未记录"}
-                      </dd>
+                  <GoalDetails value={g.value} />
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <SourceLinks ids={g.sourceMessageIds} />
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={app.readOnly}
+                        onClick={() => setEditing(g.id)}
+                      >
+                        编辑
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={app.readOnly}
+                        onClick={() =>
+                          void saveGoal(
+                            { ...g.value, status: "dismissed" },
+                            g,
+                          ).catch(report)
+                        }
+                      >
+                        删除
+                      </Button>
                     </div>
-                    <div>
-                      <dt className="text-xs text-muted-foreground">
-                        完成过程
-                      </dt>
-                      <dd className="mt-1 whitespace-pre-wrap leading-7">
-                        {g.value.progressSummary || "尚未记录"}
-                      </dd>
-                    </div>
-                  </dl>
-                  <SourceLinks ids={g.sourceMessageIds} />
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={app.readOnly}
-                      onClick={() => setEditing(g.id)}
-                    >
-                      编辑
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={app.readOnly}
-                      onClick={() =>
-                        void saveGoal(
-                          { ...g.value, status: "dismissed" },
-                          g,
-                        ).catch(report)
-                      }
-                    >
-                      删除
-                    </Button>
                   </div>
                 </article>
               ),
