@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import com.example.TestRequests;
 import com.example.config.VisionProperties;
 import com.example.llm.LLMClient;
+import com.example.llm.LlmRequestMapper;
 import com.example.llm.model.ChatStreamResult;
 import com.example.llm.model.TokenUsage;
 import com.example.llm.model.*;
@@ -171,6 +172,78 @@ class StateUpdateServiceTest {
             answer(output("[" + change(field, "[\"错误的列表\"]") + "]", "[]", "[]"));
             assertThrows(IOException.class, () -> update(request()));
         }
+    }
+
+    @Test void correctsMisplacedGoalEvidenceAndKeepsUnchangedGoalFields() throws Exception {
+        var state = TestRequests.state(List.of());
+        var value = new GoalValue("寻找哥哥", "active", "询问掌柜", "已来到旅馆。");
+        var goal = new Goal("goal", "session", value, 1, "automatic", List.of(), "2026-10-20T00:00:00Z");
+        var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(), List.of(goal));
+        var valid = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(withProgressEvidence(
+                change("goal1", "{\"progressSummary\":\"已来到旅馆，并走入店内。\"}")));
+        var invalid = valid.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) invalid.path("value"))
+                .set("progressEvidence", invalid.remove("progressEvidence"));
+        when(model.chat(any())).thenReturn(
+                new ChatResponse(output("[]", "[]", "[" + invalid + "]"), "stop", TokenUsage.unavailable()),
+                new ChatResponse(output("[]", "[]", "[" + valid + "]"), "stop", TokenUsage.unavailable()));
+
+        var result = update(request(snapshot, null, List.of()));
+
+        var change = result.goalChanges().getFirst();
+        assertEquals("goal", change.id());
+        assertEquals(value.description(), change.value().path("description").asText());
+        assertEquals(value.currentFocus(), change.value().path("currentFocus").asText());
+        assertEquals("已来到旅馆，并走入店内。", change.value().path("progressSummary").asText());
+        var calls = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model, times(2)).chat(calls.capture());
+        String correction = calls.getAllValues().getLast().getMessages().getLast().getContent();
+        assertTrue(correction.contains("目标 goal1 的 value 包含未知字段：[progressEvidence]"));
+        assertTrue(correction.contains("progressEvidence 必须与 value 同级"));
+        var serializer = new LlmRequestMapper(mapper,
+                new com.example.config.LlmProperties("", "", "test", .8, 8192, 120));
+        for (var call : calls.getAllValues()) {
+            var format = serializer.chatBody(call, false).path("response_format");
+            assertEquals("json_schema", format.path("type").asText());
+            assertTrue(format.path("json_schema").path("strict").asBoolean());
+            assertEquals(format, serializer.templateBody(call).path("response_format"));
+            var schema = format.path("json_schema").path("schema");
+            assertFalse(schema.path("$defs").path("goalValue").path("additionalProperties").asBoolean());
+            assertEquals(Set.of("description", "status", "currentFocus", "progressSummary"),
+                    mapper.convertValue(schema.path("$defs").path("goalValue").path("required"), Set.class));
+        }
+        assertEquals(calls.getAllValues().getFirst().getResponseSchema(), calls.getAllValues().getLast().getResponseSchema());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"clues", "milestones", "blockers", "progressEvidence", "editableFields"})
+    void persistentUnknownGoalFieldReportsItsName(String field) throws Exception {
+        var value = mapper.valueToTree(new GoalValue("寻找哥哥", "active", "", ""));
+        ((com.fasterxml.jackson.databind.node.ObjectNode) value).put(field, "错误字段");
+        answer(output("[]", "[]", "[" + change("", value.toString()) + "]"));
+
+        var error = assertThrows(IOException.class, () -> update(request()));
+
+        assertTrue(error.getMessage().contains("纠正后仍无效"));
+        assertTrue(error.getMessage().contains("未知字段：[" + field + "]"));
+        assertTrue(error.getMessage().contains("只允许 description、status、currentFocus、progressSummary"));
+        verify(model, times(2)).chat(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"codeFence", "array", "trailingObject"})
+    void correctsWrappedOrTrailingJsonInsteadOfAcceptingPartialOutput(String invalid) throws Exception {
+        String valid = output("[]", "[]", "[]");
+        String rejected = switch (invalid) {
+            case "codeFence" -> "```json\n" + valid + "\n```";
+            case "array" -> "[" + valid + "]";
+            default -> valid + "{}";
+        };
+        when(model.chat(any())).thenReturn(new ChatResponse(rejected, "stop", TokenUsage.unavailable()),
+                new ChatResponse(valid, "stop", TokenUsage.unavailable()));
+
+        assertTrue(update(request()).goalChanges().isEmpty());
+        verify(model, times(2)).chat(any());
     }
 
     @Test void rejectsInventedReferencesUnknownFieldsAndDuplicateChanges() throws Exception {

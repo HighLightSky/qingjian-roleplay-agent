@@ -291,7 +291,8 @@ class ChatControllerTest {
                 scenario.images().stream().map(image -> new ImageRef(image.assetId(), image.sha256())).toList());
         when(model.chat(any())).thenAnswer(invocation -> {
             ChatRequest call = invocation.getArgument(0);
-            if (call.getResponseSchema() != null) {
+            assertNotNull(call.getResponseSchema());
+            if (call.getResponseSchema().path("properties").has("selectedHistoricalImages")) {
                 assertFalse(call.isThinkingEnabled());
                 var response = mapper.createObjectNode().put("status", "ready").put("message", "");
                 response.putArray("candidateAssetIds");
@@ -302,6 +303,13 @@ class ChatControllerTest {
             assertTrue(call.isThinkingEnabled());
             String text = call.getMessages().get(1).getParts().getFirst().text();
             var data = mapper.readTree(text.substring(text.indexOf('{')));
+            var visualSchema = call.getResponseSchema().path("properties").path("visualObservations");
+            assertEquals(data.path("actualImageAssetIds").size(), visualSchema.path("minItems").asInt());
+            assertEquals(data.path("actualImageAssetIds").size(), visualSchema.path("maxItems").asInt());
+            if (!data.path("actualImageAssetIds").isEmpty()) {
+                assertEquals(data.path("actualImageAssetIds"),
+                        visualSchema.path("items").path("properties").path("assetId").path("enum"));
+            }
             var observations = mapper.createArrayNode();
             for (var id : data.path("actualImageAssetIds")) {
                 var observation = observations.addObject().put("assetId", id.asText()).put("summary", "图片可见颜色");

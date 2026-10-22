@@ -80,7 +80,7 @@ public class StateUpdateService {
 
     private Result parseResult(String content, UpdateRequest r, StateUpdateMaterial material) throws IOException {
         try {
-            JsonNode node = mapper.readTree(content);
+            JsonNode node = mapper.reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readTree(content);
             if (node == null || !node.isObject()) throw new IOException("整理结果必须是 JSON 对象");
             for (String field : List.of("storyChanges", "memoryChanges", "goalChanges"))
                 if (!node.path(field).isArray())
@@ -90,7 +90,8 @@ public class StateUpdateService {
             // 无原图时不存在视觉提取任务，缺省集合由模型结果构造器统一归一化。
             if (!visual.isArray() && (hasImages || !(visual.isMissingNode() || visual.isNull())))
                 throw new IOException("整理结果缺少数组：visualObservations");
-            ModelResult result = mapper.treeToValue(node, ModelResult.class);
+            ModelResult result = mapper.readerFor(ModelResult.class)
+                    .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).readValue(node);
             List<Change> story = changes(result.storyChanges(), "story", r, material);
             List<Change> memories = changes(result.memoryChanges(), "memory", r, material);
             List<Change> goals = changes(result.goalChanges(), "goal", r, material);
@@ -194,7 +195,8 @@ public class StateUpdateService {
 
                 version = s.sessionVersion();
             } else if ("memory".equals(kind)) {
-                var v = mapper.treeToValue(p.value(), MemoryValue.class);
+                MemoryValue v = mapper.readerFor(MemoryValue.class)
+                        .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).readValue(p.value());
                 StateValidation.memory(v);
                 if ("dismissed".equals(v.status()))
                     throw new IOException("模型不能人工删除记忆");
@@ -231,8 +233,12 @@ public class StateUpdateService {
                 if (!p.value().isObject() || p.value().isEmpty()) throw new IOException("目标更新不能为空");
                 Set<String> fields = new HashSet<>();
                 p.value().fieldNames().forEachRemaining(fields::add);
-                if (!Set.of("description", "status", "currentFocus", "progressSummary").containsAll(fields))
-                    throw new IOException("目标包含未知字段");
+                var unknown = new TreeSet<>(fields);
+                var allowed = Set.of("description", "status", "currentFocus", "progressSummary");
+                unknown.removeAll(allowed);
+                if (!unknown.isEmpty())
+                    throw new IOException("目标 " + alias + " 的 value 包含未知字段：" + unknown
+                            + "；只允许 description、status、currentFocus、progressSummary；progressEvidence 必须与 value 同级");
                 for (String field : fields)
                     if (!p.value().path(field).isTextual()) throw new IOException("目标字段必须是字符串：" + field);
                 var merged = create ? mapper.createObjectNode()

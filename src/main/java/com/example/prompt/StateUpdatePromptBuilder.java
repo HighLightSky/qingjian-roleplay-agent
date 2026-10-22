@@ -49,7 +49,7 @@ public class StateUpdatePromptBuilder {
                 严格区分 established 既定事实、claim 某人的陈述、hypothesis 推测。计划不等于已发生，角色提议不等于用户承诺。
                 目标可以逐步形成，不编造完整通关路线；完成、放弃和重大变化必须有来源。
                 【返回协议】
-                只输出完整 JSON，storyChanges、memoryChanges、goalChanges 三个数组必须提供；本次有原图时 visualObservations 也必须提供：
+                只输出符合响应 schema 的完整 JSON 对象，不输出 Markdown 代码块、说明文字或顶层数组。
                 以用户材料末尾的本次返回模板为准，保留 visualObservations、storyChanges、memoryChanges、goalChanges 四个数组。
                 每个 change 结构：
                 {"action":"create或update","id":"新增时为空字符串，修改时为已有ID或剧情字段名",
@@ -69,6 +69,9 @@ public class StateUpdatePromptBuilder {
                 "epistemicStatus":"established或claim或hypothesis","status":"active或superseded"}。
                 新增 goal 的 value 必须完整；更新 goal 的 value 只提供实际变化的字段，未提供字段保持旧值。完整结构：{"description":"目标","status":"candidate或active或blocked或paused或completed或abandoned",
                 "currentFocus":"当前关注点","progressSummary":"从目标开始以来的完成过程短述"}。
+                goal 的 value 只能包含 description、status、currentFocus、progressSummary，不能把 id、action、reason、sourceMessageIds、progressEvidence 或 editableFields 放入 value。
+                每个 goal change 必须提供与 value 同级的 progressEvidence；更新完成过程时填写证据对象，新增目标或只更新其他字段时填 null。
+                仅修改关注点的示例：{"action":"update","id":"goal1","value":{"currentFocus":"核实码头线索"},"reason":"本轮明确新的关注点","sourceMessageIds":["msg2"],"progressEvidence":null}。
                 【目标：宏观进展摘要】
                 description 用一句话说明要达成的结果，通常不超过40字，不嵌入行动计划和进展；普通动作或一次性互动不单独创建目标。
                 每个目标的详情只有 currentFocus 和 progressSummary 两项。currentFocus 只写当前最关键的关注点或阻碍，通常一句话、不超过60字，不列步骤清单，不强加行动或替用户决定。
@@ -82,7 +85,7 @@ public class StateUpdatePromptBuilder {
                 【视觉观察】
                 视觉观察只覆盖本次实际收到的原图，每张恰好一项：
                 每项包含 assetId、summary（简洁概括）、visibleDetails、extractedText、uncertainDetails；后三项是字符串数组。
-                actualImageAssetIds 是本次实际附带原图的完整 ID 清单，visualObservations 必须逐一覆盖，每个 ID 恰好出现一次；清单为空时返回空数组，也可以省略该字段。
+                actualImageAssetIds 是本次实际附带原图的完整 ID 清单，visualObservations 必须逐一覆盖，每个 ID 恰好出现一次；清单为空时返回空数组。
                 assetId 为 img1、img2 形式的资产编号，必须逐字复制清单中的真实 ID，不能填“原图ID”、character_photo、角色 ID、消息 ID 或 sha256，也不能为同一张图的不同用途重复输出观察。
                 sources 与 version 由服务端根据真实消息上传位置或 character_photo 资料版本生成，不伪造上传消息。
                 角色照片仅记录可见外观，不推断性格、职业、身份或关系，不自动修改角色描述或写入记忆表。
@@ -101,7 +104,9 @@ public class StateUpdatePromptBuilder {
         messages.add(new Message("system", rules));
         messages.add(new Message("user", parts));
         messages.addAll(correction);
-        return new ChatRequest(messages, config.stateOutputTokens(), 0.0, true);
+        var request = new ChatRequest(messages, config.stateOutputTokens(), 0.0, true);
+        request.setResponseSchema(StateUpdateResponseSchema.build(material));
+        return request;
     }
 
     private String resultTemplate(UpdateRequest r) {
