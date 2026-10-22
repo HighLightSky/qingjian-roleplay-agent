@@ -29,6 +29,24 @@ export type StoredRun = {
   assistantMessageId: string;
   context: ChatContext;
 };
+
+export function dispatchError(snapshot: DispatchSnapshot): string | undefined {
+  if (snapshot.stages.body?.status !== "failed")
+    return snapshot.error ?? undefined;
+  let summary: string;
+  switch (snapshot.body?.finishReason) {
+    case "stop":
+      summary = "正文生成失败：模型已正常结束，但没有返回有效正文。";
+      break;
+    case "length":
+      summary = "正文生成中断：模型达到长度限制，回复未完整生成。";
+      break;
+    default:
+      summary = "正文生成失败，回复未完整生成。";
+  }
+  return `${summary}\n本轮未进行状态整理。\n诊断信息：${snapshot.error}\n任务 ID：${snapshot.runId}`;
+}
+
 export class ResultExpired extends Error {}
 export class DispatchRejected extends Error {
   constructor(

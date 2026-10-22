@@ -7,6 +7,7 @@ import * as db from "@/lib/db";
 import { buildCatalog, warmImageCache } from "@/lib/images/coordinator";
 import {
   followDispatch,
+  dispatchError,
   ResultExpired,
   DispatchRejected,
   type StoredRun,
@@ -692,7 +693,6 @@ export async function sendMessage(
         db.setting(`dispatch:${stored.runId}`, JSON.stringify(stored)),
       );
       dispatchRunId = stored.runId;
-      set({ preparingInput: false });
       await consumeRun(stored, runController.signal, {
         runId: stored.runId,
         context: prepared.context,
@@ -768,12 +768,14 @@ async function consumeRun(
           ? snapshot.stages.body?.status === "cancelled"
             ? "cancelled"
             : "error"
-          : "streaming",
+          : snapshot.segments.length
+            ? "streaming"
+            : "pending",
       usage: snapshot.body?.usage ?? unknownUsage(),
       finishReason: snapshot.body?.finishReason,
       checkpointVersion: reply!.checkpointVersion + (firstTerminal ? 1 : 0),
       updatedAt: now(),
-      error: completed ? undefined : (snapshot.error ?? undefined),
+      error: completed ? undefined : dispatchError(snapshot),
     };
     liveReply = reply;
     if (get().sessionId === run.sessionId)
@@ -787,7 +789,7 @@ async function consumeRun(
               },
             }
           : {}),
-        preparingInput: request ? !snapshot.stages.body : get().preparingInput,
+        preparingInput: !snapshot.stages.body && !snapshot.terminal,
       }));
     const context = {
       ...run.context,
@@ -906,7 +908,7 @@ export async function resumeDispatch() {
     const abort = new AbortController();
     controller = abort;
     dispatchRunId = run.runId;
-    set({ activeSessionId: run.sessionId });
+    set({ activeSessionId: run.sessionId, preparingInput: true });
     const current = consumeRun(run, abort.signal)
       .catch(report)
       .finally(() => {

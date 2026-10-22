@@ -195,6 +195,67 @@ test("一次发送包含完整上下文，整理失败不触发补做，下一�
   assert.equal(operations.filter((o) => o.status === "stale").length, 1);
 });
 
+for (const finishReason of ["stop", "length"]) {
+  test(`正文失败提示保留具体原因、任务编号与诊断信息：${finishReason}`, async () => {
+    const { session } = await setup();
+    let runId = "";
+    const detail = `java.io.IOException: 正文生成失败；finish_reason=${finishReason}；本次输出上限=8192 token；输入 token=100；输出 token=12；总 token=112`;
+    globalThis.fetch = async (path, init) => {
+      const fixture = contextFixture(String(path), init);
+      if (fixture) return fixture;
+      if (String(path).endsWith("/ack")) return Response.json({});
+      assert.equal(String(path), "/api/chat");
+      const request = JSON.parse(String(init?.body));
+      runId = request.runId;
+      return sse([
+        [
+          "snapshot",
+          {
+            ...snapshot(runId, true),
+            segments:
+              finishReason === "stop"
+                ? []
+                : [{ kind: "narration", text: "已收到的部分正文" }],
+            stages: { body: { name: "body", status: "failed", error: detail } },
+            body: {
+              finishReason,
+              usage: {
+                status: "reported",
+                inputTokens: 100,
+                outputTokens: 12,
+                totalTokens: 112,
+              },
+            },
+            error: detail,
+          },
+        ],
+      ]);
+    };
+    await sendMessage("继续");
+    const reply = (await allMessages(session.id)).find(
+      (m) => m.role === "assistant",
+    )!;
+    assert.equal(reply.status, "error");
+    assert.ok(
+      reply.error!.startsWith(
+        finishReason === "stop"
+          ? "正文生成失败：模型已正常结束，但没有返回有效正文。"
+          : "正文生成中断：模型达到长度限制，回复未完整生成。",
+      ),
+    );
+    assert.ok(reply.error!.includes("本轮未进行状态整理。"));
+    assert.ok(reply.error!.includes(detail));
+    assert.ok(reply.error!.includes(`任务 ID：${runId}`));
+    assert.equal(
+      useAppStore.getState().messages.find((m) => m.id === reply.id)!.error,
+      reply.error,
+    );
+    assert.equal((await (await database()).getAll("stateTasks")).length, 0);
+    if (finishReason === "length")
+      assert.equal(reply.segments![0].text, "已收到的部分正文");
+  });
+}
+
 test("正文已保存后 ACK 失败，恢复只重取结果且不重复推进版本", async () => {
   const { session } = await setup();
   let saved = "";

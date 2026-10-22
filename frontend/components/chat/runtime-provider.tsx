@@ -106,7 +106,12 @@ function convertMessage(message: RuntimeEntry): ThreadMessageLike {
               data: { text: segment.text },
             })),
             ...(note
-              ? [{ type: "data-note" as const, data: { text: note } }]
+              ? [
+                  {
+                    type: "data-note" as const,
+                    data: { text: note, failed: message.status === "error" },
+                  },
+                ]
               : []),
           ],
     status:
@@ -142,8 +147,13 @@ const Narration: DataMessagePartComponent<{ text: string }> = ({ data }) => (
     {data.text}
   </p>
 );
-const Note: DataMessagePartComponent<{ text: string }> = ({ data }) => (
-  <p role="status" className="my-2 text-xs leading-5 text-muted-foreground">
+const Note: DataMessagePartComponent<{ text: string; failed: boolean }> = ({
+  data,
+}) => (
+  <p
+    role={data.failed ? "alert" : "status"}
+    className={`my-2 whitespace-pre-wrap break-words text-sm leading-6 ${data.failed ? "text-destructive" : "text-muted-foreground"}`}
+  >
     {data.text}
   </p>
 );

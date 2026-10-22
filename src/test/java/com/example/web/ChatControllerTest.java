@@ -12,8 +12,13 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import com.example.TestRequests;
@@ -25,8 +30,9 @@ import com.example.web.dto.DispatchDtos.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {"roleplay.llm.timeout-seconds=3", "roleplay.dispatch.task-timeout-seconds=4", "roleplay.dispatch.max-results=4", "logging.level.root=ERROR", "logging.level.com.example.service.SegmentStreamParser=WARN"})
+        properties = {"roleplay.llm.timeout-seconds=3", "roleplay.dispatch.task-timeout-seconds=4", "roleplay.dispatch.max-results=4", "logging.level.root=ERROR", "logging.level.com.example.service.SegmentStreamParser=WARN", "logging.level.com.example.service.ChatDispatchService=WARN"})
 @Timeout(20)
+@ExtendWith(OutputCaptureExtension.class)
 class ChatControllerTest {
     @LocalServerPort int port;
     @Autowired ObjectMapper mapper;
@@ -103,11 +109,64 @@ class ChatControllerTest {
             verify(model).chatStream(any(), any());
         } finally { release.countDown(); }
     }
-    @Test void failedStateKeepsBodyAndDoesNotBlockNextRequest() throws Exception {
+    @Test void failedStateKeepsBodyAndDoesNotBlockNextRequest(CapturedOutput logs) throws Exception {
         when(model.chat(any())).thenThrow(new IOException("整理连接失败"));
-        String first = post("/api/chat", request("第一轮")).body();
+        var request = request("第一轮");
+        String first = post("/api/chat", request).body();
         assertTrue(first.contains("body_done")); assertTrue(first.contains("整理连接失败"));
+        assertTrue(logs.getAll().contains("后台生成失败：任务=" + request.runId() + "，阶段=state_update，异常类型=java.io.IOException"));
         assertTrue(post("/api/chat", request("第二轮")).body().contains("body_done"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", " \n\t", "[台词]\n[描写] "})
+    void emptyBodyWithStopReportsActualCauseAndSkipsStateUpdate(String content, CapturedOutput logs) throws Exception {
+        doAnswer(i -> {
+            Consumer<String> out = i.getArgument(1);
+            out.accept(content);
+            return new ChatStreamResult("stop", new TokenUsage("reported", 100L, 12L, 112L));
+        }).when(model).chatStream(any(), any());
+        var request = request("继续");
+        String output = post("/api/chat", request).body();
+        String lastEvent = output.lines().filter(line -> line.startsWith("data:"))
+                .map(line -> line.substring(5)).toList().getLast();
+        var terminal = mapper.readTree(lastEvent).path("value");
+        assertTrue(terminal.path("terminal").asBoolean());
+        assertEquals("failed", terminal.path("stages").path("body").path("status").asText());
+        assertFalse(terminal.path("stages").has("state_update"));
+        assertEquals("stop", terminal.path("body").path("finishReason").asText());
+        assertEquals(12L, terminal.path("body").path("usage").path("outputTokens").asLong());
+        String error = terminal.path("error").asText();
+        assertTrue(error.contains("模型正常结束，但正文为空"), error);
+        assertTrue(error.contains("finish_reason=stop"), error);
+        assertTrue(error.contains("本次输出上限=8192 token"), error);
+        assertTrue(error.contains("输入 token=100；输出 token=12；总 token=112"), error);
+        assertTrue(error.contains("已返回正文=0 字符"), error);
+        assertTrue(logs.getAll().contains("模型正常结束，但正文为空"));
+        assertTrue(logs.getAll().contains("后台生成失败：任务=" + request.runId() + "，阶段=body，异常类型=java.io.IOException"));
+        verify(model, never()).chat(any());
+        assertTrue(resume(request.runId()).contains("正文为空"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"length", "content_filter"})
+    void incompleteBodyPreservesPartialTextAndUnknownUsage(String finishReason, CapturedOutput logs) throws Exception {
+        String content = "未完成的私密正文";
+        doAnswer(i -> {
+            Consumer<String> out = i.getArgument(1);
+            out.accept("[描写]" + content);
+            return new ChatStreamResult(finishReason, TokenUsage.unavailable());
+        }).when(model).chatStream(any(), any());
+        String output = post("/api/chat", request("继续")).body();
+        assertTrue(output.contains(content));
+        String expected = "length".equals(finishReason) ? "模型因长度限制停止生成" : "模型未正常结束";
+        assertTrue(output.contains(expected), output);
+        assertTrue(output.contains("finish_reason=" + finishReason), output);
+        assertTrue(output.contains("token 用量=上游未提供"), output);
+        assertTrue(output.contains("已返回正文=" + content.length() + " 字符"), output);
+        assertTrue(logs.getAll().contains(expected));
+        assertFalse(logs.getAll().contains(content));
+        verify(model, never()).chat(any());
     }
 
     @Test void disconnectDuringStateUpdateRetainsResultForResubscription() throws Exception {
@@ -146,7 +205,7 @@ class ChatControllerTest {
         time.addAndGet(Duration.ofMinutes(1).toMillis()); dispatch.cleanup();
         assertTrue(resume(request.runId()).contains("RESULT_EXPIRED"));
     }
-    @Test void explicitCancelInterruptsModelAndRetainsPartialResult() throws Exception {
+    @Test void explicitCancelInterruptsModelAndRetainsPartialResult(CapturedOutput logs) throws Exception {
         var started = new CountDownLatch(1); var interrupted = new CountDownLatch(1);
         doAnswer(i -> { Consumer<String> out = i.getArgument(1); out.accept("[台词]已有内容\n"); started.countDown();
             try { new CountDownLatch(1).await(); } finally { interrupted.countDown(); }
@@ -161,6 +220,7 @@ class ChatControllerTest {
             response.body().close();
             assertTrue(resume(request.runId()).contains("已有内容"));
             assertTrue(resume(request.runId()).contains("cancelled"));
+            assertFalse(logs.getAll().contains("后台生成失败：任务=" + request.runId()));
         }
     }
     @Test void deadlineInterruptsWithoutDeletingPartialResult() throws Exception {

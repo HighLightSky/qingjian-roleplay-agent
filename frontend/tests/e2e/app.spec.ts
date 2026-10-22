@@ -2,6 +2,8 @@ import { chromium, test, expect, type Page } from "@playwright/test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DispatchSnapshot } from "../../lib/chat/dispatch";
+import { dispatchResponse } from "../dispatch-fixture";
 
 async function createRole(page: Page) {
   await page.goto("/");
@@ -22,6 +24,95 @@ async function send(page: Page, text: string) {
   await page.getByRole("textbox", { name: "消息内容" }).fill(text);
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
 }
+
+test("选图时隐藏思考提示，正文首字前显示角色名与 Reasoning UI，刷新后保持阶段", async ({
+  page,
+}) => {
+  await createRole(page);
+  let current: DispatchSnapshot;
+  let completed: DispatchSnapshot;
+  let subscriptions = 0;
+  await page.route("**/api/chat", async (route) => {
+    const response = await dispatchResponse(
+      route.request().postDataJSON(),
+    ).text();
+    completed = JSON.parse(response.split("data: ")[1].trim());
+    current = {
+      ...completed,
+      segments: [],
+      stages: {
+        selection: { name: "selection", status: "running", error: null },
+      },
+      plan: null,
+      body: null,
+      state: null,
+      terminal: false,
+    };
+    await route.fulfill({
+      contentType: "text/event-stream",
+      body: `event: snapshot\ndata: ${JSON.stringify(current)}\n\n`,
+    });
+  });
+  await page.route("**/api/chat/*/events", async (route) => {
+    subscriptions++;
+    await route.fulfill({
+      contentType: "text/event-stream",
+      body: `event: snapshot\ndata: ${JSON.stringify(current)}\n\n`,
+    });
+  });
+  const thinking = page.locator('[data-slot="reasoning-root"][role="status"]');
+  const selection = page.locator('[data-operation="selection"]');
+  await send(page, "你好");
+  await expect(selection).toContainText("正在请求");
+  await expect(thinking).toHaveCount(0);
+  const previousSubscriptions = subscriptions;
+  await page.reload();
+  await expect.poll(() => subscriptions).toBeGreaterThan(previousSubscriptions);
+  await expect(selection).toContainText("正在请求");
+  await expect(thinking).toHaveCount(0);
+
+  current = {
+    ...current!,
+    plan: completed!.plan,
+    stages: {
+      selection: completed!.stages.selection,
+      body: { name: "body", status: "running", error: null },
+    },
+  };
+  await expect(thinking).toBeVisible();
+  await expect(thinking).toHaveText("林溪正在思考中");
+  await expect(
+    thinking.locator('[data-slot="reasoning-trigger-icon"]'),
+  ).toBeVisible();
+  await expect(
+    thinking.locator('[data-slot="reasoning-trigger-label"]'),
+  ).toHaveClass(/shimmer/);
+  await page.reload();
+  await expect(thinking).toBeVisible();
+  await expect(thinking).toHaveText("林溪正在思考中");
+
+  current = { ...current, segments: completed!.segments };
+  await expect(page.getByText("她检查地图。", { exact: true })).toBeVisible();
+  await expect(thinking).toHaveCount(0);
+  current = {
+    ...current,
+    body: completed!.body,
+    stages: {
+      ...current.stages,
+      body: completed!.stages.body,
+      state_update: { name: "state_update", status: "running", error: null },
+    },
+  };
+  await expect(page.locator('[data-operation="state_update"]')).toContainText(
+    "正在请求",
+  );
+  await expect(thinking).toHaveCount(0);
+  current = completed!;
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeVisible();
+  await expect(thinking).toHaveCount(0);
+});
 
 test("上下文环位于32px发送按钮左侧，支持查看预留，本轮usage刷新后保留", async ({
   page,
@@ -693,6 +784,56 @@ test("stopping and reloading during a stream retain partial content", async ({
     page.getByText("“欢迎回来，", { exact: true }).last(),
   ).toBeVisible();
 });
+test("空正文错误明确展示原因和完整诊断信息，刷新后仍可查看", async ({
+  page,
+}) => {
+  await createRole(page);
+  let runId = "";
+  await page.route("**/api/chat/*/ack", (route) => route.fulfill({ json: {} }));
+  await page.route("**/api/chat", async (route) => {
+    const request = route.request().postDataJSON();
+    runId = request.runId;
+    const detail =
+      "java.io.IOException: 正文生成失败：模型正常结束，但正文为空；finish_reason=stop；本次输出上限=8192 token；输入 token=100；输出 token=12；总 token=112；已返回正文=0 字符";
+    const snapshot = {
+      runId,
+      revision: 1,
+      segments: [],
+      stages: { body: { name: "body", status: "failed", error: detail } },
+      budget: null,
+      plan: null,
+      body: {
+        finishReason: "stop",
+        usage: {
+          status: "reported",
+          inputTokens: 100,
+          outputTokens: 12,
+          totalTokens: 112,
+        },
+      },
+      state: null,
+      terminal: true,
+      error: detail,
+    };
+    await route.fulfill({
+      contentType: "text/event-stream",
+      body: `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
+    });
+  });
+  await send(page, "触发空回复");
+  const alert = page
+    .getByRole("alert")
+    .filter({ hasText: "模型已正常结束，但没有返回有效正文" });
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText("本轮未进行状态整理。");
+  await expect(alert).toContainText("finish_reason=stop");
+  await expect(alert).toContainText("已返回正文=0 字符");
+  await expect(alert).toContainText(`任务 ID：${runId}`);
+  await page.reload();
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText(`任务 ID：${runId}`);
+});
+
 test("API errors retain user messages and a second tab cannot mutate data", async ({
   page,
   context,

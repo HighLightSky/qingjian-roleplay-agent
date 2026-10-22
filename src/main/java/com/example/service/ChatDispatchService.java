@@ -278,8 +278,7 @@ public class ChatDispatchService {
                     }
                     text = plain.toString();
                 }
-                if (!"stop".equals(generated.finishReason()) || text.isBlank())
-                    throw new IllegalArgumentException("正文未正常完成：" + generated.finishReason());
+                validateBody(generated, text);
                 stage(phase, "committed", null);
                 phase = "state_update";
                 checkCancelled();
@@ -312,10 +311,32 @@ public class ChatDispatchService {
                 synchronized (this) {
                     error = cancelled ? error : e.toString();
                     stage(phase, cancelled ? "cancelled" : "failed", error);
+                    if (!cancelled)
+                        log.error("后台生成失败：任务={}，阶段={}，异常类型={}", id, phase, e.getClass().getName());
                 }
                 if (e instanceof InterruptedException)
                     Thread.currentThread().interrupt();
             }
+        }
+
+        private void validateBody(ChatStreamResult generated, String text) throws IOException {
+            if ("stop".equals(generated.finishReason()) && !text.isBlank())
+                return;
+            String reason = switch (generated.finishReason()) {
+                case "stop" -> "模型正常结束，但正文为空（未返回有效台词或描写）";
+                case "length" -> "模型因长度限制停止生成";
+                default -> "模型未正常结束";
+            };
+            var usage = generated.usage();
+            String usageDetails = "reported".equals(usage.status())
+                    ? "输入 token=" + usage.inputTokens() + "；输出 token=" + usage.outputTokens()
+                            + "；总 token=" + usage.totalTokens()
+                    : "token 用量=上游未提供";
+            String message = "正文生成失败：" + reason + "；finish_reason=" + generated.finishReason()
+                    + "；本次输出上限=" + budget.outputReserveTokens() + " token；" + usageDetails
+                    + "；已返回正文=" + text.length() + " 字符";
+            log.warn("任务={}，{}", id, message);
+            throw new IOException(message);
         }
 
         private void phaseStart(String phase) {
