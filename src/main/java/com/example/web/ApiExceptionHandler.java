@@ -13,6 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 import com.example.web.dto.ApiError;
 
@@ -20,6 +21,12 @@ import com.example.web.dto.ApiError;
 @RestControllerAdvice
 public class ApiExceptionHandler {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void asyncResponseNotUsable(HttpServletResponse response) {
+        // 响应已失效，不能写入错误 JSON；后台任务仍由编排服务独立管理。
+        log.debug("异步 HTTP 响应已不可用，结束当前连接");
+    }
 
     @ExceptionHandler(com.example.service.DispatchException.class)
     public ResponseEntity<ApiError> dispatchError(com.example.service.DispatchException exception) {

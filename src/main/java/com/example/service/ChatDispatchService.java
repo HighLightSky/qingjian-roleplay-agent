@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 /** 任务拥有模型调用，HTTP 连接只是可替换的订阅者。 */
 @Service
 public class ChatDispatchService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ChatDispatchService.class);
     private final Map<String, Task> tasks = new HashMap<>();
     private final DispatchProperties config;
     private final Clock clock;
@@ -374,6 +375,7 @@ public class ChatDispatchService {
             if (queue.offer(new Outgoing(name, data)))
                 return true;
             close();
+            emitter.complete();
             return false;
         }
 
@@ -393,8 +395,13 @@ public class ChatDispatchService {
                             return;
                         }
                     }
+                } catch (IOException e) {
+                    // 写入失败由 Servlet 容器通知 Spring 收尾，不能再次完成响应。
+                    log.debug("SSE 响应写入失败，关闭当前订阅，异常类型：{}", e.getClass().getName());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                 } catch (Exception e) {
-                    emitter.complete();
+                    emitter.completeWithError(e);
                 } finally {
                     close();
                 }

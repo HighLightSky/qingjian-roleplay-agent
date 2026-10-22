@@ -3,6 +3,7 @@ package com.example.service;
 import java.io.IOException;
 import java.util.*;
 import com.example.llm.LLMClient;
+import com.example.llm.model.ChatResponse;
 import com.example.llm.model.Message;
 import com.example.prompt.StateUpdatePromptBuilder;
 import com.example.web.dto.StateDtos.*;
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Service;
 /** 无状态统一整理：服务端校验模型的结构和来源，浏览器负责版本检查与原子提交。 */
 @Service
 public class StateUpdateService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(StateUpdateService.class);
     private final LLMClient client;
     private final ObjectMapper mapper;
     private final StateUpdatePromptBuilder prompts;
@@ -37,8 +39,11 @@ public class StateUpdateService {
             var response = client.chat(modelRequest);
             if (response.getContent() == null)
                 throw new IOException("状态整理结果缺失");
-            if (!"stop".equals(response.getFinishReason()))
-                throw new IOException("状态整理输出未完成");
+            if (!"stop".equals(response.getFinishReason())) {
+                String message = incompleteOutputMessage(response, modelRequest.getMaxTokens());
+                log.warn("{}", message);
+                throw new IOException(message);
+            }
             try {
                 return parseResult(response.getContent(), r);
             } catch (IOException e) {
@@ -50,6 +55,22 @@ public class StateUpdateService {
                                 + "保留真实原图 ID，重新返回四个数组组成的完整 JSON。"));
             }
         }
+    }
+
+    private String incompleteOutputMessage(ChatResponse response, int outputLimit) {
+        String finishReason = switch (response.getFinishReason()) {
+            case null -> "缺失（上游未返回）";
+            case "length" -> "length（模型因长度限制停止生成）";
+            default -> response.getFinishReason();
+        };
+        var usage = response.getUsage();
+        String usageDetails = "reported".equals(usage.status())
+                ? "输入 token=" + usage.inputTokens() + "；输出 token=" + usage.outputTokens()
+                        + "；总 token=" + usage.totalTokens()
+                : "token 用量=上游未提供";
+        return "状态整理输出未完成：finish_reason=" + finishReason
+                + "；本次输出上限=" + outputLimit + " token；" + usageDetails
+                + "；已返回正文=" + response.getContent().length() + " 字符";
     }
 
     private Result parseResult(String content, UpdateRequest r) throws IOException {

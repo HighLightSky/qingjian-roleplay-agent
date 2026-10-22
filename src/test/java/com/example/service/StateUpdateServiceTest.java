@@ -11,7 +11,13 @@ import java.util.*;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.slf4j.LoggerFactory;
 import com.example.TestRequests;
 import com.example.config.VisionProperties;
 import com.example.llm.LLMClient;
@@ -172,13 +178,55 @@ class StateUpdateServiceTest {
         }
     }
 
-    @Test void rejectsMissingListsIncompleteOutputAndOversizedValues() throws Exception {
-        for (String json : List.of("{}")) {
-            answer(json);
-            assertThrows(IOException.class, () -> update(request()));
-        }
-        when(model.chat(any())).thenReturn(new ChatResponse(output("[]", "[]", "[]"), "length", com.example.llm.model.TokenUsage.unavailable()));
+    @Test void rejectsMissingLists() throws Exception {
+        answer("{}");
         assertThrows(IOException.class, () -> update(request()));
+    }
+
+    @Test
+    void incompleteOutputReportsLengthLimitAndUsageWithoutExposingContent() throws Exception {
+        String content = "未完成的整理结果";
+        when(model.chat(any())).thenReturn(new ChatResponse(content, "length",
+                new TokenUsage("reported", 1000L, 8192L, 9192L)));
+
+        var logger = (Logger) LoggerFactory.getLogger(StateUpdateService.class);
+        Level originalLevel = logger.getLevel();
+        var logs = new ListAppender<ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        logger.setLevel(Level.WARN);
+        String message;
+        try {
+            message = assertThrows(IOException.class, () -> update(request())).getMessage();
+        } finally {
+            logger.setLevel(originalLevel);
+            logger.detachAppender(logs);
+            logs.stop();
+        }
+
+        assertTrue(message.contains("finish_reason=length（模型因长度限制停止生成）"));
+        assertTrue(message.contains("本次输出上限=8192 token"));
+        assertTrue(message.contains("输入 token=1000；输出 token=8192；总 token=9192"));
+        assertTrue(message.contains("已返回正文=" + content.length() + " 字符"));
+        assertFalse(message.contains(content));
+        assertEquals(List.of(message), logs.list.stream().map(ILoggingEvent::getFormattedMessage).toList());
+        verify(model).chat(any());
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = { "length", "content_filter", "tool_calls", "unexpected_reason" })
+    void incompleteOutputPreservesFinishReasonAndUnavailableUsage(String finishReason) throws Exception {
+        when(model.chat(any())).thenReturn(new ChatResponse(output("[]", "[]", "[]"), finishReason,
+                TokenUsage.unavailable()));
+
+        String message = assertThrows(IOException.class, () -> update(request())).getMessage();
+
+        String expectedReason = finishReason == null ? "缺失（上游未返回）" : finishReason;
+        assertTrue(message.contains("finish_reason=" + expectedReason));
+        assertTrue(message.contains("token 用量=上游未提供"));
+        assertFalse(message.contains("输出 token=0"));
+        verify(model).chat(any());
     }
 
     @Test void rejectsOtherSessionDataAndIncompleteMessagesBeforeModel() {

@@ -109,6 +109,36 @@ class ChatControllerTest {
         assertTrue(first.contains("body_done")); assertTrue(first.contains("整理连接失败"));
         assertTrue(post("/api/chat", request("第二轮")).body().contains("body_done"));
     }
+
+    @Test void disconnectDuringStateUpdateRetainsResultForResubscription() throws Exception {
+        var started = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        when(model.chat(any())).thenAnswer(i -> {
+            started.countDown();
+            release.await();
+            return new ChatResponse(EMPTY, "stop", TokenUsage.unavailable());
+        });
+        var request = request("继续整理");
+        try (var client = HttpClient.newHttpClient()) {
+            var response = client.send(postRequest("/api/chat", request), HttpResponse.BodyHandlers.ofInputStream());
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            response.body().close();
+            release.countDown();
+
+            String resumed = resume(request.runId());
+            String lastEvent = resumed.lines().filter(line -> line.startsWith("data:"))
+                    .map(line -> line.substring(5)).toList().getLast();
+            var terminal = mapper.readTree(lastEvent).path("value");
+            assertTrue(terminal.path("terminal").asBoolean(), resumed);
+            assertEquals("committed", terminal.path("stages").path("state_update").path("status").asText());
+            assertEquals("state:" + request.assistant().id(), terminal.path("state").path("operationId").asText());
+            assertTrue(terminal.path("error").isNull(), resumed);
+            verify(model).chatStream(any(), any());
+            verify(model).chat(any());
+        } finally {
+            release.countDown();
+        }
+    }
     @Test void resultReadsDoNotRenewRetentionAndCleanupReclaimsIt() throws Exception {
         var request = request("继续"); post("/api/chat", request);
         time.addAndGet(Duration.ofMinutes(119).toMillis());
