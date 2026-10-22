@@ -10,6 +10,7 @@ import {
 import { useImageUrl } from "@/hooks/use-image-url";
 import { prepareCharacterPhoto } from "@/lib/images/repository";
 import { ImageGallery } from "@/components/chat/image-gallery";
+import { DataUsage } from "@/components/data-usage";
 import {
   CheckIcon,
   DownloadIcon,
@@ -35,7 +36,6 @@ import {
   setting,
   saveCharacterDraft,
   discardCharacterDraft,
-  TABLES,
 } from "@/lib/db";
 import { validateBackup, type Backup } from "@/lib/backup";
 import {
@@ -335,39 +335,16 @@ function SnapshotPhoto({ assetId }: { assetId: string }) {
   );
 }
 function DataSettings({ open }: { open: (state: DialogState) => void }) {
-  const { themeMode, themeColor, readOnly, characters } = useAppStore();
+  const { themeMode, themeColor, readOnly } = useAppStore();
   const [working, setWorking] = useState(false);
-  const [storage, setStorage] = useState<{
-    usage?: number;
-    quota?: number;
-    persistent?: boolean;
-  }>({});
-  const [counts, setCounts] = useState<Record<string, number>>({});
   const [lastExport, setLastExport] = useState("");
   const [notice, setNotice] = useState("");
   useEffect(() => {
     void database()
       .then(async (db) => {
-        const values = await Promise.all(
-          TABLES.map((table) => db.count(table)),
-        );
-        setCounts(
-          Object.fromEntries(
-            TABLES.map((table, index) => [table, values[index]]),
-          ),
-        );
         setLastExport((await db.get("settings", "lastExport"))?.value ?? "");
       })
       .catch(report);
-    if (navigator.storage)
-      void Promise.all([
-        navigator.storage.estimate(),
-        navigator.storage.persisted(),
-      ])
-        .then(([estimate, persistent]) =>
-          setStorage({ ...estimate, persistent }),
-        )
-        .catch(() => {});
   }, []);
   async function download() {
     setWorking(true);
@@ -501,44 +478,7 @@ function DataSettings({ open }: { open: (state: DialogState) => void }) {
           </p>
         </fieldset>
       </section>
-      <section className="border-t pt-5">
-        <h3 className="text-sm font-medium">本地数据</h3>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {characters.length} 个角色 · {counts.sessions ?? 0} 段对话 ·{" "}
-          {counts.messages ?? 0} 条消息
-        </p>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          {storage.usage !== undefined
-            ? `已使用约 ${(storage.usage / 1024 / 1024).toFixed(2)} MiB。`
-            : "存储用量暂不可用。"}{" "}
-          {storage.persistent
-            ? "浏览器已允许持久存储。"
-            : "使用浏览器默认存储策略。"}
-        </p>
-        <Button
-          className="mt-3"
-          variant="outline"
-          size="sm"
-          disabled={
-            readOnly || storage.persistent || !navigator.storage?.persist
-          }
-          onClick={() => {
-            void navigator.storage
-              .persist()
-              .then((persistent) => {
-                setStorage({ ...storage, persistent });
-                setNotice(
-                  persistent
-                    ? "已开启持久存储。"
-                    : "浏览器未批准持久存储，仍可继续使用并导出备份。",
-                );
-              })
-              .catch(report);
-          }}
-        >
-          开启持久存储
-        </Button>
-      </section>
+      <DataUsage />
       <ImageGallery />
       <section className="border-t pt-5">
         <h3 className="text-sm font-medium">完整备份</h3>

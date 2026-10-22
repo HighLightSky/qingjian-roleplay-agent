@@ -52,12 +52,63 @@ public class ImageCache {
     }
 
     public synchronized List<String> missing(List<String> hashes) {
-        StateValidation.collection(hashes, "图片哈希");
+        List<String> requested = validatedHashes(hashes);
         cleanup();
-        return hashes.stream().distinct().peek(ImageCache::hash).filter(h -> {
+        return requested.stream().filter(h -> {
             Entry entry = entries.get(h);
             return entry == null || expired(entry);
         }).toList();
+    }
+
+    public record CacheStats(int imageCount, long bytes, int inUseImageCount, long inUseBytes) {
+    }
+
+    public record ClearResult(int releasedImageCount, long releasedBytes) {
+    }
+
+    public synchronized CacheStats stats(List<String> hashes) {
+        List<String> requested = validatedHashes(hashes);
+        cleanup();
+        int count = 0, inUseCount = 0;
+        long bytes = 0, inUseBytes = 0;
+        for (String key : requested) {
+            Entry entry = entries.get(key);
+            if (entry == null)
+                continue;
+            count++;
+            bytes += entry.bytes.length;
+            if (entry.pins > 0) {
+                inUseCount++;
+                inUseBytes += entry.bytes.length;
+            }
+        }
+        return new CacheStats(count, bytes, inUseCount, inUseBytes);
+    }
+
+    public synchronized ClearResult clear(List<String> hashes) {
+        List<String> requested = validatedHashes(hashes);
+        for (String key : requested) {
+            Entry entry = entries.get(key);
+            if (entry != null && entry.pins > 0)
+                throw new DispatchException(HttpStatus.CONFLICT, "IMAGE_IN_USE", "图片正在被任务使用，请在任务完成后重试");
+        }
+        int count = 0;
+        long bytes = 0;
+        for (String key : requested) {
+            Entry entry = entries.get(key);
+            if (entry == null)
+                continue;
+            count++;
+            bytes += entry.bytes.length;
+            remove(key);
+        }
+        return new ClearResult(count, bytes);
+    }
+
+    private static List<String> validatedHashes(List<String> hashes) {
+        StateValidation.collection(hashes, "图片哈希");
+        hashes.forEach(ImageCache::hash);
+        return hashes.stream().distinct().toList();
     }
 
     public void put(String sha256, byte[] bytes) {

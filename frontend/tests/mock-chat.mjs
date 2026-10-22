@@ -279,6 +279,51 @@ createServer(async (request, response) => {
     });
     return;
   }
+  if (
+    ["/api/images/cache/stats", "/api/images/cache/clear"].includes(request.url)
+  ) {
+    let raw = "";
+    for await (const chunk of request) raw += chunk;
+    const hashes = [...new Set(JSON.parse(raw).hashes)];
+    const matched = hashes.filter((hash) => images.has(hash));
+    const inUse = new Set(
+      [...tasks.values()]
+        .filter((task) => !task.snapshot.terminal)
+        .flatMap((task) => task.images.map((image) => image.sha256)),
+    );
+    const pinned = matched.filter((hash) => inUse.has(hash));
+    const bytes = matched.reduce(
+      (sum, hash) => sum + images.get(hash).length,
+      0,
+    );
+    if (request.url.endsWith("/stats")) {
+      json(response, {
+        imageCount: matched.length,
+        bytes,
+        inUseImageCount: pinned.length,
+        inUseBytes: pinned.reduce(
+          (sum, hash) => sum + images.get(hash).length,
+          0,
+        ),
+      });
+    } else if (pinned.length) {
+      json(
+        response,
+        {
+          code: "IMAGE_IN_USE",
+          message: "图片正在被任务使用，请在任务完成后重试",
+        },
+        409,
+      );
+    } else {
+      matched.forEach((hash) => images.delete(hash));
+      json(response, {
+        releasedImageCount: matched.length,
+        releasedBytes: bytes,
+      });
+    }
+    return;
+  }
   if (request.url.startsWith("/api/images/") && request.method === "PUT") {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -410,6 +455,7 @@ createServer(async (request, response) => {
   let task = tasks.get(input.runId);
   if (!task) {
     task = {
+      images: input.images,
       snapshot: {
         runId: input.runId,
         revision: 0,

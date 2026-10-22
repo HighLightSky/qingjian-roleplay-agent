@@ -13,14 +13,33 @@ import com.example.config.VisionProperties;
 public class ImageController {
     private final ImageCache cache;
     private final VisionProperties vision;
-    public ImageController(ImageCache cache, VisionProperties vision) { this.cache = cache; this.vision = vision; }
-    public record MissingRequest(List<String> hashes) {
-        public MissingRequest { hashes = hashes == null ? List.of() : List.copyOf(hashes); }
+
+    public ImageController(ImageCache cache, VisionProperties vision) {
+        this.cache = cache;
+        this.vision = vision;
     }
+
+    public record HashesRequest(List<String> hashes) {
+        public HashesRequest {
+            hashes = hashes == null ? List.of() : hashes;
+        }
+    }
+
     @PostMapping("/missing")
-    public Map<String, List<String>> missing(@RequestBody MissingRequest request) {
+    public Map<String, List<String>> missing(@RequestBody HashesRequest request) {
         return Map.of("missing", cache.missing(request.hashes()));
     }
+
+    @PostMapping("/cache/stats")
+    public ImageCache.CacheStats stats(@RequestBody HashesRequest request) {
+        return cache.stats(request.hashes());
+    }
+
+    @PostMapping("/cache/clear")
+    public ImageCache.ClearResult clear(@RequestBody HashesRequest request) {
+        return cache.clear(request.hashes());
+    }
+
     @PutMapping("/{sha256}")
     public void upload(@PathVariable String sha256, HttpServletRequest request) throws IOException {
         byte[] bytes = request.getInputStream().readNBytes(Math.toIntExact(vision.getMaxImageBytes() + 1));
