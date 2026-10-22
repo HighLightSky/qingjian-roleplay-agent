@@ -44,6 +44,8 @@ public class LlmRequestMapper {
         ObjectNode body = mapper.createObjectNode().put("model", properties.model());
         body.set("messages", messages(request));
         body.put("add_generation_prompt", true);
+        body.putObject("chat_template_kwargs").put("enable_thinking", request.isThinkingEnabled());
+        appendResponseFormat(body, request);
         return body;
     }
 
@@ -53,7 +55,17 @@ public class LlmRequestMapper {
         body.put("max_completion_tokens", request.getMaxTokens());
         body.put("temperature", request.getTemperature());
         body.put("stream", stream);
+        body.putObject("chat_template_kwargs").put("enable_thinking", request.isThinkingEnabled());
+        appendResponseFormat(body, request);
         if (stream) body.putObject("stream_options").put("include_usage", true);
         return body;
+    }
+
+    private void appendResponseFormat(ObjectNode body, ChatRequest request) {
+        if (request.getResponseSchema() != null) {
+            var format = body.putObject("response_format").put("type", "json_schema");
+            format.putObject("json_schema").put("name", "structured_output").put("strict", true)
+                    .set("schema", request.getResponseSchema());
+        }
     }
 }

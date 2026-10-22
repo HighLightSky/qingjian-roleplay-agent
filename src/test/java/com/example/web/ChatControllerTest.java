@@ -22,6 +22,8 @@ import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import com.example.TestRequests;
+import com.example.SelectionFixtures;
+import org.junit.jupiter.params.provider.MethodSource;
 import com.example.llm.LLMClient;
 import com.example.llm.model.*;
 import com.example.service.*;
@@ -45,6 +47,7 @@ class ChatControllerTest {
     static final String EMPTY = "{\"visualObservations\":[],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}";
     @BeforeEach void setup() throws Exception {
         when(clock.millis()).thenAnswer(i -> time.get());
+        when(counter.countTextOnly(any())).thenReturn(new ContextDtos.TokenCount(100, "exact", "test", "fp"));
         when(counter.count(any())).thenReturn(new ContextDtos.TokenCount(100, "exact", "test", "fp"));
         when(model.chat(any())).thenReturn(new ChatResponse(EMPTY, "stop", TokenUsage.unavailable()));
         doAnswer(i -> { Consumer<String> out = i.getArgument(1); out.accept("[台词]你好\n[描写]她挥手。");
@@ -231,6 +234,7 @@ class ChatControllerTest {
         assertTrue(output.contains("超时")); assertTrue(resume(request.runId()).contains("尚未结束"));
     }
     @Test void tokenCapacityIsCheckedBeforeGeneration() throws Exception {
+        when(counter.countTextOnly(any())).thenReturn(new ContextDtos.TokenCount(100, "exact", "test", "fp"));
         when(counter.count(any())).thenReturn(new ContextDtos.TokenCount(193024, "exact", "test", "fp"));
         String output = post("/api/chat", request("继续")).body();
         assertTrue(output.contains("超过窗口")); verify(model, never()).chatStream(any(), any());
@@ -263,6 +267,60 @@ class ChatControllerTest {
         post("/api/chat/" + imageRequest.runId() + "/ack", Map.of());
         assertTrue(post("/api/images/missing", Map.of("hashes", List.of(hash))).body().contains("[]"));
     }
+    @ParameterizedTest
+    @MethodSource("com.example.SelectionFixtures#cases")
+    void selectionNeverBlocksValidHistoryAndPhotoCombinations(SelectionFixtures.History history,
+            SelectionFixtures.Photo photo) throws Exception {
+        var scenario = SelectionFixtures.scenario(history, photo);
+        try (var client = HttpClient.newHttpClient()) {
+            for (var image : scenario.images()) {
+                var upload = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/images/" + image.sha256()))
+                        .PUT(HttpRequest.BodyPublishers.ofByteArray(Base64.getDecoder()
+                                .decode(image.dataUrl().substring(image.dataUrl().indexOf(',') + 1)))).build();
+                assertEquals(200, client.send(upload, HttpResponse.BodyHandlers.ofString()).statusCode());
+            }
+        }
+        var base = request(scenario.context().input().textOf());
+        var original = scenario.context();
+        var context = new ChatApiRequest(original.character(), original.state(), original.summary(), original.history(),
+                original.input(), original.interactionSettings(), original.visual(), base.runId());
+        int seq = context.history().size();
+        var request = new Request(base.runId(), context,
+                new MessageMeta(base.user().id(), seq + 1, base.user().createdAt()),
+                new MessageMeta(base.assistant().id(), seq + 2, base.assistant().createdAt()),
+                scenario.images().stream().map(image -> new ImageRef(image.assetId(), image.sha256())).toList());
+        when(model.chat(any())).thenAnswer(invocation -> {
+            ChatRequest call = invocation.getArgument(0);
+            if (call.getResponseSchema() != null) {
+                assertFalse(call.isThinkingEnabled());
+                var response = mapper.createObjectNode().put("status", "ready").put("message", "");
+                response.putArray("candidateAssetIds");
+                var selected = response.putArray("selectedHistoricalImages");
+                scenario.expectedSelected().forEach(id -> selected.addObject().put("assetId", id).put("purpose", "核对未辨清的细节"));
+                return new ChatResponse(response.toString(), "stop", TokenUsage.unavailable());
+            }
+            assertTrue(call.isThinkingEnabled());
+            String text = call.getMessages().get(1).getParts().getFirst().text();
+            var data = mapper.readTree(text.substring(text.indexOf('{')));
+            var observations = mapper.createArrayNode();
+            for (var id : data.path("actualImageAssetIds")) {
+                var observation = observations.addObject().put("assetId", id.asText()).put("summary", "图片可见颜色");
+                observation.putArray("visibleDetails");
+                observation.putArray("extractedText");
+                observation.putArray("uncertainDetails");
+            }
+            return new ChatResponse(EMPTY.replace("\"visualObservations\":[]", "\"visualObservations\":" + observations),
+                    "stop", TokenUsage.unavailable());
+        });
+        String output = post("/api/chat", request).body();
+        assertTrue(output.contains("event:body_done"), output);
+        assertTrue(output.contains("event:state_result"), output);
+        assertFalse(output.contains("\"status\":\"failed\""), output);
+        verify(model).chatStream(any(), any());
+        verify(model, times(ImageValidationService.selectableCatalog(context).isEmpty() ? 1 : 2)).chat(any());
+        post("/api/chat/" + request.runId() + "/ack", Map.of());
+    }
+
     @Test void resultCapacityRejectsNewTasksWithoutEvictingUnreadResults() throws Exception {
         var retained = new ArrayList<Request>();
         for (int i = 0; i < 4; i++) {

@@ -6,6 +6,7 @@ import com.example.llm.LLMClient;
 import com.example.llm.model.ChatResponse;
 import com.example.llm.model.Message;
 import com.example.prompt.StateUpdatePromptBuilder;
+import com.example.prompt.StateUpdateMaterial;
 import com.example.web.dto.StateDtos.*;
 import com.example.web.dto.VisualDtos.*;
 import com.fasterxml.jackson.databind.*;
@@ -20,21 +21,28 @@ public class StateUpdateService {
     private final StateUpdatePromptBuilder prompts;
     private final ContextBudgetService budgets;
     private final ImageValidationService images;
+    private final AuxiliaryContextService contexts;
 
     public StateUpdateService(LLMClient client, ObjectMapper mapper, StateUpdatePromptBuilder prompts,
-            ImageValidationService images, ContextBudgetService budgets) {
+            ImageValidationService images, ContextBudgetService budgets, AuxiliaryContextService contexts) {
         this.client = client;
         this.mapper = mapper;
         this.prompts = prompts;
         this.budgets = budgets;
         this.images = images;
+        this.contexts = contexts;
     }
 
     public Result update(UpdateRequest r) throws IOException, InterruptedException {
-        String material = prompts.material(r);
+        var material = new StateUpdateMaterial(r, mapper, contexts);
         List<Message> correction = List.of();
         for (int attempt = 0;; attempt++) {
-            var modelRequest = prompts.build(r, material, correction);
+            var correctionMessages = correction;
+            var modelRequest = contexts.fit(material.data(), "整理", r.operationId(), contexts.config().stateInputTokens(),
+                    data -> {
+                        material.updatePermissions();
+                        return prompts.build(r, data, correctionMessages);
+                    });
             budgets.checkModelRequest(modelRequest);
             var response = client.chat(modelRequest);
             if (response.getContent() == null)
@@ -45,14 +53,11 @@ public class StateUpdateService {
                 throw new IOException(message);
             }
             try {
-                return parseResult(response.getContent(), r);
+                return parseResult(response.getContent(), r, material);
             } catch (IOException e) {
                 if (attempt == 1)
                     throw new IOException("状态整理结果纠正后仍无效：" + e.getMessage(), e);
-                correction = List.of(new Message("assistant", response.getContent()),
-                        new Message("user", "上次整理结果未通过校验：" + e.getMessage()
-                                + "。请纠正上面的结果，逐项核对本次返回模板中的 assetId 字段，"
-                                + "保留真实原图 ID，重新返回四个数组组成的完整 JSON。"));
+                correction = contexts.correction(response.getContent(), e.getMessage());
             }
         }
     }
@@ -73,16 +78,22 @@ public class StateUpdateService {
                 + "；已返回正文=" + response.getContent().length() + " 字符";
     }
 
-    private Result parseResult(String content, UpdateRequest r) throws IOException {
+    private Result parseResult(String content, UpdateRequest r, StateUpdateMaterial material) throws IOException {
         try {
             JsonNode node = mapper.readTree(content);
-            for (String field : List.of("visualObservations", "storyChanges", "memoryChanges", "goalChanges"))
-                if (node == null || !node.path(field).isArray())
+            if (node == null || !node.isObject()) throw new IOException("整理结果必须是 JSON 对象");
+            for (String field : List.of("storyChanges", "memoryChanges", "goalChanges"))
+                if (!node.path(field).isArray())
                     throw new IOException("整理结果缺少数组：" + field);
+            boolean hasImages = r.context().visual() != null && !r.context().visual().imagePayloads().isEmpty();
+            JsonNode visual = node.path("visualObservations");
+            // 无原图时不存在视觉提取任务，缺省集合由模型结果构造器统一归一化。
+            if (!visual.isArray() && (hasImages || !(visual.isMissingNode() || visual.isNull())))
+                throw new IOException("整理结果缺少数组：visualObservations");
             ModelResult result = mapper.treeToValue(node, ModelResult.class);
-            List<Change> story = changes(result.storyChanges(), "story", r);
-            List<Change> memories = changes(result.memoryChanges(), "memory", r);
-            List<Change> goals = changes(result.goalChanges(), "goal", r);
+            List<Change> story = changes(result.storyChanges(), "story", r, material);
+            List<Change> memories = changes(result.memoryChanges(), "memory", r, material);
+            List<Change> goals = changes(result.goalChanges(), "goal", r, material);
             var state = r.context().state();
             if (state.memories().size()
                     + memories.stream().filter(c -> "create".equals(c.action()))
@@ -134,7 +145,7 @@ public class StateUpdateService {
         images.validateLimits(required);
     }
 
-    private List<Change> changes(List<ProposedChange> proposals, String kind, UpdateRequest r) throws IOException {
+    private List<Change> changes(List<ProposedChange> proposals, String kind, UpdateRequest r, StateUpdateMaterial material) throws IOException {
         int limit = switch (kind) {
             case "memory" -> ContextLimits.COLLECTION_ITEMS;
             case "goal" -> ContextLimits.COLLECTION_ITEMS;
@@ -142,18 +153,24 @@ public class StateUpdateService {
         };
         if (proposals.size() > limit)
             throw new IOException("整理变更数量超限");
-        Set<String> sources = new HashSet<>();
-        r.messages().forEach(m -> sources.add(m.id()));
         Set<String> targets = new HashSet<>();
         List<Change> changes = new ArrayList<>();
         Snapshot s = r.context().state();
-        for (ProposedChange p : proposals) {
-            if (p == null || p.action() == null || !Set.of("create", "update").contains(p.action())
+        for (ProposedChange proposal : proposals) {
+            if (proposal == null) throw new IOException("领域变更不能为空");
+            String alias = proposal.id();
+            List<String> restoredSources = new ArrayList<>();
+            for (String source : proposal.sourceMessageIds()) restoredSources.add(material.resolve("message", source));
+            String restoredId = "update".equals(proposal.action()) && !"story".equals(kind)
+                    ? material.resolve(kind, alias) : alias;
+            var p = new ProposedChange(proposal.action(), restoredId, proposal.value(), proposal.reason(),
+                    restoredSources, proposal.progressEvidence());
+            if (p.action() == null || !Set.of("create", "update").contains(p.action())
                     || p.value() == null || p.value().isNull())
                 throw new IOException("领域变更结构无效");
             StateValidation.nonblank(p.reason());
             StateValidation.sources(p.sourceMessageIds());
-            if (p.sourceMessageIds().isEmpty() || !sources.containsAll(p.sourceMessageIds()))
+            if (p.sourceMessageIds().isEmpty())
                 throw new IOException("领域变更缺少有效的新消息来源");
             boolean create = "create".equals(p.action());
             JsonNode before;
@@ -163,6 +180,7 @@ public class StateUpdateService {
                 if (create || p.id() == null || !StateValidation.STORY_FIELDS.contains(p.id()))
                     throw new IOException("剧情字段或操作无效");
 
+                material.requireWritableStory(p.id());
                 var full = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.valueToTree(s.story());
                 before = full.get(p.id());
                 full.set(p.id(), p.value());
@@ -184,6 +202,8 @@ public class StateUpdateService {
                         : s.memories().stream().filter(m -> m.id().equals(p.id())).findFirst()
                                 .orElseThrow(() -> new IOException("修改了不存在的记忆"));
 
+                if (old != null) material.requireWritableValue(kind, alias, mapper.valueToTree(old.value()),
+                        Set.of("content", "scope", "kind", "epistemicStatus", "status"));
                 if (old != null && (!old.value().scope().equals(v.scope()) || "dismissed".equals(old.value().status())))
                     throw new IOException("不能修改记忆范围或恢复人工删除记录");
                 if (old != null && "manual".equals(old.origin())) {
@@ -205,14 +225,28 @@ public class StateUpdateService {
                 value = mapper.valueToTree(v);
                 version = old == null ? 0 : old.version();
             } else {
-                var v = mapper.treeToValue(p.value(), GoalValue.class);
-                StateValidation.goal(v);
-                if ("dismissed".equals(v.status()))
-                    throw new IOException("模型不能人工删除目标");
-
                 Goal old = create ? null
                         : s.goals().stream().filter(g -> g.id().equals(p.id())).findFirst()
                                 .orElseThrow(() -> new IOException("修改了不存在的目标"));
+                if (!p.value().isObject() || p.value().isEmpty()) throw new IOException("目标更新不能为空");
+                Set<String> fields = new HashSet<>();
+                p.value().fieldNames().forEachRemaining(fields::add);
+                if (!Set.of("description", "status", "currentFocus", "progressSummary").containsAll(fields))
+                    throw new IOException("目标包含未知字段");
+                for (String field : fields)
+                    if (!p.value().path(field).isTextual()) throw new IOException("目标字段必须是字符串：" + field);
+                var merged = create ? mapper.createObjectNode()
+                        : (com.fasterxml.jackson.databind.node.ObjectNode) mapper.valueToTree(old.value());
+                if (old != null) {
+                    material.requireWritableValue(kind, alias, mapper.valueToTree(old.value()), fields);
+                    if (fields.contains("progressSummary")
+                            && !p.value().path("progressSummary").equals(merged.path("progressSummary")))
+                        material.validateEvidence(proposal.progressEvidence(), proposal.sourceMessageIds());
+                }
+                merged.setAll((com.fasterxml.jackson.databind.node.ObjectNode) p.value());
+                var v = mapper.treeToValue(merged, GoalValue.class);
+                StateValidation.goal(v);
+                if ("dismissed".equals(v.status())) throw new IOException("模型不能人工删除目标");
                 if (old != null && "dismissed".equals(old.value().status()))
                     throw new IOException("不能恢复人工删除的目标");
                 if (old != null && "manual".equals(old.origin())) {
@@ -234,8 +268,6 @@ public class StateUpdateService {
             }
             if (create && !"".equals(p.id()))
                 throw new IOException("新增领域项不能指定 ID");
-            if (p.expectedVersion() != version)
-                throw new IOException("整理变更版本无效");
             if (before.equals(value))
                 throw new IOException("整理返回了无变化的修改");
             String id = create ? UUID.randomUUID().toString() : p.id();

@@ -59,7 +59,19 @@ public class LlamaTokenCounter {
                 text.add(new Message(m.getRole(), parts));
             }
         }
-        return countText(new ChatRequest(text, request.getMaxTokens(), request.getTemperature()), images);
+        return countText(textRequest(request, text), images);
+    }
+
+    public TokenCount countTextOnly(ChatRequest request) throws IOException, InterruptedException {
+        var text = request.getMessages().stream().map(m -> m.getParts() == null ? m
+                : new Message(m.getRole(), m.getParts().stream().filter(p -> "text".equals(p.type())).toList())).toList();
+        return countText(textRequest(request, text), List.of());
+    }
+
+    private ChatRequest textRequest(ChatRequest original, List<Message> messages) {
+        var request = new ChatRequest(messages, original.getMaxTokens(), original.getTemperature(), original.isThinkingEnabled());
+        request.setResponseSchema(original.getResponseSchema());
+        return request;
     }
 
     public TokenCount countText(ChatRequest request, List<ImageMetadata> images)
