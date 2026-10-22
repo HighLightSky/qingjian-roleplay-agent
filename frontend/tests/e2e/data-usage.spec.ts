@@ -68,7 +68,7 @@ test("本地数据标题右侧刷新，存储查询不可用时仍展示统计�
   await expect(page.locator("html")).toHaveClass(/dark/);
   await expect(page.getByRole("dialog")).toHaveCSS(
     "background-color",
-    "rgb(9, 9, 11)",
+    "rgb(16, 19, 22)",
   );
   await expect(meter).toBeVisible();
   const box = await local.boundingBox();

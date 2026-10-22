@@ -474,7 +474,7 @@ function DataSettings({ open }: { open: (state: DialogState) => void }) {
             id="theme-color-hint"
             className="mt-3 text-xs leading-5 text-muted-foreground"
           >
-            主题色用于按钮、气泡与聚焦光晕。浅色侧栏轻染色，深色背景保持纯净黑灰。
+            品牌色用于按钮与聚焦光晕，消息气泡使用低饱和辅助色，侧栏以中性背景搭配主题选中色。
           </p>
         </fieldset>
       </section>

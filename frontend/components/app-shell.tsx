@@ -112,7 +112,7 @@ function SessionItem() {
   if (!title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     return null;
   return (
-    <ThreadListItemPrimitive.Root className="my-0.5 min-w-0 rounded-md transition-colors hover:bg-accent/60 data-[active=true]:bg-accent">
+    <ThreadListItemPrimitive.Root className="my-0.5 min-w-0 rounded-md transition-colors hover:bg-sidebar-accent/60 data-[active=true]:bg-sidebar-accent">
       <ThreadListItemPrimitive.Trigger className="flex min-h-12 w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-sm">
         <MessageSquareIcon className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate" title={title}>
