@@ -16,7 +16,7 @@ public record CharacterDto(String name, String identity, String description, Str
             throw new IllegalArgumentException("角色快照版本无效");
         }
         if (character.appearancePhotoAssetId() != null) {
-            com.example.service.StateValidation.id(character.appearancePhotoAssetId());
+            com.example.service.ImageIds.requireValid(character.appearancePhotoAssetId());
         }
         validateField(character.name(), "角色名称", MAX_NAME_CHARS);
         if (character.name().isBlank()) {

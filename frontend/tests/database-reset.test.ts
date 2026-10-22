@@ -14,7 +14,7 @@ test("仅旧结构升级时清空数据，新结构再次打开保留角色", as
   await old.put("characters", { id: "old", name: "旧角色" });
   old.close();
   const current = await database();
-  assert.equal(current.version, 6);
+  assert.equal(current.version, 7);
   assert.equal(await current.count("characters"), 0);
   assert.equal(
     current.objectStoreNames.contains("visualTasks" as never),
@@ -25,7 +25,7 @@ test("仅旧结构升级时清空数据，新结构再次打开保留角色", as
     identity: "",
     description: "",
   });
-  const reopened = await openDB("roleplay-agent", 6);
+  const reopened = await openDB("roleplay-agent", 7);
   assert.equal((await reopened.get("characters", character.id)).name, "新角色");
   reopened.close();
 });

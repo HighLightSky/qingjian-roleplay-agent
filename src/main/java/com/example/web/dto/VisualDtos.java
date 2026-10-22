@@ -25,7 +25,7 @@ public final class VisualDtos {
         public record CharacterPhotoSource(String characterId, int profileVersion) implements Source {
         }
 
-        /** 有损视觉观察，不等于原图全部细节；版本由服务端基于旧观察推进。 */
+        /** 有损视觉观察，不等于原图全部细节；assetId 为 imgN，版本由服务端基于旧观察推进。 */
         public record Observation(String assetId, String summary, List<String> visibleDetails,
                         List<String> extractedText, List<String> uncertainDetails, List<Source> sources,
                         int version) {
@@ -40,7 +40,7 @@ public final class VisualDtos {
         public record Usage(String messageId, String purpose) {
         }
 
-        /** 仅限当前会话的图片目录，包含元信息、观察和使用来源，不含字节。 */
+        /** assetId 使用浏览器全局递增的 imgN。仅限当前会话的图片目录，包含元信息、观察和使用来源，不含字节。 */
         public record Asset(String assetId, String sha256, String mimeType, long byteSize, int width, int height,
                         List<Source> sources, Observation observation, List<Usage> recentUses) {
         }

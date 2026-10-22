@@ -9,7 +9,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "migrate:backup": "tsx scripts/migrate-backup.ts"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.29",

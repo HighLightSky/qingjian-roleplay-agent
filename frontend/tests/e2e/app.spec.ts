@@ -62,7 +62,7 @@ test("达到70%自动压缩前30轮并保留最近10轮，原始历史不删除"
   await createRole(page);
   await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("roleplay-agent", 6);
+      const request = indexedDB.open("roleplay-agent", 7);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -142,7 +142,7 @@ test("达到70%自动压缩前30轮并保留最近10轮，原始历史不删除"
   );
   const count = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve) => {
-      const r = indexedDB.open("roleplay-agent", 6);
+      const r = indexedDB.open("roleplay-agent", 7);
       r.onsuccess = () => resolve(r.result);
     });
     try {
@@ -906,6 +906,14 @@ test("image drafts, first send, history selection and settings gallery survive r
   expect(
     calls.find((c) => c.path === "/api/chat")!.body.visual.imagePayloads,
   ).toHaveLength(1);
+  expect(
+    calls.find((c) => c.path === "/api/chat")!.body.visual.imagePayloads[0]
+      .assetId,
+  ).toBe("img1");
+  expect(
+    calls.find((c) => c.path === "/api/state/update")!.body.context.visual
+      .imagePayloads[0].assetId,
+  ).toBe("img1");
   await send(page, "看看地图里的标记");
   await expect
     .poll(() => calls.filter((c) => c.path === "/api/state/update").length)
@@ -994,6 +1002,78 @@ test("ambiguous image selection retains submitted input and exposes candidates",
   await page.reload();
   await expect(page.getByRole("textbox", { name: "消息内容" })).toHaveValue("");
   await expect(page.locator('[data-role="user"] img')).toBeVisible();
+});
+
+test("图库按图片编号数值排序后分页，img10不会排在img2之前", async ({
+  page,
+}) => {
+  await createRole(page);
+  await page.evaluate(async () => {
+    const assets = [];
+    for (let index = 1; index <= 13; index++) {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = `rgb(${index}, 0, 0)`;
+      context.fillRect(0, 0, 1, 1);
+      const blob = await new Promise<Blob>((resolve) =>
+        canvas.toBlob((value) => resolve(value!), "image/png"),
+      );
+      const digest = new Uint8Array(
+        await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()),
+      );
+      assets.push({
+        id: `img${index}`,
+        sha256: Array.from(digest, (byte) =>
+          byte.toString(16).padStart(2, "0"),
+        ).join(""),
+        mimeType: "image/png",
+        byteSize: blob.size,
+        width: 1,
+        height: 1,
+        displayName: `image-${index}.png`,
+        originalBlob: blob,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("roleplay-agent", 7);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      const tx = db.transaction(["assets", "settings"], "readwrite");
+      for (const asset of assets) tx.objectStore("assets").put(asset);
+      tx.objectStore("settings").put({
+        key: "imageAssetSequence",
+        value: "13",
+      });
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error);
+      });
+    } finally {
+      db.close();
+    }
+  });
+  await nav(page);
+  await page.getByRole("button", { name: "设置与数据", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^查看 image-/ })).toHaveText(
+    Array.from({ length: 12 }, (_, index) => `image-${index + 1}.png`),
+  );
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^查看 image-/ })).toHaveText([
+    "image-13.png",
+  ]);
+  await page
+    .getByRole("button", { name: "查看 image-13.png", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "image-13.png", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("img", { name: "image-13.png", exact: true }).last(),
+  ).toBeVisible();
 });
 
 test("retrying a failed reply keeps one saved user input", async ({ page }) => {
@@ -1275,7 +1355,7 @@ test("角色照片草稿恢复、首次原图、后续选图与旧会话快照",
   );
   expect(inspections).toBe(0);
   const first = chats[0];
-  expect(first.character.appearancePhotoAssetId).toBeTruthy();
+  expect(first.character.appearancePhotoAssetId).toBe("img1");
   expect(first.visual.imagePayloads).toHaveLength(1);
   expect(first.visual.assetCatalog[0].sources[0].type).toBe("character_photo");
   expect(first.input.parts).toBeUndefined();

@@ -1,5 +1,7 @@
 "use client";
 
+import { IMAGE_SEQUENCE_KEY } from "@/lib/images/ids";
+
 import { validateStory, validateGoalValue } from "@/lib/state/validation";
 
 import { create } from "zustand";
@@ -889,6 +891,9 @@ export async function clearData() {
     const database = await db.database();
     const tx = database.transaction(db.TABLES, "readwrite");
     for (const table of db.TABLES) await tx.objectStore(table).clear();
+    await tx
+      .objectStore("settings")
+      .put({ key: IMAGE_SEQUENCE_KEY, value: "0" });
     await tx.done;
   });
   ++selection;

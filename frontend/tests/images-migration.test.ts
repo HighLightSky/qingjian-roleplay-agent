@@ -59,6 +59,9 @@ test("v5视觉来源在同一升级事务中转换，保留原件、观察版本
   const catalog = [{ assetId: "image", sources: [source], observation }];
   const context = {
     character: profile,
+    input: { text: "" },
+    history: [],
+    summary: { text: "", throughSeq: 0, version: 0 },
     visual: {
       sessionId: "session",
       assetCatalog: catalog,
@@ -77,6 +80,7 @@ test("v5视觉来源在同一升级事务中转换，保留原件、观察版本
     characterSnapshot: profile,
     profileVersion: 7,
     story: EMPTY_STORY,
+    summary: { text: "", throughSeq: 0, version: 0 },
   });
   await old.put("messages", {
     id: "upload",
@@ -106,7 +110,10 @@ test("v5视觉来源在同一升级事务中转换，保留原件、观察版本
     id: "select",
     sessionId: "session",
     kind: "selection",
-    result: { catalog },
+    result: {
+      catalog,
+      plan: { selectedHistoricalImages: [], candidateAssetIds: [] },
+    },
   });
   await old.put("operations", {
     id: "state",
@@ -141,7 +148,7 @@ test("v5视觉来源在同一升级事务中转换，保留原件、观察版本
 
   const upgraded = await database();
   const expected = [{ type: "message", ...source }];
-  const current = (await upgraded.get("visualObservations", "session:image"))!;
+  const current = (await upgraded.get("visualObservations", "session:img1"))!;
   assert.equal(current.version, 3);
   assert.deepEqual(current.sources, expected);
   assert.equal("sourceMessageIds" in current, false);
@@ -161,7 +168,7 @@ test("v5视觉来源在同一升级事务中转换，保留原件、观察版本
   assert.ok("visualObservations" in state);
   assert.deepEqual(state.visualObservations[0].sources, expected);
   assert.equal(
-    await (await upgraded.get("assets", "image"))!.originalBlob.text(),
+    await (await upgraded.get("assets", "img1"))!.originalBlob.text(),
     "原件",
   );
 });

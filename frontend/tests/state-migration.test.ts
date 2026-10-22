@@ -58,6 +58,7 @@ test("v3 升级事务一次性转换目标、剧情、待办和缓存结果，�
   };
   await old.put("sessions", {
     id: "session",
+    characterSnapshot: { name: "林溪", identity: "", description: "" },
     profileVersion: 1,
     story,
     storySources: {},
@@ -130,7 +131,7 @@ test("v3 升级事务一次性转换目标、剧情、待办和缓存结果，�
   rolledBack.close();
 
   const upgraded = await database();
-  assert.equal(upgraded.version, 6);
+  assert.equal(upgraded.version, 7);
   const migratedGoal = (await upgraded.get("goals", "goal"))!;
   validateGoalValue(migratedGoal.value);
   assert.deepEqual(Object.keys(migratedGoal.value).sort(), [
@@ -174,7 +175,7 @@ test("v3 升级事务一次性转换目标、剧情、待办和缓存结果，�
     ...migratedGoal,
     value: { ...migratedGoal.value, progressSummary: "升级后继续推进的内容" },
   });
-  const reopened = await openDB("roleplay-agent", 6);
+  const reopened = await openDB("roleplay-agent", 7);
   assert.equal(
     (await reopened.get("goals", "goal")).value.progressSummary,
     "升级后继续推进的内容",

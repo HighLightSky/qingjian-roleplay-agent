@@ -1,3 +1,4 @@
+import { IMAGE_SEQUENCE_KEY, imageSequence } from "../lib/images/ids";
 import { contextFixture } from "./context-fixture";
 import { emptyStateResult } from "./state-fixture";
 import "fake-indexeddb/auto";
@@ -52,6 +53,7 @@ beforeEach(async () => {
   const db = await database();
   const tx = db.transaction(TABLES, "readwrite");
   for (const table of TABLES) await tx.objectStore(table).clear();
+  await tx.objectStore("settings").put({ key: IMAGE_SEQUENCE_KEY, value: "0" });
   await tx.done;
   useAppStore.setState({
     ready: true,
@@ -76,7 +78,7 @@ async function setup() {
   useAppStore.setState({ sessionId: session.id, characterId: character.id });
   return { character, session };
 }
-async function asset(id = "image"): Promise<ImageAsset> {
+async function asset(id = "img1"): Promise<ImageAsset> {
   const value: ImageAsset = {
     id,
     sha256: sha256(png),
@@ -89,6 +91,12 @@ async function asset(id = "image"): Promise<ImageAsset> {
     createdAt: now(),
   };
   await (await database()).put("assets", value);
+  await (
+    await database()
+  ).put("settings", {
+    key: IMAGE_SEQUENCE_KEY,
+    value: String(imageSequence(id)),
+  });
   return value;
 }
 function mockFetch() {
@@ -205,13 +213,13 @@ test("catalog retains archived images and never imports another session's refere
   await asset();
   await beginTurn(session.id, "原图", [
     { type: "text", text: "原图" },
-    { type: "image", assetId: "image" },
+    { type: "image", assetId: "img1" },
   ]);
   for (let i = 0; i < 30; i++) await beginTurn(session.id, `第 ${i} 轮`);
   const other = await createSession(character.id);
   await beginTurn(other.id, "同一 Blob", [
     { type: "text", text: "同一 Blob" },
-    { type: "image", assetId: "image" },
+    { type: "image", assetId: "img1" },
   ]);
   const catalog = await buildCatalog(session.id, await allMessages(session.id));
   assert.equal(catalog.length, 1);
@@ -222,9 +230,9 @@ test("catalog retains archived images and never imports another session's refere
     1,
   );
   await deleteSession(session.id);
-  assert.ok(await (await database()).get("assets", "image"));
+  assert.ok(await (await database()).get("assets", "img1"));
   await deleteSession(other.id);
-  assert.equal(await (await database()).get("assets", "image"), undefined);
+  assert.equal(await (await database()).get("assets", "img1"), undefined);
 });
 test("visual failures preserve completed text and durable task; next turn recovers before selection", async () => {
   const { session } = await setup();
@@ -232,7 +240,7 @@ test("visual failures preserve completed text and durable task; next turn recove
   const restore = mockFetch();
   try {
     failVisual = true;
-    await sendMessage("", [{ type: "image", assetId: "image" }]);
+    await sendMessage("", [{ type: "image", assetId: "img1" }]);
     const db = await database();
     assert.equal((await allMessages(session.id)).at(-1)?.status, "complete");
     assert.equal(await db.count("stateTasks"), 1);
@@ -267,7 +275,7 @@ test("retry reuses the saved user message instead of appending a second image in
   const restore = mockFetch();
   try {
     failChat = true;
-    await sendMessage("", [{ type: "image", assetId: "image" }]);
+    await sendMessage("", [{ type: "image", assetId: "img1" }]);
     const user = (await allMessages(session.id))[0];
     failChat = false;
     await retryLastMessage();
@@ -283,19 +291,19 @@ test("retry reuses the saved user message instead of appending a second image in
     restore();
   }
 });
-test("v5 backup restores original bytes and rejects damaged originals before replacing data", async () => {
+test("v8 backup restores original bytes and rejects damaged originals before replacing data", async () => {
   const { session } = await setup();
   const a = await asset();
   await beginTurn(session.id, "", [{ type: "image", assetId: a.id }]);
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 7);
+  assert.equal(backup.formatVersion, 8);
   await restoreSnapshot(backup);
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
   const invalid = structuredClone(backup);
   invalid.data.assets[0].base64 = "AAAA";
   await assert.rejects(restoreSnapshot(invalid));
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
-  for (const formatVersion of [1, 2, 3, 4, 5, 6])
+  for (const formatVersion of [1, 2, 3, 4, 5, 6, 7])
     assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
 });
 test("ambiguous selection and cancellation preserve submitted input and never generate a reply", async () => {
@@ -303,7 +311,7 @@ test("ambiguous selection and cancellation preserve submitted input and never ge
   await asset();
   await beginTurn(session.id, "地图", [
     { type: "text", text: "地图" },
-    { type: "image", assetId: "image" },
+    { type: "image", assetId: "img1" },
   ]);
   const base = chatContext(
     character,
@@ -320,7 +328,7 @@ test("ambiguous selection and cancellation preserve submitted input and never ge
         operationId: base.operationId,
         status: "ambiguous",
         selectedHistoricalImages: [],
-        candidateAssetIds: ["image"],
+        candidateAssetIds: ["img1"],
         message: "你指哪张？",
       });
     await assert.rejects(
@@ -377,7 +385,7 @@ test("background visual calls do not block local draft writes", async () => {
     }
     return mocked(input, init);
   };
-  const run = sendMessage("", [{ type: "image", assetId: "image" }]);
+  const run = sendMessage("", [{ type: "image", assetId: "img1" }]);
   try {
     await pending;
     scheduleDraft(session.id, "下一轮草稿");
@@ -408,9 +416,9 @@ test("background visual calls do not block local draft writes", async () => {
 
 async function setupPhoto() {
   const { character } = await setup();
-  await asset("photo");
+  await asset("img2");
   const updated = await saveCharacter(
-    { ...character, appearancePhotoAssetId: "photo" },
+    { ...character, appearancePhotoAssetId: "img2" },
     character,
   );
   const session = await createSession(updated.id);
@@ -428,7 +436,7 @@ test("角色照片首次随正文直传，观察独立保存，纯文字后续�
       0,
     );
     const first = calls.find((c) => c.path === "/api/chat")!.body;
-    assert.equal(first.visual.imagePayloads[0].assetId, "photo");
+    assert.equal(first.visual.imagePayloads[0].assetId, "img2");
     assert.equal(first.character.profileVersion, character.profileVersion);
     assert.deepEqual(first.visual.assetCatalog[0].sources, [
       {
@@ -462,7 +470,7 @@ test("角色照片首次随正文直传，观察独立保存，纯文字后续�
     assert.equal(
       calls.filter((c) => c.path === "/api/chat").at(-1)!.body.visual
         .imagePayloads[0].assetId,
-      "photo",
+      "img2",
     );
     const other = await createSession(character.id);
     const catalog = await buildCatalog(other.id, []);
@@ -498,7 +506,7 @@ test("首次照片整理失败保留原图任务，备份恢复后先整理再�
       "anchor",
       async () => {},
     );
-    assert.equal(prepared.visual!.imagePayloads[0].assetId, "photo");
+    assert.equal(prepared.visual!.imagePayloads[0].assetId, "img2");
     failVisual = false;
     calls = [];
     await sendMessage("不需要图片");
@@ -528,19 +536,19 @@ test("照片修改和移除只影响新会话，旧快照与角色草稿保护�
   const next = await createSession(character.id);
   assert.equal(updated.profileVersion, character.profileVersion + 1);
   assert.equal(next.characterSnapshot.appearancePhotoAssetId, undefined);
-  assert.equal((await buildCatalog(session.id, []))[0].assetId, "photo");
+  assert.equal((await buildCatalog(session.id, []))[0].assetId, "img2");
   const backup = await takeSnapshot();
   await restoreSnapshot(backup);
   const invalid = structuredClone(backup);
   invalid.data.sessions.find(
     (s) => s.id === session.id,
-  )!.characterSnapshot.appearancePhotoAssetId = "missing";
+  )!.characterSnapshot.appearancePhotoAssetId = "img99";
   await assert.rejects(restoreSnapshot(invalid), /照片原件缺失/);
-  assert.ok(await db.get("assets", "photo"));
+  assert.ok(await db.get("assets", "img2"));
   await deleteSession(session.id);
-  assert.ok(await db.get("assets", "photo"));
+  assert.ok(await db.get("assets", "img2"));
   await discardCharacterDraft(key);
-  assert.equal(await db.get("assets", "photo"), undefined);
+  assert.equal(await db.get("assets", "img2"), undefined);
 });
 
 test("同一原图兼作角色照片与聊天上传时只传一次，保留两种来源且上传编号从一开始", async () => {
@@ -549,7 +557,7 @@ test("同一原图兼作角色照片与聊天上传时只传一次，保留两�
   try {
     await sendMessage("这张参考图", [
       { type: "text", text: "这张参考图" },
-      { type: "image", assetId: "photo" },
+      { type: "image", assetId: "img2" },
     ]);
     const body = calls.find((c) => c.path === "/api/chat")!.body;
     assert.equal(body.visual.imagePayloads.length, 1);
@@ -686,7 +694,7 @@ test("缺失原图、视觉关闭和必需照片名额不足均停止生成", as
       ),
       /数量超限/,
     );
-    await (await database()).delete("assets", "photo");
+    await (await database()).delete("assets", "img2");
     await assert.rejects(
       loadPayloads(base, new AbortController().signal),
       /原图缺失/,
@@ -724,7 +732,7 @@ test("替换照片的保存失败原子回滚，成功后新旧会话分别持�
       (task) => task(),
       new AbortController().signal,
     );
-    assert.notEqual(profile.appearancePhotoAssetId, "photo");
+    assert.notEqual(profile.appearancePhotoAssetId, "img2");
     const remove = IDBObjectStore.prototype.delete;
     IDBObjectStore.prototype.delete = function (
       ...args: Parameters<typeof remove>
@@ -744,7 +752,7 @@ test("替换照片的保存失败原子回滚，成功后新旧会话分别持�
     const db = await database();
     assert.equal(
       (await db.get("characters", character.id))!.appearancePhotoAssetId,
-      "photo",
+      "img2",
     );
     assert.ok(await db.get("settings", key));
     assert.equal(await db.count("assets"), 2);
@@ -754,10 +762,10 @@ test("替换照片的保存失败原子回滚，成功后新旧会话分别持�
       next.characterSnapshot.appearancePhotoAssetId,
       updated.appearancePhotoAssetId,
     );
-    assert.equal((await buildCatalog(session.id, []))[0].assetId, "photo");
+    assert.equal((await buildCatalog(session.id, []))[0].assetId, "img2");
     await restoreSnapshot(await takeSnapshot());
     await deleteSession(session.id);
-    assert.equal(await db.get("assets", "photo"), undefined);
+    assert.equal(await db.get("assets", "img2"), undefined);
     assert.ok(await db.get("assets", updated.appearancePhotoAssetId!));
   } finally {
     restore();

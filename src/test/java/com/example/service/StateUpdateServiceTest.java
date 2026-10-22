@@ -70,13 +70,13 @@ class StateUpdateServiceTest {
     }
 
     private UpdateRequest photoRequest() throws Exception {
-        var payload = payload("photo");
-        var photo = new Asset("photo", payload.sha256(), "image/png",
+        var payload = payload("img2");
+        var photo = new Asset("img2", payload.sha256(), "image/png",
                 Base64.getDecoder().decode(payload.dataUrl().split(",")[1]).length, 3, 2,
                 List.of(new CharacterPhotoSource("character", 4)), null, List.of());
         var base = request();
         var c = base.context();
-        var context = new ChatApiRequest(new CharacterDto("林溪", "旧友", "银发", "photo", 4), c.state(),
+        var context = new ChatApiRequest(new CharacterDto("林溪", "旧友", "银发", "img2", 4), c.state(),
                 c.summary(), c.history(), c.input(), c.interactionSettings(),
                 new Context("session", List.of(photo), null, List.of(payload)), c.operationId());
         return new UpdateRequest(base.operationId(), context, base.fromExclusiveSeq(), base.throughSeq(), base.messages());
@@ -235,11 +235,11 @@ class StateUpdateServiceTest {
     @Test void actualImagesAndAllDomainsUseOneCallWithTrustedObservationSources() throws Exception {
         var bytes = new ByteArrayOutputStream();
         ImageIO.write(new BufferedImage(3, 2, BufferedImage.TYPE_INT_RGB), "png", bytes);
-        var payload = new Payload("image", ImageValidationService.sha256(bytes.toByteArray()),
+        var payload = new Payload("img1", ImageValidationService.sha256(bytes.toByteArray()),
                 "data:image/png;base64," + Base64.getEncoder().encodeToString(bytes.toByteArray()));
         var r = request(TestRequests.state(List.of()), List.of(new ContentPartDto("text", "我们到了旅馆", null),
-                new ContentPartDto("image", null, "image")), List.of(payload));
-        String observation = "{\"assetId\":\"image\",\"summary\":\"地图\",\"visibleDetails\":[\"红点\"],\"extractedText\":[],\"uncertainDetails\":[\"小字不清\"],\"sources\":[],\"version\":99}";
+                new ContentPartDto("image", null, "img1")), List.of(payload));
+        String observation = "{\"assetId\":\"img1\",\"summary\":\"地图\",\"visibleDetails\":[\"红点\"],\"extractedText\":[],\"uncertainDetails\":[\"小字不清\"],\"sources\":[],\"version\":99}";
         answer(output("[" + change("location", "\"旅馆\"") + "]", "[]", "[]").replace("\"visualObservations\":[]", "\"visualObservations\":[" + observation + "]"));
         var result = service.update(r);
         assertEquals(1, result.visualObservations().getFirst().version());
@@ -261,7 +261,7 @@ class StateUpdateServiceTest {
     }
     @Test void photoObservationHasTrueProfileSourceWithoutInventingUploadMessage() throws Exception {
         var r = photoRequest();
-        answer(observations("photo"));
+        answer(observations("img2"));
         var result = service.update(r);
         assertEquals(List.of(new CharacterPhotoSource("character", 4)), result.visualObservations().getFirst().sources());
         assertEquals(1, result.visualObservations().getFirst().version());
@@ -272,7 +272,7 @@ class StateUpdateServiceTest {
                 .filter(p -> "image_url".equals(p.type())).findFirst().orElseThrow().imageUrl());
         var material = captor.getValue().getMessages().getLast().getParts().getFirst().text();
         var data = mapper.readTree(material.substring(material.indexOf('{')));
-        assertEquals(mapper.valueToTree(List.of("photo")), data.path("actualImageAssetIds"));
+        assertEquals(mapper.valueToTree(List.of("img2")), data.path("actualImageAssetIds"));
         assertFalse(material.contains("base64"));
     }
 
@@ -280,11 +280,11 @@ class StateUpdateServiceTest {
         var r = photoRequest();
         when(model.chat(any())).thenReturn(
                 new ChatResponse(observations("character_photo"), "stop", TokenUsage.unavailable()),
-                new ChatResponse(observations("photo"), "stop", TokenUsage.unavailable()));
+                new ChatResponse(observations("img2"), "stop", TokenUsage.unavailable()));
 
         var result = service.update(r);
 
-        assertEquals("photo", result.visualObservations().getFirst().assetId());
+        assertEquals("img2", result.visualObservations().getFirst().assetId());
         assertEquals(List.of(new CharacterPhotoSource("character", 4)), result.visualObservations().getFirst().sources());
         var captor = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(model, times(2)).chat(captor.capture());
@@ -296,14 +296,14 @@ class StateUpdateServiceTest {
         }
         String correction = captor.getAllValues().getLast().getMessages().getLast().getContent();
         assertTrue(correction.contains("未传入的原图：character_photo"));
-        assertTrue(correction.contains("本次原图 ID：[photo]"));
+        assertTrue(correction.contains("本次原图 ID：[img2]"));
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"missing", "null"})
     void correctsMissingAssetIdUsingRejectedResultAndConcreteTemplate(String invalidId) throws Exception {
         var r = photoRequest();
-        var invalid = mapper.readTree(observations("photo"));
+        var invalid = mapper.readTree(observations("img2"));
         var observation = (com.fasterxml.jackson.databind.node.ObjectNode) invalid.path("visualObservations").get(0);
         if ("missing".equals(invalidId)) {
             observation.remove("assetId");
@@ -313,11 +313,11 @@ class StateUpdateServiceTest {
         String rejected = invalid.toString();
         when(model.chat(any())).thenReturn(
                 new ChatResponse(rejected, "stop", TokenUsage.unavailable()),
-                new ChatResponse(observations("photo"), "stop", TokenUsage.unavailable()));
+                new ChatResponse(observations("img2"), "stop", TokenUsage.unavailable()));
 
         var result = service.update(r);
 
-        assertEquals("photo", result.visualObservations().getFirst().assetId());
+        assertEquals("img2", result.visualObservations().getFirst().assetId());
         assertEquals(List.of(new CharacterPhotoSource("character", 4)), result.visualObservations().getFirst().sources());
         var captor = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(model, times(2)).chat(captor.capture());
@@ -330,18 +330,18 @@ class StateUpdateServiceTest {
         assertEquals(r.context().visual().imagePayloads().getFirst().dataUrl(), parts.stream()
                 .filter(p -> "image_url".equals(p.type())).findFirst().orElseThrow().imageUrl());
         String template = parts.getLast().text();
-        assertEquals("photo", mapper.readTree(template.substring(template.indexOf('{')))
+        assertEquals("img2", mapper.readTree(template.substring(template.indexOf('{')))
                 .path("visualObservations").get(0).path("assetId").asText());
     }
 
     @Test void rejectsPersistentUnknownDuplicateAndMissingImageReferencesWithoutSubstitution() throws Exception {
         var r = photoRequest();
         Map<String, String> invalid = Map.of(
-                observations("foreign-photo"), "未传入的原图：foreign-photo",
+                observations("img99"), "未传入的原图：img99",
                 observations((String) null), "未传入的原图：null",
-                observations("photo").replace("\"assetId\":\"photo\",", ""), "未传入的原图：null",
-                observations("photo", "photo"), "重复返回视觉观察：photo",
-                observations(), "缺少本次原图：[photo]");
+                observations("img2").replace("\"assetId\":\"img2\",", ""), "未传入的原图：null",
+                observations("img2", "img2"), "重复返回视觉观察：img2",
+                observations(), "缺少本次原图：[img2]");
         for (var entry : invalid.entrySet()) {
             clearInvocations(model);
             answer(entry.getKey());
@@ -356,11 +356,11 @@ class StateUpdateServiceTest {
         var c = base.context();
         var context = new ChatApiRequest(c.character(), c.state(), c.summary(), c.history(),
                 new InputDto(c.input().text(), List.of(ContentPartDto.text(c.input().text()),
-                        new ContentPartDto("image", null, "photo"),
-                        new ContentPartDto("image", null, "attachment"))), c.interactionSettings(),
+                        new ContentPartDto("image", null, "img2"),
+                        new ContentPartDto("image", null, "img3"))), c.interactionSettings(),
                 new Context("session", c.visual().assetCatalog(), null,
-                        List.of(payload("photo"), payload("attachment"))), c.operationId());
-        answer(observations("attachment", "photo"));
+                        List.of(payload("img2"), payload("img3"))), c.operationId());
+        answer(observations("img3", "img2"));
 
         var result = service.update(new UpdateRequest(base.operationId(), context, base.fromExclusiveSeq(),
                 base.throughSeq(), base.messages()));
@@ -375,13 +375,13 @@ class StateUpdateServiceTest {
         var parts = captor.getValue().getMessages().getLast().getParts();
         assertEquals(2, parts.stream().filter(p -> "image_url".equals(p.type())).count());
         var material = parts.getFirst().text();
-        assertEquals(mapper.valueToTree(List.of("photo", "attachment")),
+        assertEquals(mapper.valueToTree(List.of("img2", "img3")),
                 mapper.readTree(material.substring(material.indexOf('{'))).path("actualImageAssetIds"));
         String template = parts.getLast().text();
         var templateObservations = mapper.readTree(template.substring(template.indexOf('{'))).path("visualObservations");
         assertEquals(2, templateObservations.size());
-        assertEquals("photo", templateObservations.get(0).path("assetId").asText());
-        assertEquals("attachment", templateObservations.get(1).path("assetId").asText());
+        assertEquals("img2", templateObservations.get(0).path("assetId").asText());
+        assertEquals("img3", templateObservations.get(1).path("assetId").asText());
     }
 
     @Test void upstreamFailureDoesNotTriggerOutputCorrection() throws Exception {

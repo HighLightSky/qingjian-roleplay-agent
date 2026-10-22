@@ -1,3 +1,4 @@
+import { IMAGE_SEQUENCE_KEY } from "../lib/images/ids";
 import "fake-indexeddb/auto";
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
@@ -33,6 +34,7 @@ beforeEach(async () => {
   const db = await database();
   const tx = db.transaction(TABLES, "readwrite");
   for (const table of TABLES) await tx.objectStore(table).clear();
+  await tx.objectStore("settings").put({ key: IMAGE_SEQUENCE_KEY, value: "0" });
   await tx.done;
 });
 async function setup() {

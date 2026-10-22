@@ -1,3 +1,9 @@
+import {
+  assertImageId,
+  imageSequence,
+  IMAGE_SEQUENCE_KEY,
+  readImageSequence,
+} from "./images/ids";
 import type { StateTask, Operation, Goal } from "./state/types";
 import type { CompactionTask } from "./context/types";
 import {
@@ -62,7 +68,7 @@ export type Snapshot = {
 };
 export type Backup = {
   format: "roleplay-agent-backup";
-  formatVersion: 7;
+  formatVersion: 8;
   exportedAt: string;
   data: Snapshot;
 };
@@ -75,7 +81,7 @@ export function validateBackup(value: unknown): Backup {
   object(value);
   if (new Blob([JSON.stringify(value)]).size > 50 * 1024 * 1024)
     throw new Error("备份不能超过 50 MiB。");
-  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 7)
+  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 8)
     throw new Error("不支持此备份格式或版本，请选择本应用导出的文件。");
   date(value.exportedAt);
   object(value.data);
@@ -256,7 +262,7 @@ export function validateBackup(value: unknown): Backup {
   validateImages(snapshot);
   return {
     format: "roleplay-agent-backup",
-    formatVersion: 7,
+    formatVersion: 8,
     exportedAt: value.exportedAt as string,
     data: snapshot,
   };
@@ -273,7 +279,13 @@ function validateImages(snapshot: Snapshot) {
   const hashes = new Set<string>();
   const messages = new Map(snapshot.messages.map((m) => [m.id, m]));
   const sessions = new Set(snapshot.sessions.map((s) => s.id));
+  const sequence = readImageSequence(
+    snapshot.settings.find((s) => s.key === IMAGE_SEQUENCE_KEY),
+  );
   for (const a of snapshot.assets) {
+    assertImageId(a.id);
+    if (imageSequence(a.id) > sequence)
+      throw new Error(`图片编号 ${a.id} 超过全局计数器。`);
     string(a.sha256, 64);
     string(a.mimeType, 100);
     string(a.displayName, 1000);
@@ -787,7 +799,7 @@ export async function takeSnapshot(): Promise<Backup> {
   }
   const backup: Backup = {
     format: "roleplay-agent-backup",
-    formatVersion: 7,
+    formatVersion: 8,
     exportedAt: new Date().toISOString(),
     data: { ...data, assets: serialized },
   };
@@ -813,10 +825,22 @@ export async function restoreSnapshot(backup: Backup) {
   const db = await database();
   const tx = db.transaction(TABLES, "readwrite");
   await atomic(tx, async () => {
+    const sequence = Math.max(
+      readImageSequence(
+        await tx.objectStore("settings").get(IMAGE_SEQUENCE_KEY),
+      ),
+      Number(
+        validated.data.settings.find((s) => s.key === IMAGE_SEQUENCE_KEY)!
+          .value,
+      ),
+    );
     for (const table of TABLES) {
       await tx.objectStore(table).clear();
       const rows = table === "assets" ? assets : validated.data[table];
       for (const row of rows) await tx.objectStore(table).put(row);
     }
+    await tx
+      .objectStore("settings")
+      .put({ key: IMAGE_SEQUENCE_KEY, value: String(sequence) });
   });
 }

@@ -1,7 +1,8 @@
 import type { Commit } from "./types";
 import { database, TABLES, collectUnreferenced, atomic } from "../db";
-import { id, now, parseCharacterProfile } from "../domain";
+import { now, parseCharacterProfile } from "../domain";
 import { sha256 } from "./hash";
+import { allocateImageId, type ImageWriteTransaction } from "./ids";
 import { imageIds, type Capabilities, type ImageAsset } from "./types";
 
 export const DEFAULT_LIMITS = {
@@ -130,22 +131,25 @@ async function inspectFile(file: File) {
   const info = await validateImageBlob(file, caps);
   return { caps, info };
 }
-function imageAsset(
+async function getOrCreateImageAsset(
+  tx: ImageWriteTransaction,
   file: File,
   info: Awaited<ReturnType<typeof validateImageBlob>>,
-  existing?: ImageAsset,
-): ImageAsset {
-  return (
-    existing ?? {
-      id: id(),
-      ...info,
-      mimeType: file.type,
-      byteSize: file.size,
-      displayName: file.name,
-      originalBlob: file,
-      createdAt: now(),
-    }
-  );
+): Promise<ImageAsset> {
+  const assets = tx.objectStore("assets");
+  const existing = await assets.index("sha256").get(info.sha256);
+  if (existing) return existing;
+  const asset: ImageAsset = {
+    id: await allocateImageId(tx),
+    ...info,
+    mimeType: file.type,
+    byteSize: file.size,
+    displayName: file.name,
+    originalBlob: file,
+    createdAt: now(),
+  };
+  await assets.add(asset);
+  return asset;
 }
 export async function prepareImage(
   file: File,
@@ -155,31 +159,30 @@ export async function prepareImage(
   const { caps, info } = await inspectFile(file);
   return commit(async () => {
     const db = await database();
-    const tx = db.transaction(["assets", "drafts", "sessions"], "readwrite");
-    if (!(await tx.objectStore("sessions").get(sessionId)))
-      throw new Error("会话不存在。");
-    const draft = (await tx.objectStore("drafts").get(sessionId)) ?? {
-      sessionId,
-      text: "",
-      updatedAt: now(),
-    };
-    if (imageIds(draft.parts).length >= caps.maxImages)
-      throw new Error(`每条消息最多 ${caps.maxImages} 张图片。`);
-    const existing = await tx
-      .objectStore("assets")
-      .index("sha256")
-      .get(info.sha256);
-    const asset = imageAsset(file, info, existing);
-    if (imageIds(draft.parts).includes(asset.id))
-      throw new Error("该图片已经在草稿中。");
-    await tx.objectStore("assets").put(asset);
-    await tx.objectStore("drafts").put({
-      ...draft,
-      parts: [...(draft.parts ?? []), { type: "image", assetId: asset.id }],
-      updatedAt: now(),
+    const tx = db.transaction(
+      ["assets", "settings", "drafts", "sessions"],
+      "readwrite",
+    );
+    return atomic(tx, async () => {
+      if (!(await tx.objectStore("sessions").get(sessionId)))
+        throw new Error("会话不存在。");
+      const draft = (await tx.objectStore("drafts").get(sessionId)) ?? {
+        sessionId,
+        text: "",
+        updatedAt: now(),
+      };
+      if (imageIds(draft.parts).length >= caps.maxImages)
+        throw new Error(`每条消息最多 ${caps.maxImages} 张图片。`);
+      const asset = await getOrCreateImageAsset(tx, file, info);
+      if (imageIds(draft.parts).includes(asset.id))
+        throw new Error("该图片已经在草稿中。");
+      await tx.objectStore("drafts").put({
+        ...draft,
+        parts: [...(draft.parts ?? []), { type: "image", assetId: asset.id }],
+        updatedAt: now(),
+      });
+      return asset;
     });
-    await tx.done;
-    return asset;
   });
 }
 /** 原件与草稿引用在同一事务保存，准备完成后没有无引用窗口。 */
@@ -200,14 +203,9 @@ export async function prepareCharacterPhoto(
       const draft = await tx.objectStore("settings").get(draftKey);
       if (!draft) throw new Error("角色草稿已关闭或移除，请重新打开编辑。");
       const profile = parseCharacterProfile(JSON.parse(draft.value), true);
-      const existing = await tx
-        .objectStore("assets")
-        .index("sha256")
-        .get(info.sha256);
-      const asset = imageAsset(file, info, existing);
+      const asset = await getOrCreateImageAsset(tx, file, info);
       const updated = { ...profile, appearancePhotoAssetId: asset.id };
       signal.throwIfAborted();
-      await tx.objectStore("assets").put(asset);
       await tx
         .objectStore("settings")
         .put({ key: draftKey, value: JSON.stringify(updated) });

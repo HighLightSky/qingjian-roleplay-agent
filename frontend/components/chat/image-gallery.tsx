@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { database } from "@/lib/db";
 import { imageIds, type ImageAsset } from "@/lib/images/types";
+import { imageSequence } from "@/lib/images/ids";
 import { useImageUrl } from "@/hooks/use-image-url";
 import { Button } from "@/components/ui/button";
 import {
@@ -118,14 +119,15 @@ export function ImageGallery() {
         const values: Metadata[] = [];
         while (cursor) {
           const { originalBlob, thumbnailBlob, ...meta } = cursor.value;
-          if (count >= page * 12 && count < (page + 1) * 12) values.push(meta);
+          values.push(meta);
           count++;
           bytes += meta.byteSize;
           cursor = await cursor.continue();
         }
         await tx.done;
         if (!disposed) {
-          setAssets(values);
+          values.sort((a, b) => imageSequence(a.id) - imageSequence(b.id));
+          setAssets(values.slice(page * 12, (page + 1) * 12));
           setStats({ count, bytes });
         }
       })

@@ -1,3 +1,4 @@
+import { IMAGE_SEQUENCE_KEY } from "../lib/images/ids";
 import { contextFixture } from "./context-fixture";
 import { emptyStateResult } from "./state-fixture";
 import "fake-indexeddb/auto";
@@ -21,6 +22,7 @@ import {
   EMPTY_PROFILE,
   DEFAULT_INTERACTION_SETTINGS,
   parseInteractionSettings,
+  parseCharacterProfile,
   appendDelta,
   plainText,
   titleFrom,
@@ -41,6 +43,7 @@ beforeEach(async () => {
   const db = await database();
   const tx = db.transaction(TABLES, "readwrite");
   await Promise.all(TABLES.map((table) => tx.objectStore(table).clear()));
+  await tx.objectStore("settings").put({ key: IMAGE_SEQUENCE_KEY, value: "0" });
   await tx.done;
   useAppStore.setState({
     ready: true,
@@ -123,9 +126,9 @@ test("备份拒绝旧版本、无效角色草稿和快照，空名字草稿可�
   await setup();
   await setting("characterDraft:new", JSON.stringify(EMPTY_PROFILE));
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 7);
+  assert.equal(backup.formatVersion, 8);
   validateBackup(structuredClone(backup));
-  for (const formatVersion of [1, 2, 3, 4, 5, 6])
+  for (const formatVersion of [1, 2, 3, 4, 5, 6, 7])
     assert.throws(() => validateBackup({ ...backup, formatVersion }), /版本/);
   for (const field of ["name", "identity", "description"] as const) {
     const invalid = structuredClone(backup);
@@ -578,5 +581,26 @@ test("streaming decodes split UTF-8 and requires a terminal done event", async (
     );
   } finally {
     globalThis.fetch = original;
+  }
+});
+
+test("角色照片入口拒绝旧编号、前导零和尾随换行", () => {
+  for (const appearancePhotoAssetId of [
+    "00000000-0000-4000-8000-000000000001",
+    "img0",
+    "img01",
+    "img1\n",
+    "img1\r",
+    "img1\u2028",
+  ]) {
+    assert.throws(
+      () =>
+        parseCharacterProfile({
+          ...EMPTY_PROFILE,
+          name: "林溪",
+          appearancePhotoAssetId,
+        }),
+      /图片编号无效/,
+    );
   }
 });

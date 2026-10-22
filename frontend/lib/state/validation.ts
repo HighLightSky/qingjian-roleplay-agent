@@ -1,3 +1,4 @@
+import { assertImageId } from "../images/ids";
 import type { VisualSource } from "../images/types";
 import {
   GOAL_LABELS,
@@ -189,7 +190,7 @@ export function validateStateResult(
   array(value.visualObservations, 4);
   for (const o of value.visualObservations) {
     object(o);
-    text(o.assetId, 200);
+    assertImageId(o.assetId);
     text(o.summary, 600);
     integer(o.version, 1);
     validateVisualSources(o.sources);

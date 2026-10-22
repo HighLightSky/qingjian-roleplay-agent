@@ -1,5 +1,6 @@
 export type ContentPart =
   { type: "text"; text: string } | { type: "image"; assetId: string };
+/** id 为浏览器数据库内全局递增的 imgN，与聊天上传顺序无关。 */
 export type ImageAsset = {
   id: string;
   sha256: string;

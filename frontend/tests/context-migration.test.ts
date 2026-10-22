@@ -26,6 +26,7 @@ test("v4升级保留原文、图片和待办，冻结的较早原文还原为结
   });
   await old.put("sessions", {
     id: "session",
+    characterSnapshot: { name: "林溪", identity: "", description: "" },
     profileVersion: 1,
     story: EMPTY_STORY,
     stateVersion: 3,
@@ -47,6 +48,7 @@ test("v4升级保留原文、图片和待办，冻结的较早原文还原为结
     });
   await old.put("assets", {
     id: "asset",
+    createdAt: "2026-10-21T00:00:00Z",
     originalBlob: new Blob(["original-image"]),
     sha256: "original-hash",
   });
@@ -88,7 +90,7 @@ test("v4升级保留原文、图片和待办，冻结的较早原文还原为结
   assert.equal(rolledBack.objectStoreNames.contains("compactionTasks"), false);
   rolledBack.close();
   const upgraded = await database();
-  assert.equal(upgraded.version, 6);
+  assert.equal(upgraded.version, 7);
   assert.equal(await upgraded.count("messages"), 26);
   const session = (await upgraded.get("sessions", "session"))!;
   assert.deepEqual(session.summary, { text: "", throughSeq: 0, version: 0 });
@@ -107,7 +109,7 @@ test("v4升级保留原文、图片和待办，冻结的较早原文还原为结
     (await upgraded.get("messages", "message-2"))!.usage!.status,
     "unavailable",
   );
-  const asset = (await upgraded.get("assets", "asset"))!;
+  const asset = (await upgraded.get("assets", "img1"))!;
   assert.equal(await asset.originalBlob.text(), "original-image");
   assert.equal(await upgraded.count("compactionTasks"), 0);
 });

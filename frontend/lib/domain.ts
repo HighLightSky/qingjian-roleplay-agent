@@ -1,3 +1,4 @@
+import { assertImageId } from "./images/ids";
 import type { ContentPart } from "./images/types";
 import type { Story, StorySources } from "./state/types";
 import type { HistorySummary, TokenUsage } from "./context/types";
@@ -36,13 +37,8 @@ export function parseCharacterProfile(
         `${labels[field]}不能超过 ${PROFILE_LIMITS[field]} 字符。`,
       );
   }
-  if (
-    profile.appearancePhotoAssetId !== undefined &&
-    (typeof profile.appearancePhotoAssetId !== "string" ||
-      !profile.appearancePhotoAssetId.trim() ||
-      profile.appearancePhotoAssetId.length > 200)
-  )
-    throw new Error("角色形象照片引用无效。");
+  if (profile.appearancePhotoAssetId !== undefined)
+    assertImageId(profile.appearancePhotoAssetId);
   const name = (profile.name as string).trim();
   if (!allowEmptyName && !name) throw new Error("请填写角色名称。");
   return {

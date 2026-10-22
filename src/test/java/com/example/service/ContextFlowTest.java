@@ -157,6 +157,29 @@ class ContextFlowTest {
         assertThrows(IllegalArgumentException.class, () -> budgets.inspect(new BudgetRequest(invalid, "preview", List.of())));
     }
 
+    @Test void summaryRequiresWholeImageIdsAndAcceptsChineseAndPunctuationBoundaries() throws Exception {
+        var base = context(11, "历史剧情与图片线索。".repeat(10));
+        var first = base.history().getFirst();
+        var source = new VisualDtos.MessageSource(first.id(), first.seq(), first.text(), 1, 1);
+        var observation = new VisualDtos.Observation("img1", "地图红点", List.of(), List.of(), List.of(), List.of(source), 1);
+        var asset = new VisualDtos.Asset("img1", "0".repeat(64), "image/png", 100, 1, 1, List.of(source), observation, List.of());
+        var history = new ArrayList<>(base.history());
+        history.set(0, new HistoryMessageDto(first.role(), first.text(), first.id(),
+                List.of(ContentPartDto.text(first.text()), new ContentPartDto("image", null, "img1")),
+                first.seq(), first.status(), first.checkpointVersion()));
+        var context = new ChatApiRequest(base.character(), base.state(), base.summary(), history, base.input(),
+                base.interactionSettings(), new VisualDtos.Context("session", List.of(asset), null, List.of()), base.operationId());
+        var request = new CompactionRequest("compact", context);
+        for (String summary : List.of("参考 img10", "参考 img100", "参考 ximg1", "参考 img1x", "参考 img01")) {
+            when(model.chat(any())).thenReturn(new ChatResponse(mapper.writeValueAsString(Map.of("summary", summary)), "stop", TokenUsage.unavailable()));
+            assertTrue(assertThrows(IOException.class, () -> compaction.compact(request)).getMessage().contains("遗漏图片来源引用：img1"));
+        }
+        for (String summary : List.of("图片img1中有红点。", "参考（img1），线索尚未解决。", "img1、img10、img100 是不同图片。")) {
+            when(model.chat(any())).thenReturn(new ChatResponse(mapper.writeValueAsString(Map.of("summary", summary)), "stop", TokenUsage.unavailable()));
+            assertEquals(summary, compaction.compact(request).summary().text());
+        }
+    }
+
     private TokenCount count(long count) { return new TokenCount(count, "exact", "test", "fingerprint"); }
     private ChatApiRequest context(int turns, String text) {
         List<HistoryMessageDto> history = new ArrayList<>();

@@ -1,3 +1,5 @@
+import { migrateV7 } from "./images/migrate-v7";
+import { IMAGE_SEQUENCE_KEY } from "./images/ids";
 import { migrateV4 } from "./state/migrate-v4";
 import { migrateV6 } from "./images/migrate-v6";
 import { migrateV5 } from "./context/migrate-v5";
@@ -83,12 +85,12 @@ let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
     let upgradeError: unknown;
-    connection = openDB<RoleplayDB>("roleplay-agent", 6, {
+    connection = openDB<RoleplayDB>("roleplay-agent", 7, {
       upgrade(db, oldVersion, _newVersion, tx) {
         void tx.done.catch((error: unknown) => {
           upgradeError ??= error;
         });
-        if (oldVersion >= 3 && oldVersion <= 5) {
+        if (oldVersion >= 3 && oldVersion <= 6) {
           if (oldVersion < 5)
             db.createObjectStore("compactionTasks", {
               keyPath: "id",
@@ -96,7 +98,8 @@ export function database(): Promise<IDBPDatabase<RoleplayDB>> {
           void (async () => {
             if (oldVersion === 3) await migrateV4(tx);
             if (oldVersion < 5) await migrateV5(tx);
-            await migrateV6(tx);
+            if (oldVersion < 6) await migrateV6(tx);
+            await migrateV7(tx);
           })().catch((error: unknown) => {
             upgradeError = error;
             tx.abort();
@@ -121,6 +124,9 @@ export function database(): Promise<IDBPDatabase<RoleplayDB>> {
         );
         db.createObjectStore("drafts", { keyPath: "sessionId" });
         db.createObjectStore("settings", { keyPath: "key" });
+        void tx
+          .objectStore("settings")
+          .put({ key: IMAGE_SEQUENCE_KEY, value: "0" });
         db.createObjectStore("assets", { keyPath: "id" }).createIndex(
           "sha256",
           "sha256",

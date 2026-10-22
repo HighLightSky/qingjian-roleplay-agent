@@ -61,7 +61,10 @@ public class ImageValidationService {
         int lastSeq = 0;
         int photoSources = 0;
         for (Asset a : catalog(r)) {
-            if (a == null || a.assetId() == null || a.assetId().isBlank() || !ids.add(a.assetId())
+            if (a == null)
+                throw new IllegalArgumentException("图片目录项不能为空");
+            ImageIds.requireValid(a.assetId());
+            if (!ids.add(a.assetId())
                     || a.sha256() == null || !a.sha256().matches("[a-f0-9]{64}")
                     || a.sources() == null || a.sources().isEmpty())
                 throw new IllegalArgumentException("图片目录或来源无效");
@@ -106,9 +109,9 @@ public class ImageValidationService {
         Set<String> inputIds = new HashSet<>();
         for (ContentPartDto p : r.input().content()) {
             if (p == null || !("text".equals(p.type()) || "image".equals(p.type()))
-                    || ("text".equals(p.type()) && p.text() == null)
-                    || ("image".equals(p.type()) && (p.assetId() == null || p.assetId().isBlank())))
+                    || ("text".equals(p.type()) && p.text() == null))
                 throw new IllegalArgumentException("输入内容块无效");
+            if ("image".equals(p.type())) ImageIds.requireValid(p.assetId());
             if ("image".equals(p.type()) && !inputIds.add(p.assetId()))
                 throw new IllegalArgumentException("本轮包含重复图片引用");
         }

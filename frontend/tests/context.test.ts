@@ -1,3 +1,4 @@
+import { IMAGE_SEQUENCE_KEY } from "../lib/images/ids";
 import "fake-indexeddb/auto";
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
@@ -27,6 +28,7 @@ beforeEach(async () => {
   const db = await database();
   const tx = db.transaction(TABLES, "readwrite");
   for (const table of TABLES) await tx.objectStore(table).clear();
+  await tx.objectStore("settings").put({ key: IMAGE_SEQUENCE_KEY, value: "0" });
   await tx.done;
 });
 async function setup() {
@@ -158,7 +160,7 @@ test("40轮压缩前30轮，最近10轮保持原文，摘要和本轮usage可完
       checkpointVersion: 1,
     });
     const backup = await takeSnapshot();
-    assert.equal(backup.formatVersion, 7);
+    assert.equal(backup.formatVersion, 8);
     validateBackup(backup);
     await restoreSnapshot(backup);
     const restored = await takeSnapshot();

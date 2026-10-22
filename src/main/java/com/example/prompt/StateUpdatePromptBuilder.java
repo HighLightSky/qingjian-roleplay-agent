@@ -102,7 +102,7 @@ public class StateUpdatePromptBuilder {
                 视觉观察只覆盖本次实际收到的原图，每张恰好一项：
                 每项包含 assetId、summary（简洁概括）、visibleDetails、extractedText、uncertainDetails；后三项是字符串数组。
                 actualImageAssetIds 是本次实际附带原图的完整 ID 清单，visualObservations 必须逐一覆盖，每个 ID 恰好出现一次；清单为空时返回空数组。
-                assetId 必须逐字复制清单中的真实 ID，不能填“原图ID”、character_photo、角色 ID、消息 ID 或 sha256，也不能为同一张图的不同用途重复输出观察。
+                assetId 为 img1、img2 形式的资产编号，必须逐字复制清单中的真实 ID，不能填“原图ID”、character_photo、角色 ID、消息 ID 或 sha256，也不能为同一张图的不同用途重复输出观察。
                 sources 与 version 由服务端根据真实消息上传位置或 character_photo 资料版本生成，不伪造上传消息。
                 角色照片仅记录可见外观，不推断性格、职业、身份或关系，不自动修改角色描述或写入记忆表。
                 原图观察保留照片中的服装发色；剧情换装只更新当前状态。明确文字设定优先用于故事，冲突不等于发生了染发或换装事件。

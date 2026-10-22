@@ -228,7 +228,7 @@ public class PromptBuilder {
         for (Selected p : selected) {
             if (currentIds.contains(p.assetId()) || !sent.add(p.assetId()))
                 continue;
-            archived.add(Message.Part.text("历史视觉参考（不是本轮上传），来源："
+            archived.add(Message.Part.text("历史视觉参考（不是本轮上传），assetId：" + p.assetId() + "，来源："
                     + assetsById.get(p.assetId()).sources() + "，用途：" + p.purpose()));
             if (includeImages) archived.add(Message.Part.image(payloads.get(p.assetId())));
         }

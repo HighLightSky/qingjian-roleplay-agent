@@ -110,8 +110,9 @@ public class ContextCompactionService {
         if (counter.tokenize(text) > properties.summaryMaxTokens())
             throw new IOException("摘要超过配置的 token 上限");
         if (context.visual() != null) {
+            Set<String> references = ImageIds.referencedIds(text);
             for (var asset : context.visual().assetCatalog()) {
-                if (asset.sources().stream().anyMatch(s -> s instanceof MessageSource m && m.seq() <= through) && !text.contains(asset.assetId()))
+                if (asset.sources().stream().anyMatch(s -> s instanceof MessageSource m && m.seq() <= through) && !references.contains(asset.assetId()))
                     throw new IOException("摘要遗漏图片来源引用：" + asset.assetId());
             }
         }
