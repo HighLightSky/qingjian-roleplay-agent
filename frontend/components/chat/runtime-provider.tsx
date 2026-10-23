@@ -481,3 +481,17 @@ function SessionRuntime({ children }: { children: ReactNode }) {
     </AssistantRuntimeProvider>
   );
 }
+
+export function MissingImageNotice() {
+  const missing = useAppStore((state) => state.missingImages);
+  if (!missing.length) return null;
+  return (
+    <p
+      role="status"
+      className="max-h-28 shrink-0 overflow-y-auto break-words border-b px-4 py-2 text-sm text-amber-700 dark:text-amber-400"
+    >
+      原件缺失，已跳过：{missing.join("、")}
+      。对话可继续，已有观察仅为有损记录，本次无法复核。
+    </p>
+  );
+}

@@ -313,7 +313,7 @@ public class StateUpdateService {
             if (index > 0) {
                 var user = r.messages().stream().filter(m -> "user".equals(m.role())).reduce((a, b) -> b)
                         .orElseThrow(() -> new IllegalArgumentException("新图片缺少上传消息"));
-                int uploads = ImageValidationService.catalog(r.context()).stream().flatMap(a -> a.sources().stream())
+                int uploads = ImageValidationService.referencedAssets(r.context()).stream().flatMap(a -> a.sources().stream())
                         .filter(s -> s instanceof MessageSource).mapToInt(s -> ((MessageSource) s).uploadIndex())
                         .max().orElse(0);
                 sources.add(

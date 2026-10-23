@@ -73,6 +73,24 @@ function LocalDataCard({
         </p>
       ) : (
         <>
+          {usage.missingAssets.length > 0 && (
+            <div
+              role="status"
+              className="mb-4 text-sm text-amber-700 dark:text-amber-400"
+            >
+              <p>
+                缺失 {usage.missingAssets.length}{" "}
+                张原图，已跳过原图计量，其余数据正常统计。
+              </p>
+              <ul className="mt-1 space-y-1">
+                {usage.missingAssets.map((asset) => (
+                  <li key={asset.assetId}>
+                    {asset.assetId}：{asset.sources.join("；")}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <ScoreBreakdown
             total={usage.bytes}
             label="应用数据估算容量"

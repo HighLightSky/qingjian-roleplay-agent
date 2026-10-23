@@ -13,7 +13,7 @@ export function CharacterThumbnail({
   name: string;
   className?: string;
 }) {
-  const src = useImageUrl(assetId, true);
+  const { url: src, missing } = useImageUrl(assetId, true);
   if (!assetId)
     return (
       <LeafIcon
@@ -23,11 +23,18 @@ export function CharacterThumbnail({
     );
   return (
     <span
+      title={missing ? `角色照片 ${assetId} 原件缺失，已跳过` : undefined}
+      aria-label={missing ? `角色照片 ${assetId} 原件缺失，已跳过` : undefined}
       className={cn(
         "size-8 shrink-0 overflow-hidden rounded-full border bg-muted",
         className,
       )}
     >
+      {missing && (
+        <span className="flex h-full items-center justify-center text-xs text-destructive">
+          缺图
+        </span>
+      )}
       {src && (
         <img
           src={src}

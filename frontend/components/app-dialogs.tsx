@@ -119,7 +119,9 @@ function ProfileForm({
   const draft = useRef(profile);
   const preparation = useRef<AbortController | null>(null);
   useEffect(() => () => preparation.current?.abort(), []);
-  const photoUrl = useImageUrl(profile.appearancePhotoAssetId);
+  const { url: photoUrl, missing: photoMissing } = useImageUrl(
+    profile.appearancePhotoAssetId,
+  );
   useEffect(() => {
     let active = true;
     void write(async () => {
@@ -231,7 +233,12 @@ function ProfileForm({
           选择一张静态 JPEG 或 PNG
           作为外观参考。原图保存在当前浏览器，保存角色不会调用模型或改写角色描述。
         </p>
-        {profile.appearancePhotoAssetId && (
+        {photoMissing && (
+          <p className="text-sm text-destructive">
+            形象照片原件缺失，请移除或重新选择。
+          </p>
+        )}
+        {profile.appearancePhotoAssetId && !photoMissing && (
           <a
             href={photoUrl}
             target="_blank"
@@ -318,18 +325,25 @@ function ProfileForm({
   );
 }
 function SnapshotPhoto({ assetId }: { assetId: string }) {
-  const src = useImageUrl(assetId);
+  const { url: src, missing } = useImageUrl(assetId);
   return (
     <div>
       <dt className="text-muted-foreground">创建时的形象照片</dt>
       <dd className="mt-2">
-        <a href={src} target="_blank" rel="noreferrer">
-          <img
-            src={src}
-            alt="会话角色形象照片"
-            className="max-h-56 rounded border object-contain"
-          />
-        </a>
+        {missing && (
+          <p className="text-sm text-destructive">
+            原件缺失，已跳过：{assetId}
+          </p>
+        )}
+        {!missing && (
+          <a href={src} target="_blank" rel="noreferrer">
+            <img
+              src={src}
+              alt="会话角色形象照片"
+              className="max-h-56 rounded border object-contain"
+            />
+          </a>
+        )}
       </dd>
     </div>
   );

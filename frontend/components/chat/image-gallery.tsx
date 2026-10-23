@@ -15,7 +15,7 @@ import { report } from "@/stores/use-app-store";
 
 type Metadata = Omit<ImageAsset, "originalBlob" | "thumbnailBlob">;
 function Tile({ asset, select }: { asset: Metadata; select: () => void }) {
-  const src = useImageUrl(asset.id, true);
+  const { url: src, missing } = useImageUrl(asset.id, true);
   return (
     <button
       type="button"
@@ -23,6 +23,9 @@ function Tile({ asset, select }: { asset: Metadata; select: () => void }) {
       className="overflow-hidden rounded-md border text-left"
       aria-label={`查看 ${asset.displayName}`}
     >
+      {missing && (
+        <p className="text-sm text-destructive">原件缺失，已跳过：{asset.id}</p>
+      )}
       <img
         src={src}
         alt={asset.displayName}
@@ -33,7 +36,7 @@ function Tile({ asset, select }: { asset: Metadata; select: () => void }) {
   );
 }
 function Preview({ asset }: { asset: Metadata }) {
-  const src = useImageUrl(asset.id);
+  const { url: src, missing } = useImageUrl(asset.id);
   const [sources, setSources] = useState<string[]>([]);
   useEffect(() => {
     let disposed = false;
@@ -97,6 +100,9 @@ function Preview({ asset }: { asset: Metadata }) {
         {asset.width} × {asset.height} ·{" "}
         {(asset.byteSize / 1024 / 1024).toFixed(2)} MiB
       </DialogDescription>
+      {missing && (
+        <p className="text-sm text-destructive">原件缺失，已跳过：{asset.id}</p>
+      )}
       <img
         src={src}
         alt={asset.displayName}

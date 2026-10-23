@@ -38,7 +38,10 @@ async function stateResult(data) {
           uploadIndex:
             Math.max(
               0,
-              ...data.context.visual.assetCatalog
+              ...[
+                ...data.context.visual.assetCatalog,
+                ...(data.context.visual.missingAssets ?? []),
+              ]
                 .flatMap((a) => a.sources)
                 .filter((s) => s.type === "message")
                 .map((s) => s.uploadIndex),

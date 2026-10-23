@@ -59,7 +59,7 @@ public final class SelectionFixtures {
         var context = new ChatApiRequest(new CharacterDto("林溪", "旧友", "旅馆老板", photo == Photo.NONE ? null : "img2", 1),
                 TestRequests.state(List.of("用户喜欢喝茶")), TestRequests.summary(), messages, new InputDto(input, null),
                 new InteractionSettingsDto(InteractionSettingsDto.ReplyLength.SHORT, InteractionSettingsDto.NarrativeMode.INTERACTIVE),
-                new Context("session", catalog, null, List.of()), "selection-fixture");
+                new Context("session", catalog, null, List.of(), List.of()), "selection-fixture");
         Set<String> expected = history == History.IMAGE ? Set.of("img1") : photo == Photo.OBSERVED ? Set.of("img2") : Set.of();
         return new Scenario(context, List.copyOf(images), expected);
     }

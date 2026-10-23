@@ -238,7 +238,7 @@ class AuxiliaryAgentsTest {
                     List.of(new MessageSource("source-uuid-" + i, i, "上传地图".repeat(20), 1, i)), observation, List.of()));
         }
         return new ChatApiRequest(base.character(), base.state(), base.summary(), base.history(), base.input(), base.interactionSettings(),
-                new Context("session", catalog, null, List.of()), base.operationId());
+                new Context("session", catalog, null, List.of(), List.of()), base.operationId());
     }
 
     @ParameterizedTest

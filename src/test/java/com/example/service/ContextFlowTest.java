@@ -178,6 +178,36 @@ class ContextFlowTest {
         assertThrows(IllegalArgumentException.class, () -> budgets.inspect(new BudgetRequest(invalid, "preview", List.of())));
     }
 
+    @Test void missingOriginalsDoNotConsumeImageTokensAndCompactionRetainsTheirStatus() throws Exception {
+        var base = context(11, "历史剧情与图片线索。".repeat(10));
+        var first = base.history().getFirst();
+        var source = new VisualDtos.MessageSource(first.id(), first.seq(), first.text(), 1, 1);
+        var missing = new VisualDtos.MissingAsset("img1", List.of(source), null);
+        var history = new ArrayList<>(base.history());
+        history.set(0, new HistoryMessageDto(first.role(), first.text(), first.id(),
+                List.of(ContentPartDto.text(first.text()), new ContentPartDto("image", null, "img1")),
+                first.seq(), first.status(), first.checkpointVersion()));
+        var context = new ChatApiRequest(base.character(), base.state(), base.summary(), history, base.input(),
+                base.interactionSettings(), new VisualDtos.Context("session", List.of(), null, List.of(), List.of(missing)), base.operationId());
+        var preview = budgets.inspect(new BudgetRequest(context, "preview", List.of()));
+        assertEquals("exact", preview.accuracy());
+        assertFalse(lastTemplate.contains("image_url"));
+        var plan = new VisualDtos.Plan("ready", List.of(new VisualDtos.Selected("img1", "核对")), List.of(), "", "fp", "op");
+        var invalid = new ChatApiRequest(context.character(), context.state(), context.summary(), context.history(), context.input(),
+                context.interactionSettings(), new VisualDtos.Context("session", List.of(), plan, List.of(), List.of(missing)), context.operationId());
+        assertThrows(IllegalArgumentException.class, () -> budgets.inspect(new BudgetRequest(invalid, "final", List.of())));
+        var request = new CompactionRequest("compact-missing", context);
+        when(model.chat(any())).thenReturn(new ChatResponse("{\"summary\":\"曾上传 img1\"}", "stop", TokenUsage.unavailable()));
+        assertTrue(assertThrows(IOException.class, () -> compaction.compact(request)).getMessage().contains("缺失标记"));
+        when(model.chat(any())).thenReturn(new ChatResponse("{\"summary\":\"曾上传[原图缺失：img1]，无法复核。\"}", "stop", TokenUsage.unavailable()));
+        var result = compaction.compact(request);
+        assertTrue(result.summary().text().contains("[原图缺失：img1]"));
+        var call = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model, times(2)).chat(call.capture());
+        assertTrue(mapper.writeValueAsString(call.getValue().getMessages()).contains("missingAssets"));
+        assertFalse(mapper.writeValueAsString(call.getValue().getMessages()).contains("image_url"));
+    }
+
     @Test void summaryRequiresWholeImageIdsAndAcceptsChineseAndPunctuationBoundaries() throws Exception {
         var base = context(11, "历史剧情与图片线索。".repeat(10));
         var first = base.history().getFirst();
@@ -189,7 +219,7 @@ class ContextFlowTest {
                 List.of(ContentPartDto.text(first.text()), new ContentPartDto("image", null, "img1")),
                 first.seq(), first.status(), first.checkpointVersion()));
         var context = new ChatApiRequest(base.character(), base.state(), base.summary(), history, base.input(),
-                base.interactionSettings(), new VisualDtos.Context("session", List.of(asset), null, List.of()), base.operationId());
+                base.interactionSettings(), new VisualDtos.Context("session", List.of(asset), null, List.of(), List.of()), base.operationId());
         var request = new CompactionRequest("compact", context);
         for (String summary : List.of("参考 img10", "参考 img100", "参考 ximg1", "参考 img1x", "参考 img01")) {
             when(model.chat(any())).thenReturn(new ChatResponse(mapper.writeValueAsString(Map.of("summary", summary)), "stop", TokenUsage.unavailable()));

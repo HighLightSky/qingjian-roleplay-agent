@@ -1,15 +1,8 @@
-import type { Operation } from "../state/types";
 import { database } from "../db";
-import { now, plainText, errorText, type Message } from "../domain";
+import { plainText, type Message } from "../domain";
 import type { ChatContext } from "../chat/context";
 import { getOriginal } from "./repository";
-import {
-  imageIds,
-  requiredImageIds,
-  type CatalogAsset,
-  type ImagePlan,
-  type ImagePayload,
-} from "./types";
+import { imageIds, type CatalogAsset, type MissingAsset } from "./types";
 
 export async function apiJson<T>(
   path: string,
@@ -31,27 +24,21 @@ export async function apiJson<T>(
 export async function buildCatalog(
   sessionId: string,
   messages: Message[],
-): Promise<CatalogAsset[]> {
+): Promise<{ assetCatalog: CatalogAsset[]; missingAssets: MissingAsset[] }> {
   const db = await database();
   const [observations, usages, session] = await Promise.all([
     db.getAllFromIndex("visualObservations", "session", sessionId),
     db.getAllFromIndex("imageUsages", "session", sessionId),
     db.get("sessions", sessionId),
   ]);
-  const catalog = new Map<string, CatalogAsset>();
+  const catalog = new Map<string, CatalogAsset | MissingAsset>();
   if (!session) throw new Error("图片目录的会话不存在。");
   async function entry(assetId: string) {
     if (!catalog.has(assetId)) {
       const asset = await db.get("assets", assetId);
-      if (!asset) throw new Error("图片原件缺失，请恢复备份。");
       const observation = observations.find((o) => o.assetId === assetId);
       catalog.set(assetId, {
         assetId,
-        sha256: asset.sha256,
-        mimeType: asset.mimeType,
-        byteSize: asset.byteSize,
-        width: asset.width,
-        height: asset.height,
         sources: [],
         observation: observation
           ? {
@@ -64,11 +51,20 @@ export async function buildCatalog(
               version: observation.version,
             }
           : null,
-        recentUses: usages
-          .filter((u) => u.assetId === assetId)
-          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-          .slice(-10)
-          .map((u) => ({ messageId: u.messageId, purpose: u.purpose })),
+        ...(asset
+          ? {
+              sha256: asset.sha256,
+              mimeType: asset.mimeType,
+              byteSize: asset.byteSize,
+              width: asset.width,
+              height: asset.height,
+              recentUses: usages
+                .filter((u) => u.assetId === assetId)
+                .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+                .slice(-10)
+                .map((u) => ({ messageId: u.messageId, purpose: u.purpose })),
+            }
+          : {}),
       });
     }
     return catalog.get(assetId)!;
@@ -97,7 +93,13 @@ export async function buildCatalog(
       });
     }
   }
-  return [...catalog.values()];
+  const assetCatalog: CatalogAsset[] = [];
+  const missingAssets: MissingAsset[] = [];
+  for (const asset of catalog.values()) {
+    if ("sha256" in asset) assetCatalog.push(asset);
+    else missingAssets.push(asset);
+  }
+  return { assetCatalog, missingAssets };
 }
 /** 全部候选原图先补齐，后台选图后无需再依赖浏览器。 */
 export async function warmImageCache(

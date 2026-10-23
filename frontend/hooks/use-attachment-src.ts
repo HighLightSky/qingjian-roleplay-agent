@@ -46,5 +46,8 @@ export const useAttachmentSrc = () => {
   const local = useImageUrl(
     src?.startsWith("asset:") ? src.slice(6) : undefined,
   );
-  return useFileSrc(file) ?? (src?.startsWith("asset:") ? local : src);
+  return {
+    src: useFileSrc(file) ?? (src?.startsWith("asset:") ? local.url : src),
+    missing: !file && local.missing,
+  };
 };

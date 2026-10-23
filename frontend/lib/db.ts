@@ -314,6 +314,15 @@ export async function createSession(characterId: string) {
   await tx.done;
   return session;
 }
+export async function requireInputImages(
+  tx: import("./images/ids").ImageWriteTransaction,
+  parts?: ContentPart[],
+) {
+  for (const assetId of imageIds(parts)) {
+    if (!(await tx.objectStore("assets").get(assetId)))
+      throw new Error(`本轮图片原件缺失：${assetId}，请移除或重新选择。`);
+  }
+}
 export async function beginTurn(
   sessionId: string,
   text: string,
@@ -328,6 +337,7 @@ export async function beginTurn(
       await tx.done.catch(() => {});
       throw new Error("会话不存在。");
     }
+    await requireInputImages(tx, parts);
     const user: Message = {
       id: id(),
       sessionId,
@@ -454,11 +464,13 @@ export async function collectUnreferenced(
     photo(row.context.character);
     imageIds(row.context.input.parts).forEach((assetId) => used.add(assetId));
     row.context.visual?.assetCatalog.forEach((a) => used.add(a.assetId));
+    row.context.visual?.missingAssets?.forEach((a) => used.add(a.assetId));
   }
   for (const row of await tx.objectStore("compactionTasks").getAll()) {
     photo(row.context.character);
     imageIds(row.context.input.parts).forEach((assetId) => used.add(assetId));
     row.context.visual?.assetCatalog.forEach((a) => used.add(a.assetId));
+    row.context.visual?.missingAssets?.forEach((a) => used.add(a.assetId));
   }
   for (const asset of await tx.objectStore("assets").getAll())
     if (!used.has(asset.id)) await tx.objectStore("assets").delete(asset.id);

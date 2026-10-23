@@ -61,6 +61,11 @@ export type CatalogAsset = {
   observation: Observation | null;
   recentUses: { messageId: string; purpose: string }[];
 };
+export type MissingAsset = {
+  assetId: string;
+  sources: VisualSource[];
+  observation: Observation | null;
+};
 export type ImagePlan = {
   status: "ready" | "ambiguous" | "over_limit";
   selectedHistoricalImages: { assetId: string; purpose: string }[];
@@ -73,6 +78,7 @@ export type ImagePayload = { assetId: string; sha256: string; dataUrl: string };
 export type VisualContext = {
   sessionId: string;
   assetCatalog: CatalogAsset[];
+  missingAssets?: MissingAsset[];
   plan: ImagePlan | null;
   imagePayloads: ImagePayload[];
 };

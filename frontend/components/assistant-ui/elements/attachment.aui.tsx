@@ -116,7 +116,7 @@ const AttachmentThumb: FC<{ src: string | undefined }> = ({ src }) => {
 const AttachmentUI: FC = () => {
   const aui = useAui();
   const isComposer = aui.attachment.source !== "message";
-  const src = useAttachmentSrc();
+  const { src, missing } = useAttachmentSrc();
 
   const isImage = useAuiState((s) => s.attachment.type === "image");
   const name = useAuiState((s) => s.attachment.name);
@@ -200,10 +200,24 @@ const AttachmentUI: FC = () => {
                     : undefined
                 }
                 aria-label={`${src ? `查看 ${name}` : `${typeLabel} ${name}`}${
-                  isError ? "，准备失败" : isUploading ? "，正在准备" : ""
+                  missing
+                    ? "，原件缺失，已跳过"
+                    : isError
+                      ? "，准备失败"
+                      : isUploading
+                        ? "，正在准备"
+                        : ""
                 }`}
               >
-                <AttachmentThumb src={src} />
+                {missing ? (
+                  <span className="flex h-full items-center justify-center p-1 text-center text-xs text-destructive">
+                    原件缺失
+                    <br />
+                    已跳过
+                  </span>
+                ) : (
+                  <AttachmentThumb src={src} />
+                )}
                 {isUploading && (
                   <div
                     aria-hidden="true"
@@ -227,6 +241,9 @@ const AttachmentUI: FC = () => {
         </AttachmentPrimitive.Root>
         <TooltipContent side="top">
           <AttachmentPrimitive.Name />
+          {missing && (
+            <p>原件缺失，已跳过，本次无法复核。新附件请移除或重新选择。</p>
+          )}
           {errorMessage && (
             <p className="aui-attachment-error-message">{errorMessage}</p>
           )}

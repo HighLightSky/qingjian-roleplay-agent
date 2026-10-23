@@ -174,7 +174,7 @@ public class ChatDispatchService {
     public static ChatApiRequest withImages(ChatApiRequest context, Plan plan, List<Payload> payloads) {
         return new ChatApiRequest(context.character(), context.state(), context.summary(), context.history(),
                 context.input(), context.interactionSettings(), new Context(context.state().sessionId(),
-                        ImageValidationService.catalog(context), plan, payloads),
+                        ImageValidationService.catalog(context), plan, payloads, ImageValidationService.missingAssets(context)),
                 context.operationId());
     }
 

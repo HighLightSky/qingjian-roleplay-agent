@@ -47,7 +47,7 @@ class StateUpdateServiceTest {
         return new UpdateRequest("operation", new ChatApiRequest(new CharacterDto("林溪", "旧友", "老板", null, 1), state, com.example.TestRequests.summary(),
                 List.of(), new InputDto("我们到了旅馆", parts),
                 new InteractionSettingsDto(InteractionSettingsDto.ReplyLength.STANDARD, InteractionSettingsDto.NarrativeMode.SCENE),
-                payloads.isEmpty() ? null : new Context("session", List.of(), null, payloads), "operation"), 0, 2,
+                payloads.isEmpty() ? null : new Context("session", List.of(), null, payloads, List.of()), "operation"), 0, 2,
                 List.of(new SourceMessage("user", 1, "user", "我们到了旅馆", "complete", "2026-10-21T00:00:00Z"),
                         new SourceMessage("assistant", 2, "assistant", "她走入旅馆。", "complete", "2026-10-21T00:00:01Z")));
     }
@@ -62,6 +62,19 @@ class StateUpdateServiceTest {
         }
         var controller = new com.example.web.StateController(service, new ContextValidation(), images, cache, new ModelGate());
         return controller.update(new com.example.web.dto.DispatchDtos.Retry(request, refs));
+    }
+
+    @Test void missingOriginalCannotReceiveANewObservation() throws Exception {
+        var original = request();
+        var c = original.context();
+        var source = new CharacterPhotoSource("character", 1);
+        var missing = new MissingAsset("img1", List.of(source), null);
+        var context = new ChatApiRequest(new CharacterDto("林溪", "", "", "img1", 1), c.state(), c.summary(),
+                c.history(), c.input(), c.interactionSettings(), new Context("session", List.of(), null, List.of(), List.of(missing)), c.operationId());
+        var request = new UpdateRequest(original.operationId(), context, original.fromExclusiveSeq(), original.throughSeq(), original.messages());
+        answer("{\"visualObservations\":[{\"assetId\":\"img1\",\"summary\":\"虚构外观\",\"visibleDetails\":[],\"extractedText\":[],\"uncertainDetails\":[]}],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}");
+        assertTrue(assertThrows(IOException.class, () -> update(request)).getMessage().contains("未传入的原图"));
+        verify(model, times(2)).chat(any());
     }
 
     private UpdateRequest request() { return request(TestRequests.state(List.of()), null, List.of()); }
@@ -102,7 +115,7 @@ class StateUpdateServiceTest {
         var c = base.context();
         var context = new ChatApiRequest(new CharacterDto("林溪", "旧友", "银发", "img2", 4), c.state(),
                 c.summary(), c.history(), c.input(), c.interactionSettings(),
-                new Context("session", List.of(photo), null, List.of(payload)), c.operationId());
+                new Context("session", List.of(photo), null, List.of(payload), List.of()), c.operationId());
         return new UpdateRequest(base.operationId(), context, base.fromExclusiveSeq(), base.throughSeq(), base.messages());
     }
 
@@ -266,7 +279,7 @@ class StateUpdateServiceTest {
         var base = request();
         var c = base.context();
         var emptyVisual = new ChatApiRequest(c.character(), c.state(), c.summary(), c.history(), c.input(),
-                c.interactionSettings(), new Context("session", List.of(), null, List.of()), c.operationId());
+                c.interactionSettings(), new Context("session", List.of(), null, List.of(), List.of()), c.operationId());
         for (var request : List.of(base, new UpdateRequest(base.operationId(), emptyVisual, base.fromExclusiveSeq(),
                 base.throughSeq(), base.messages()))) {
             clearInvocations(model);
@@ -538,7 +551,7 @@ class StateUpdateServiceTest {
                         new ContentPartDto("image", null, "img2"),
                         new ContentPartDto("image", null, "img3"))), c.interactionSettings(),
                 new Context("session", c.visual().assetCatalog(), null,
-                        List.of(payload("img2"), payload("img3"))), c.operationId());
+                        List.of(payload("img2"), payload("img3")), List.of()), c.operationId());
         answer(observations("img3", "img2"));
 
         var result = update(new UpdateRequest(base.operationId(), context, base.fromExclusiveSeq(),

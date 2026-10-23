@@ -268,7 +268,7 @@ test("空数据库显示真实零值，格式化容量使用二进制单位", as
   ]);
 });
 
-test("缺少必需的角色、会话或图片引用时报告具体原因，统计不改动数据", async () => {
+test("缺图返回明细且统计不改动数据，角色和会话缺失继续报错", async () => {
   const db = await database();
   const character = await saveCharacter({ ...EMPTY_PROFILE, name: "李白" });
   const session = await createSession(character.id);
@@ -278,7 +278,12 @@ test("缺少必需的角色、会话或图片引用时报告具体原因，统�
     parts: [{ type: "image", assetId: "img99" }],
     updatedAt: now(),
   });
-  await assert.rejects(localDataUsage, /图片原件 img99 缺失/);
+  const usage = await localDataUsage();
+  assert.deepEqual(usage.missingAssets, [
+    { assetId: "img99", sources: [`角色：李白 · 会话：${session.title}`] },
+  ]);
+  assert.equal(usage.imageCount, 0);
+  assert.ok(usage.bytes > 0);
   assert.equal((await db.get("drafts", session.id))!.parts!.length, 1);
   await db.delete("drafts", session.id);
   await db.delete("characters", character.id);

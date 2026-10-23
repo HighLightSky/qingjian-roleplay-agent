@@ -83,6 +83,7 @@ type AppState = {
   sessionId: string | null;
   messages: Message[];
   hasEarlier: boolean;
+  missingImages: string[];
   loadingMessages: boolean;
   draft: string;
   editDraft: EditDraft | null;
@@ -111,6 +112,7 @@ export const useAppStore = create<AppState>(() => ({
   sessionId: null,
   messages: [],
   hasEarlier: false,
+  missingImages: [],
   loadingMessages: false,
   draft: "",
   editDraft: null,
@@ -252,6 +254,7 @@ export async function selectCharacter(
   set({
     characterId,
     sessionId: null,
+    missingImages: [],
     messages: [],
     sessions: [],
     memories: [],
@@ -283,6 +286,7 @@ export async function selectSession(sessionId: string) {
     editDraft: null,
     loadingMessages: true,
     hasEarlier: false,
+    missingImages: [],
   });
   const [page, draft] = await Promise.all([
     db.getMessages(sessionId),
@@ -440,6 +444,7 @@ export async function removeSession(session: Session) {
       ++selection;
       set({
         sessionId: null,
+        missingImages: [],
         messages: [],
         draft: "",
         editDraft: null,
@@ -451,14 +456,22 @@ export async function removeSession(session: Session) {
 export async function refreshActivity() {
   const sessionId = get().sessionId;
   const database = await db.database();
-  const [operations, goals] = sessionId
+  const [operations, goals, images] = sessionId
     ? await Promise.all([
         database.getAllFromIndex("operations", "session", sessionId),
         database.getAllFromIndex("goals", "session", sessionId),
+        db
+          .allMessages(sessionId)
+          .then((messages) => buildCatalog(sessionId, messages)),
       ])
-    : [[], []];
+    : [[], [], { missingAssets: [] }];
   await refreshMetadata();
-  if (get().sessionId === sessionId) set({ operations, goals });
+  if (get().sessionId === sessionId)
+    set({
+      operations,
+      goals,
+      missingImages: images.missingAssets.map((a) => a.assetId),
+    });
 }
 async function recordOperation(operation: Operation) {
   await write(() =>
@@ -699,7 +712,7 @@ export async function sendMessage(
         ...context,
         visual: {
           sessionId,
-          assetCatalog: await buildCatalog(sessionId, history),
+          ...(await buildCatalog(sessionId, history)),
           plan: null,
           imagePayloads: [],
         },
@@ -1074,6 +1087,7 @@ export async function importBackup(backup: Backup) {
     ),
     characterId: null,
     sessionId: null,
+    missingImages: [],
     sessions: [],
     messages: [],
     memories: [],
@@ -1111,6 +1125,7 @@ export async function clearData() {
     messages: [],
     characterId: null,
     sessionId: null,
+    missingImages: [],
     draft: "",
     editDraft: null,
     editSubmitting: false,

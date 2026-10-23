@@ -1,4 +1,10 @@
-import { database, TABLES, atomic, collectUnreferenced } from "../db";
+import {
+  database,
+  TABLES,
+  atomic,
+  collectUnreferenced,
+  requireInputImages,
+} from "../db";
 import { now, type Message, type EditDraft } from "../domain";
 import { imageIds, type ContentPart } from "../images/types";
 import type { Operation } from "../state/types";
@@ -121,10 +127,7 @@ export async function replaceFailedTurn(
       throw new Error("编辑期间原消息已变化，请取消编辑后重新打开。");
     if (!text.trim() && !imageIds(parts).length)
       throw new Error("请输入文字或添加图片。");
-    for (const assetId of imageIds(parts)) {
-      if (!(await tx.objectStore("assets").get(assetId)))
-        throw new Error(`本轮图片原件缺失：${assetId}，请移除或重新选择。`);
-    }
+    await requireInputImages(tx, parts);
     const sentAt = now();
     const user: Message = {
       ...previous.user,

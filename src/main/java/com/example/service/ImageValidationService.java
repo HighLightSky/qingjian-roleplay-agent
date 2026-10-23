@@ -42,6 +42,16 @@ public class ImageValidationService {
         return r.visual() == null ? List.of() : r.visual().assetCatalog();
     }
 
+    public static List<MissingAsset> missingAssets(ChatApiRequest r) {
+        return r.visual() == null ? List.of() : r.visual().missingAssets();
+    }
+
+    public static List<ReferencedAsset> referencedAssets(ChatApiRequest r) {
+        var assets = new ArrayList<ReferencedAsset>(catalog(r));
+        assets.addAll(missingAssets(r));
+        return assets;
+    }
+
     /** 首次照片与本轮附件共同占用不同资产名额。 */
     public static List<String> requiredIds(ChatApiRequest request) {
         var ids = new LinkedHashSet<>(newIds(request));
@@ -59,20 +69,26 @@ public class ImageValidationService {
 
     /** 校验来源与快照一致；无状态接口不认证浏览器数据库所有权。 */
     public void validateReferences(ChatApiRequest r) {
-        StateValidation.collection(catalog(r), "图片目录");
+        var referenced = referencedAssets(r);
+        StateValidation.collection(referenced, "图片目录与缺失图片");
+        Set<String> missingIds = new HashSet<>();
         Set<String> ids = new HashSet<>();
-        int lastSeq = 0;
+        int lastAvailableSeq = 0;
+        int lastMissingSeq = 0;
         int photoSources = 0;
-        for (Asset a : catalog(r)) {
+        for (ReferencedAsset a : referenced) {
             if (a == null)
                 throw new IllegalArgumentException("图片目录项不能为空");
             ImageIds.requireValid(a.assetId());
-            if (!ids.add(a.assetId())
-                    || a.sha256() == null || !a.sha256().matches("[a-f0-9]{64}")
-                    || a.sources() == null || a.sources().isEmpty())
+            if (a instanceof MissingAsset) missingIds.add(a.assetId());
+            if (!ids.add(a.assetId()) || a.sources() == null || a.sources().isEmpty())
                 throw new IllegalArgumentException("图片目录或来源无效");
             StateValidation.collection(a.sources(), "图片来源");
-            validateMetadata(a.mimeType(), a.byteSize(), a.width(), a.height());
+            if (a instanceof Asset available) {
+                if (available.sha256() == null || !available.sha256().matches("[a-f0-9]{64}"))
+                    throw new IllegalArgumentException("图片哈希无效");
+                validateMetadata(available.mimeType(), available.byteSize(), available.width(), available.height());
+            }
             int firstSeq = 0;
             boolean hasPhoto = false;
             Set<Source> unique = new HashSet<>();
@@ -96,8 +112,11 @@ public class ImageValidationService {
             }
             // 照片目录可提前出现；聊天上传的相对顺序仍保持不变。
             if (!hasPhoto && firstSeq > 0) {
-                if (firstSeq < lastSeq) throw new IllegalArgumentException("图片目录必须按上传顺序排列");
-                lastSeq = firstSeq;
+                boolean missing = a instanceof MissingAsset;
+                if (firstSeq < (missing ? lastMissingSeq : lastAvailableSeq))
+                    throw new IllegalArgumentException("图片目录必须按上传顺序排列");
+                if (missing) lastMissingSeq = firstSeq;
+                else lastAvailableSeq = firstSeq;
             }
             if (a.observation() != null) {
                 Observation o = a.observation();
@@ -116,6 +135,8 @@ public class ImageValidationService {
                     || ("text".equals(p.type()) && p.text() == null))
                 throw new IllegalArgumentException("输入内容块无效");
             if ("image".equals(p.type())) ImageIds.requireValid(p.assetId());
+            if ("image".equals(p.type()) && missingIds.contains(p.assetId()))
+                throw new IllegalArgumentException("本轮新附件不能声明为原件缺失：" + p.assetId());
             if ("image".equals(p.type()) && !inputIds.add(p.assetId()))
                 throw new IllegalArgumentException("本轮包含重复图片引用");
         }
@@ -124,12 +145,12 @@ public class ImageValidationService {
                 if (p == null || !("text".equals(p.type()) || "image".equals(p.type())))
                     throw new IllegalArgumentException("历史内容块无效");
                 if ("image".equals(p.type()) && (!"user".equals(h.role()) || !ids.contains(p.assetId())
-                        || catalog(r).stream().filter(a -> a.assetId().equals(p.assetId()))
+                        || referenced.stream().filter(a -> a.assetId().equals(p.assetId()))
                                 .noneMatch(a -> a.sources().stream().anyMatch(s -> s instanceof MessageSource m && m.messageId().equals(h.id())))))
                     throw new IllegalArgumentException("历史图片来源不一致");
             }
         }
-        for (Asset a : catalog(r)) {
+        for (ReferencedAsset a : referenced) {
             for (Source source : a.sources()) {
                 if (source instanceof MessageSource m) {
                     for (HistoryMessageDto h : r.history()) {
@@ -146,7 +167,7 @@ public class ImageValidationService {
         if ((!ids.isEmpty() || !inputIds.isEmpty())
                 && (r.visual() == null || r.visual().sessionId() == null || r.visual().sessionId().isBlank()))
             throw new IllegalArgumentException("图片上下文缺少会话 ID");
-        if ((!ids.isEmpty() || !inputIds.isEmpty()) && !properties.isSupported())
+        if ((!catalog(r).isEmpty() || !inputIds.isEmpty()) && !properties.isSupported())
             throw new IllegalArgumentException("当前模型未启用视觉能力，请配置 ROLEPLAY_VISION_SUPPORTED 并完成视觉联调");
     }
 

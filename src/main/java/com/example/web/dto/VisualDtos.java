@@ -40,9 +40,23 @@ public final class VisualDtos {
         public record Usage(String messageId, String purpose) {
         }
 
+        public sealed interface ReferencedAsset permits Asset, MissingAsset {
+                String assetId();
+                List<Source> sources();
+                Observation observation();
+        }
+
+        /** 只记录已丢失原件的真实引用，不伪造图片元信息。 */
+        public record MissingAsset(String assetId, List<Source> sources, Observation observation)
+                        implements ReferencedAsset {
+                public MissingAsset {
+                        sources = sources == null ? List.of() : List.copyOf(sources);
+                }
+        }
+
         /** assetId 使用浏览器全局递增的 imgN。仅限当前会话的图片目录，包含元信息、观察和使用来源，不含字节。 */
         public record Asset(String assetId, String sha256, String mimeType, long byteSize, int width, int height,
-                        List<Source> sources, Observation observation, List<Usage> recentUses) {
+                        List<Source> sources, Observation observation, List<Usage> recentUses) implements ReferencedAsset {
         }
 
         /** 当前请求临时携带的原图，不在服务器持久化。 */
@@ -59,8 +73,10 @@ public final class VisualDtos {
         }
 
         /** 浏览器负责持有资产，后端从请求接收完整计算材料；缺省集合在此统一归一化。 */
-        public record Context(String sessionId, List<Asset> assetCatalog, Plan plan, List<Payload> imagePayloads) {
+        public record Context(String sessionId, List<Asset> assetCatalog, Plan plan, List<Payload> imagePayloads,
+                        List<MissingAsset> missingAssets) {
                 public Context {
+                        missingAssets = missingAssets == null ? List.of() : List.copyOf(missingAssets);
                         assetCatalog = assetCatalog == null ? List.of() : assetCatalog;
                         imagePayloads = imagePayloads == null ? List.of() : imagePayloads;
                 }

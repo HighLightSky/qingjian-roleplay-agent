@@ -14,6 +14,7 @@ export type CharacterUsage = {
 };
 export type LocalDataUsage = {
   characters: CharacterUsage[];
+  missingAssets: { assetId: string; sources: string[] }[];
   sessionCount: number;
   messageCount: number;
   imageCount: number;
@@ -45,12 +46,15 @@ export async function localDataUsage(): Promise<LocalDataUsage> {
   const tx = db.transaction(TABLES);
   const characters = new Map<string, CharacterUsage>();
   const sessions = new Map<string, string>();
+  const sessionNames = new Map<string, string>();
+  const missing = new Map<string, Set<string>>();
   const assets = new Map<
     string,
     { bytes: number; owners: Set<string>; referenced: boolean }
   >();
   const result: LocalDataUsage = {
     characters: [],
+    missingAssets: [],
     sessionCount: 0,
     messageCount: 0,
     imageCount: 0,
@@ -79,24 +83,46 @@ export async function localDataUsage(): Promise<LocalDataUsage> {
     if (!owner) throw new Error(`统计失败：会话 ${id} 不存在。`);
     return character(owner);
   }
-  function reference(id: string, owner?: CharacterUsage) {
+  function reference(id: string, owner?: CharacterUsage, sessionId?: string) {
     const asset = assets.get(id);
-    if (!asset) throw new Error(`统计失败：图片原件 ${id} 缺失。`);
+    if (!asset) {
+      const sources = missing.get(id) ?? new Set<string>();
+      sources.add(
+        owner
+          ? `角色：${owner.name}${sessionId ? ` · 会话：${sessionNames.get(sessionId)}` : " · 角色形象照片"}`
+          : "角色编辑草稿",
+      );
+      missing.set(id, sources);
+      return;
+    }
     asset.referenced = true;
     if (owner) asset.owners.add(owner.id);
   }
-  function photo(profile: CharacterProfile, owner?: CharacterUsage) {
+  function photo(
+    profile: CharacterProfile,
+    owner?: CharacterUsage,
+    sessionId?: string,
+  ) {
     if (profile.appearancePhotoAssetId)
-      reference(profile.appearancePhotoAssetId, owner);
+      reference(profile.appearancePhotoAssetId, owner, sessionId);
   }
-  function taskImages(context: ChatContext, owner: CharacterUsage) {
-    photo(context.character, owner);
-    imageIds(context.input.parts).forEach((id) => reference(id, owner));
+  function taskImages(
+    context: ChatContext,
+    owner: CharacterUsage,
+    sessionId: string,
+  ) {
+    photo(context.character, owner, sessionId);
+    imageIds(context.input.parts).forEach((id) =>
+      reference(id, owner, sessionId),
+    );
     context.history.forEach((message) =>
-      imageIds(message.parts).forEach((id) => reference(id, owner)),
+      imageIds(message.parts).forEach((id) => reference(id, owner, sessionId)),
     );
     context.visual?.assetCatalog.forEach((asset) =>
-      reference(asset.assetId, owner),
+      reference(asset.assetId, owner, sessionId),
+    );
+    context.visual?.missingAssets?.forEach((asset) =>
+      reference(asset.assetId, owner, sessionId),
     );
   }
 
@@ -125,21 +151,24 @@ export async function localDataUsage(): Promise<LocalDataUsage> {
     await scan("sessions", (row) => {
       const owner = character(row.characterId);
       sessions.set(row.id, row.characterId);
+      sessionNames.set(row.id, row.title);
       owner.sessionCount++;
       owner.bytes += jsonBytes(row);
-      photo(row.characterSnapshot, owner);
+      photo(row.characterSnapshot, owner, row.id);
     });
     await scan("messages", (row) => {
       const owner = sessionOwner(row.sessionId);
       owner.messageCount++;
       owner.bytes += jsonBytes(row);
-      imageIds(row.parts).forEach((id) => reference(id, owner));
+      imageIds(row.parts).forEach((id) => reference(id, owner, row.sessionId));
     });
     await scan("drafts", (row) => {
       const owner = sessionOwner(row.sessionId);
       owner.bytes += jsonBytes(row);
-      imageIds(row.parts).forEach((id) => reference(id, owner));
-      imageIds(row.edit?.parts).forEach((id) => reference(id, owner));
+      imageIds(row.parts).forEach((id) => reference(id, owner, row.sessionId));
+      imageIds(row.edit?.parts).forEach((id) =>
+        reference(id, owner, row.sessionId),
+      );
     });
     await scan("memories", (row) => {
       character(row.characterId).bytes += jsonBytes(row);
@@ -148,7 +177,7 @@ export async function localDataUsage(): Promise<LocalDataUsage> {
       await scan(table, (row) => {
         const owner = sessionOwner(row.sessionId);
         owner.bytes += jsonBytes(row);
-        reference(row.assetId, owner);
+        reference(row.assetId, owner, row.sessionId);
       });
     }
     for (const table of ["goals", "operations"] as const) {
@@ -160,7 +189,7 @@ export async function localDataUsage(): Promise<LocalDataUsage> {
       await scan(table, (row) => {
         const owner = sessionOwner(row.sessionId);
         owner.bytes += jsonBytes(row);
-        taskImages(row.context, owner);
+        taskImages(row.context, owner, row.sessionId);
       });
     }
     await scan("settings", (row) => {
@@ -187,6 +216,10 @@ export async function localDataUsage(): Promise<LocalDataUsage> {
       group.bytes += asset.bytes;
     }
   }
+  result.missingAssets = [...missing].map(([assetId, sources]) => ({
+    assetId,
+    sources: [...sources],
+  }));
   result.characters = [...characters.values()];
   result.imageCount = assets.size;
   result.bytes = result.sharedImages.bytes + result.publicData.bytes;

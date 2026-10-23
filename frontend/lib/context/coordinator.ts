@@ -66,7 +66,7 @@ async function refreshContext(task: CompactionTask): Promise<ChatContext> {
   );
   context.visual = {
     sessionId: session.id,
-    assetCatalog: await buildCatalog(session.id, history),
+    ...(await buildCatalog(session.id, history)),
     plan: null,
     imagePayloads: [],
   };

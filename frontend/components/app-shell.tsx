@@ -35,7 +35,10 @@ import {
 } from "@/components/ui/dialog";
 import { StatePanel } from "@/components/chat/state-panel";
 import { OperationTool } from "@/components/chat/operation-tool";
-import { ChatRuntimeProvider } from "@/components/chat/runtime-provider";
+import {
+  ChatRuntimeProvider,
+  MissingImageNotice,
+} from "@/components/chat/runtime-provider";
 import { InteractionSettingsControls } from "@/components/chat/interaction-settings";
 import { AppDialogs, type DialogState } from "@/components/app-dialogs";
 import { CharacterThumbnail } from "@/components/character-thumbnail";
@@ -410,6 +413,7 @@ export function AppShell() {
                 </>
               )}
             </header>
+            <MissingImageNotice />
             {app.readOnly && (
               <p
                 role="status"

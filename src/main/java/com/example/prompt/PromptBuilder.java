@@ -190,6 +190,15 @@ public class PromptBuilder {
                     以当前提供的最新版本观察为准；较早摘要中引用的旧观察已过期，不能覆盖最新观察。
                     """);
         }
+        Set<String> missingIds = new HashSet<>();
+        for (var asset : ImageValidationService.missingAssets(request)) {
+            missingIds.add(asset.assetId());
+            systemPrompt.append("\n【原件缺失，已跳过，本次无法复核】").append(asset.assetId())
+                    .append("，来源：").append(asset.sources());
+            if (asset.observation() != null)
+                systemPrompt.append("，已有有损观察（不能声称本轮已看图或已核实细节）：").append(asset.observation());
+            systemPrompt.append('\n');
+        }
         Set<String> sent = new HashSet<>();
         for (Asset asset : catalog) {
             boolean photo = asset.sources().stream().anyMatch(s -> s instanceof CharacterPhotoSource);
@@ -214,6 +223,8 @@ public class PromptBuilder {
                 for (ContentPartDto p : h.parts()) {
                     if ("text".equals(p.type())) {
                         parts.add(Message.Part.text(p.text()));
+                    } else if (missingIds.contains(p.assetId())) {
+                        parts.add(Message.Part.text("[原图缺失：" + p.assetId() + "，已跳过，本次无法复核]"));
                     } else if (selectedIds.contains(p.assetId()) && sent.add(p.assetId())) {
                         parts.add(Message.Part.text("历史图片 " + p.assetId()));
                         if (includeImages) parts.add(Message.Part.image(payloads.get(p.assetId())));

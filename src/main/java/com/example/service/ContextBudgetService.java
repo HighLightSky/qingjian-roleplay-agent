@@ -52,7 +52,11 @@ public class ContextBudgetService {
         for (var asset : catalog) metadata.putIfAbsent(asset.assetId(), new ImageMetadata(asset.assetId(), asset.width(), asset.height()));
         Set<String> selected = new LinkedHashSet<>(ImageValidationService.requiredIds(request.context()));
         if ("final".equals(request.mode()) && request.context().visual() != null && request.context().visual().plan() != null)
-            request.context().visual().plan().selectedHistoricalImages().forEach(s -> selected.add(s.assetId()));
+            request.context().visual().plan().selectedHistoricalImages().forEach(s -> {
+                if (catalog.stream().noneMatch(a -> a.assetId().equals(s.assetId())))
+                    throw new IllegalArgumentException("预算选图引用不可用的历史原图：" + s.assetId());
+                selected.add(s.assetId());
+            });
         if ("preview".equals(request.mode())) {
             catalog.stream().filter(a -> !selected.contains(a.assetId()))
                     .sorted(Comparator.comparingLong((VisualDtos.Asset a) -> counter.estimateImageTokens(a.width(), a.height())).reversed())

@@ -54,7 +54,8 @@ import {
 import type { CompactionResult } from "@/lib/context/types";
 
 function Picture({ id }: { id: string }) {
-  const url = useImageUrl(id, true);
+  const { url, missing } = useImageUrl(id, true);
+  if (missing) return <span role="status">原件缺失，已跳过：{id}</span>;
   return url ? (
     <img
       src={url}

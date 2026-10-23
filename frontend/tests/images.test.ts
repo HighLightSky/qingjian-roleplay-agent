@@ -188,7 +188,10 @@ test("catalog retains archived images and never imports another session's refere
     { type: "text", text: "同一 Blob" },
     { type: "image", assetId: "img1" },
   ]);
-  const catalog = await buildCatalog(session.id, await allMessages(session.id));
+  const { assetCatalog: catalog } = await buildCatalog(
+    session.id,
+    await allMessages(session.id),
+  );
   assert.equal(catalog.length, 1);
   assert.equal(catalog[0].sources.length, 1);
   assert.equal(catalog[0].sources[0].type, "message");
@@ -230,7 +233,10 @@ test("照片修改和移除只影响新会话，旧快照与角色草稿保护�
   const next = await createSession(character.id);
   assert.equal(updated.profileVersion, character.profileVersion + 1);
   assert.equal(next.characterSnapshot.appearancePhotoAssetId, undefined);
-  assert.equal((await buildCatalog(session.id, []))[0].assetId, "img2");
+  assert.equal(
+    (await buildCatalog(session.id, [])).assetCatalog[0].assetId,
+    "img2",
+  );
   const backup = await takeSnapshot();
   await restoreSnapshot(backup);
   const invalid = structuredClone(backup);
@@ -352,7 +358,10 @@ test("替换照片的保存失败原子回滚，成功后新旧会话分别持�
       next.characterSnapshot.appearancePhotoAssetId,
       updated.appearancePhotoAssetId,
     );
-    assert.equal((await buildCatalog(session.id, []))[0].assetId, "img2");
+    assert.equal(
+      (await buildCatalog(session.id, [])).assetCatalog[0].assetId,
+      "img2",
+    );
     await restoreSnapshot(await takeSnapshot());
     await deleteSession(session.id);
     assert.equal(await db.get("assets", "img2"), undefined);

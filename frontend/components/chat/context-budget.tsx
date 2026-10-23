@@ -101,7 +101,7 @@ export function ContextBudgetIndicator({
         );
         context.visual = {
           sessionId,
-          assetCatalog: await buildCatalog(sessionId, history),
+          ...(await buildCatalog(sessionId, history)),
           plan: null,
           imagePayloads: [],
         };

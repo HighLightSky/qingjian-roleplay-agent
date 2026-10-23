@@ -251,13 +251,20 @@ class ChatControllerTest {
         assertTrue(post("/api/images/missing", Map.of("hashes", List.of(hash))).body().contains("[]"));
         var base = request("看图");
         var context = base.context();
-        var visual = new VisualDtos.Context("session", List.of(), null, List.of());
+        var missing = new VisualDtos.MissingAsset("img2",
+                List.of(new VisualDtos.MessageSource("missing-user", 1, "旧图", 1, 1)), null);
+        var history = List.of(new HistoryMessageDto("user", "旧图", "missing-user",
+                List.of(ContentPartDto.text("旧图"), new ContentPartDto("image", null, "img2")), 1, "complete", 1));
+        var visual = new VisualDtos.Context("session", List.of(), null, List.of(), List.of(missing));
         var input = new InputDto("看图", List.of(ContentPartDto.text("看图"), new ContentPartDto("image", null, "img1")));
         var imageRequest = new Request(base.runId(), new ChatApiRequest(context.character(), context.state(), context.summary(),
-                context.history(), input, context.interactionSettings(), visual, context.operationId()), base.user(), base.assistant(), List.of(new ImageRef("img1", hash)));
+                history, input, context.interactionSettings(), visual, context.operationId()),
+                new MessageMeta(base.user().id(), 3, base.user().createdAt()),
+                new MessageMeta(base.assistant().id(), 4, base.assistant().createdAt()), List.of(new ImageRef("img1", hash)));
         when(model.chat(any())).thenReturn(new ChatResponse(EMPTY.replace("\"visualObservations\":[]", "\"visualObservations\":[{\"assetId\":\"img1\",\"summary\":\"黑色图片\",\"visibleDetails\":[],\"extractedText\":[],\"uncertainDetails\":[]}]"), "stop", TokenUsage.unavailable()));
         String output = post("/api/chat", imageRequest).body();
         assertTrue(output.contains("event:state_result"), output);
+        assertTrue(output.contains("\"uploadIndex\":2"), output);
         var bodyCall = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         var stateCall = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(model).chatStream(bodyCall.capture(), any()); verify(model).chat(stateCall.capture());
@@ -327,6 +334,61 @@ class ChatControllerTest {
         verify(model).chatStream(any(), any());
         verify(model, times(ImageValidationService.selectableCatalog(context).isEmpty() ? 1 : 2)).chat(any());
         post("/api/chat/" + request.runId() + "/ack", Map.of());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void missingHistoricalImagesAndPhotosAllowBodyAndState(boolean archived) throws Exception {
+        var scenario = SelectionFixtures.scenario(SelectionFixtures.History.IMAGE, SelectionFixtures.Photo.OBSERVED);
+        var original = scenario.context();
+        var missing = original.visual().assetCatalog().stream()
+                .map(a -> new VisualDtos.MissingAsset(a.assetId(), a.sources(), a.observation())).toList();
+        var base = request("继续对话");
+        var context = new ChatApiRequest(original.character(), original.state(),
+                archived ? new ContextDtos.HistorySummary("曾看过 img1 的地图", 2, 1) : original.summary(),
+                archived ? List.of() : original.history(), base.context().input(), original.interactionSettings(),
+                new VisualDtos.Context("session", List.of(), null, List.of(), missing), base.runId());
+        var request = new Request(base.runId(), context,
+                new MessageMeta(base.user().id(), 3, base.user().createdAt()),
+                new MessageMeta(base.assistant().id(), 4, base.assistant().createdAt()), List.of());
+        var response = post("/api/chat", request);
+        assertEquals(200, response.statusCode(), response.body());
+        assertTrue(response.body().contains("event:state_result"), response.body());
+        assertFalse(response.body().contains("\"status\":\"failed\""), response.body());
+        var body = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        var state = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model).chatStream(body.capture(), any());
+        verify(model).chat(state.capture());
+        for (var call : List.of(body.getValue(), state.getValue())) {
+            String material = mapper.writeValueAsString(call.getMessages());
+            assertTrue(material.contains("原件缺失，已跳过，本次无法复核"), material);
+            assertTrue(material.contains("地图上标出了码头"), material);
+            assertFalse(material.contains("image_url"), material);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"undeclared", "overlap", "new", "source", "duplicate", "photo"})
+    void invalidMissingImageReferencesFailBeforeCallingModel(String kind) throws Exception {
+        var scenario = SelectionFixtures.scenario(SelectionFixtures.History.IMAGE, SelectionFixtures.Photo.NONE);
+        var original = scenario.context();
+        var asset = original.visual().assetCatalog().getFirst();
+        var source = new VisualDtos.MessageSource("old-user", 1, "地图", 2, 1);
+        var missing = new VisualDtos.MissingAsset(asset.assetId(),
+                kind.equals("source") ? List.of(source) : asset.sources(), null);
+        var base = request("继续");
+        var context = new ChatApiRequest(
+                kind.equals("photo") ? new CharacterDto("林溪", "", "", "img2", 1) : original.character(),
+                original.state(), original.summary(), original.history(),
+                kind.equals("new") ? new InputDto("新图", List.of(new ContentPartDto("image", null, "img1"))) : base.context().input(),
+                original.interactionSettings(), new VisualDtos.Context("session",
+                        kind.equals("overlap") ? List.of(asset) : List.of(), null, List.of(),
+                        kind.equals("undeclared") ? List.of() : kind.equals("duplicate") ? List.of(missing, missing) : List.of(missing)), base.runId());
+        var response = post("/api/chat", new Request(base.runId(), context,
+                new MessageMeta(base.user().id(), 3, base.user().createdAt()),
+                new MessageMeta(base.assistant().id(), 4, base.assistant().createdAt()), List.of()));
+        assertEquals(400, response.statusCode(), response.body());
+        verifyNoInteractions(model);
     }
 
     @Test void resultCapacityRejectsNewTasksWithoutEvictingUnreadResults() throws Exception {

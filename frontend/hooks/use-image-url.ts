@@ -1,9 +1,16 @@
 "use client";
 import { useEffect, useState } from "react";
 import { database } from "@/lib/db";
-import { report } from "@/stores/use-app-store";
+import { report, useAppStore } from "@/stores/use-app-store";
 export function useImageUrl(assetId: string | undefined, thumbnail = false) {
-  const [entry, setEntry] = useState<{ key: string; url: string }>();
+  const [entry, setEntry] = useState<{
+    key: string;
+    url?: string;
+    missing: boolean;
+  }>();
+  const knownMissing = useAppStore(
+    (state) => !!assetId && state.missingImages.includes(assetId),
+  );
   const key = `${assetId}:${thumbnail}`;
   useEffect(() => {
     if (!assetId) return;
@@ -13,14 +20,16 @@ export function useImageUrl(assetId: string | undefined, thumbnail = false) {
       .then((db) => db.get("assets", assetId))
       .then((asset) => {
         if (disposed) return;
-        if (!asset)
-          throw new Error(`找不到图片原件：${assetId}，请从完整备份恢复。`);
+        if (!asset) {
+          setEntry({ key, missing: true });
+          return;
+        }
         url = URL.createObjectURL(
           thumbnail
             ? (asset.thumbnailBlob ?? asset.originalBlob)
             : asset.originalBlob,
         );
-        setEntry({ key, url });
+        setEntry({ key, url, missing: false });
       })
       .catch((error) => {
         if (!disposed) report(error);
@@ -29,6 +38,6 @@ export function useImageUrl(assetId: string | undefined, thumbnail = false) {
       disposed = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [assetId, thumbnail, key]);
-  return entry?.key === key ? entry.url : undefined;
+  }, [assetId, thumbnail, key, knownMissing]);
+  return entry?.key === key ? entry : { url: undefined, missing: false };
 }

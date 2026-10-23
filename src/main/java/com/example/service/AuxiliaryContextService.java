@@ -39,6 +39,15 @@ public class AuxiliaryContextService {
 
     public ObjectNode background(ChatApiRequest request, String stage) throws IOException, InterruptedException {
         ObjectNode data = mapper.createObjectNode();
+        var missing = data.putArray("missingAssets");
+        for (var asset : ImageValidationService.missingAssets(request)) {
+            var row = missing.addObject().put("assetId", asset.assetId())
+                    .put("status", "原件缺失，已跳过，本次无法复核");
+            if (asset.observation() != null) {
+                row.set("observation", com.example.prompt.StateUpdateMaterial.observation(mapper, asset.observation()));
+                row.put("version", asset.observation().version());
+            }
+        }
         data.set("character", mapper.createObjectNode().put("name", request.character().name())
                 .put("identity", request.character().identity()).put("description", request.character().description()));
         String summary = clip(request.summary().text(), context.summaryMaxTokens());

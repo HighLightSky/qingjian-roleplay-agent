@@ -430,34 +430,45 @@ function validateImages(snapshot: Snapshot) {
   const checkCatalog = (
     catalog: import("./images/types").CatalogAsset[],
     sessionId: string,
+    missingAssets: import("./images/types").MissingAsset[] = [],
   ) => {
-    if (!Array.isArray(catalog)) throw new Error("图片目录无效。");
+    if (!Array.isArray(catalog) || !Array.isArray(missingAssets))
+      throw new Error("图片目录无效。");
     const ids = new Set<string>();
-    for (const a of catalog) {
-      object(a);
-      const original = assets.get(a.assetId);
-      if (
-        !original ||
-        ids.has(a.assetId) ||
-        !sessionHasAsset(sessionId, a.assetId)
-      )
-        throw new Error("图片目录引用缺失、重复或不属于当前会话。");
-      ids.add(a.assetId);
-      for (const field of [
-        "sha256",
-        "mimeType",
-        "byteSize",
-        "width",
-        "height",
-      ] as const)
-        if (a[field] !== original[field])
-          throw new Error("图片目录与原件元信息不一致。");
-      checkSources(a.sources, sessionId, a.assetId);
-      if (a.observation) {
-        if (a.observation.assetId !== a.assetId)
-          throw new Error("目录观察引用无效。");
-        integer(a.observation.version, 1);
-        checkSources(a.observation.sources, sessionId, a.assetId);
+    for (const [entries, available] of [
+      [catalog, true],
+      [missingAssets, false],
+    ] as const) {
+      for (const a of entries) {
+        object(a);
+        const original = assets.get(a.assetId);
+        if (
+          !original ||
+          ids.has(a.assetId) ||
+          !sessionHasAsset(sessionId, a.assetId)
+        )
+          throw new Error("图片目录引用缺失、重复或不属于当前会话。");
+        ids.add(a.assetId);
+        if (available)
+          for (const field of [
+            "sha256",
+            "mimeType",
+            "byteSize",
+            "width",
+            "height",
+          ] as const)
+            if (
+              (a as import("./images/types").CatalogAsset)[field] !==
+              original[field]
+            )
+              throw new Error("图片目录与原件元信息不一致。");
+        checkSources(a.sources, sessionId, a.assetId);
+        if (a.observation) {
+          if (a.observation.assetId !== a.assetId)
+            throw new Error("目录观察引用无效。");
+          integer(a.observation.version, 1);
+          checkSources(a.observation.sources, sessionId, a.assetId);
+        }
       }
     }
   };
@@ -477,8 +488,16 @@ function validateImages(snapshot: Snapshot) {
       context.state.characterId !== session.characterId
     )
       throw new Error("冻结角色快照与会话版本不一致。");
-    if (context.visual) checkCatalog(context.visual.assetCatalog, sessionId);
-    const photoSources = (context.visual?.assetCatalog ?? [])
+    if (context.visual)
+      checkCatalog(
+        context.visual.assetCatalog,
+        sessionId,
+        context.visual.missingAssets ?? [],
+      );
+    const photoSources = [
+      ...(context.visual?.assetCatalog ?? []),
+      ...(context.visual?.missingAssets ?? []),
+    ]
       .flatMap((a) => a.sources)
       .filter((s) => s.type === "character_photo");
     if (

@@ -30,12 +30,17 @@ public class CompactionPromptBuilder {
                 .filter(a -> a.sources().stream().anyMatch(s -> s instanceof CharacterPhotoSource ||
                         s instanceof MessageSource m && m.seq() <= through)).toList();
         material.set("visualObservations", mapper.valueToTree(assets));
+        material.set("missingAssets", mapper.valueToTree(com.example.service.ImageValidationService.missingAssets(context).stream()
+                .filter(a -> a.sources().stream().anyMatch(s -> s instanceof CharacterPhotoSource ||
+                        s instanceof MessageSource m && m.seq() <= through)).toList()));
         String rules = """
                 你是角色对话历史摘要器。仅压缩已提供的旧摘要和消息，不生成新剧情。
                 合并保留重要人物、事件因果、关系变化、承诺、用户选择、未解决线索和不确定性。
                 不将计划、推测或未完成回复补写为已经发生的事实。保持早期仍有用的信息，不只总结最后一轮。
                 图片观察是有损记录，完整保留每个视觉记录的 assetId（如 img1、img10，不能改写编号）和 observation.version，不能声称看过未提供的原图。
                 实际附带的原图可以直接观察，保留其 assetId、消息来源及不确定性；没有 observation 的图片不能虚构观察版本。
+                missingAssets 中的原件缺失，已跳过，本次无法复核，已有观察仅为有损记录，不能编造图片内容。
+                摘要必须为其中每张缺图保留完整标记 [原图缺失：imgN]（使用实际编号），已有观察保留真实版本。
                 角色照片的稳定外观属于角色参考层，当前换装或伤势属于剧情状态层，不能混成永久设定。
                 保留角色照片来源中的资料版本及不确定细节，原图事实不随故事改写。
                 正文简洁，最多约 %d token。只输出 JSON：{"summary":"合并后的完整历史摘要"}。

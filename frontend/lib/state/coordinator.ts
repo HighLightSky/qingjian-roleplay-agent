@@ -180,12 +180,27 @@ export async function runStateTask(
         const user = messages.find((m) => m.id === assistant.replyToMessageId)!;
         context.visual = {
           ...context.visual,
-          assetCatalog: await buildCatalog(
+          ...(await buildCatalog(
             session.id,
             messages.filter((m) => m.seq < user.seq),
-          ),
+          )),
         };
         context.visual.imagePayloads = [];
+        if (context.visual.plan) {
+          const available = new Set(
+            context.visual.assetCatalog.map((a) => a.assetId),
+          );
+          context.visual.plan = {
+            ...context.visual.plan,
+            selectedHistoricalImages:
+              context.visual.plan.selectedHistoricalImages.filter((a) =>
+                available.has(a.assetId),
+              ),
+            candidateAssetIds: context.visual.plan.candidateAssetIds.filter(
+              (id) => available.has(id),
+            ),
+          };
+        }
       }
       operation = {
         ...operation,
@@ -196,6 +211,7 @@ export async function runStateTask(
       };
       task = {
         ...task,
+        context,
         updatedAt: now(),
       };
       await commit(async () => {

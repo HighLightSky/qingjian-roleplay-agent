@@ -42,7 +42,7 @@ function observationSources(body: UpdateBody, assetId: string): VisualSource[] {
     const user = body.messages.filter((m) => m.role === "user").at(-1)!;
     const uploads = Math.max(
       0,
-      ...catalog
+      ...[...catalog, ...(body.context.visual?.missingAssets ?? [])]
         .flatMap((a) => a.sources)
         .filter((s) => s.type === "message")
         .map((s) => s.uploadIndex),

@@ -29,6 +29,7 @@ public class StateUpdatePromptBuilder {
         parts.add(Message.Part.text("本次返回模板：保留每项 assetId，按对应原图填写 summary 和细节列表，"
                 + "并按本轮实际变化填写三个 changes 数组：" + resultTemplate(r)));
         String rules = """
+                missingAssets 中的原件缺失，已跳过，本次无法复核；已有观察仅为有损记录，不能为缺图生成新观察或声称本轮核实了细节。
                 你是剧情状态整理器。只提取实际发生且持续有用的信息，不创造事件，不输出分析过程。
                 【整理粒度】
                 剧情和目标只保留宏观状态、关键进展与影响后续发展的重要细节；用最少文字支持后续剧情连贯。
