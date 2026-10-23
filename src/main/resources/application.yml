@@ -27,7 +27,7 @@ roleplay:
 
   vision:
     supported: ${ROLEPLAY_VISION_SUPPORTED:true}
-    max-images: 4
+    max-images: 5
     max-image-bytes: 10485760
     max-pixels: 20000000
 
