@@ -293,3 +293,213 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+.guide-article {
+  font-size: 0.9375rem;
+  line-height: 1.95;
+  overflow-wrap: anywhere;
+}
+.guide-article h1 {
+  margin-block: 0.75rem 1rem;
+  font-size: clamp(1.8rem, 4vw, 2.5rem);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.035em;
+}
+.guide-article .guide-lead {
+  max-width: 39rem;
+  color: var(--muted-foreground);
+  font-size: 1rem;
+  line-height: 1.9;
+}
+.guide-article > section {
+  margin-block: 3rem;
+  scroll-margin-top: 6rem;
+}
+.guide-article > section + section {
+  border-top: 1px solid var(--border);
+  padding-top: 3rem;
+}
+.guide-article .guide-eyebrow {
+  margin-block: 0 0.5rem;
+  color: var(--primary);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+}
+.guide-article h2 {
+  margin-bottom: 1.25rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.guide-article h3 {
+  margin-block: 2rem 0.75rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+.guide-article p {
+  margin-block: 0.9rem;
+}
+.guide-article code {
+  border-radius: 0.25rem;
+  background: var(--muted);
+  padding: 0.1em 0.3em;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.82em;
+}
+.guide-table {
+  margin-block: 1.5rem;
+  overflow-x: auto;
+  border-block: 1px solid var(--border);
+}
+.guide-table table {
+  width: 100%;
+  min-width: 34rem;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.8125rem;
+  line-height: 1.9;
+}
+.guide-table th {
+  background: var(--sidebar);
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+.guide-table th,
+.guide-table td {
+  padding: 0.8rem 1rem;
+  vertical-align: top;
+}
+.guide-table tr + tr,
+.guide-table tbody {
+  border-top: 1px solid var(--border);
+}
+.guide-table td:first-child {
+  width: 28%;
+  min-width: 9rem;
+  font-weight: 500;
+}
+.guide-article .guide-source {
+  margin-top: 1.5rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.9;
+}
+.guide-source code {
+  background: transparent;
+}
+.guide-note {
+  margin-block: 1.5rem;
+  border-left: 2px solid var(--primary);
+  background: var(--sidebar);
+  padding: 1rem 1.25rem;
+  font-size: 0.875rem;
+}
+.guide-note > strong {
+  color: var(--primary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.guide-note p:last-child {
+  margin-bottom: 0;
+}
+.guide-code {
+  margin-block: 1.5rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.guide-code figcaption {
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+  padding: 0.5rem 1rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.guide-code pre {
+  overflow-x: auto;
+  background: var(--card);
+  padding: 1rem;
+  line-height: 1.85;
+}
+.guide-code code {
+  background: transparent;
+  padding: 0;
+  font-size: 0.75rem;
+  overflow-wrap: normal;
+}
+.guide-stack {
+  margin-block: 1.5rem;
+  border-block: 1px solid var(--border);
+}
+.guide-stack-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.25rem;
+  padding: 1rem;
+}
+.guide-stack-row + .guide-stack-row {
+  border-top: 1px solid var(--border);
+}
+.guide-stack-row > span {
+  color: var(--primary);
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+}
+.guide-stack-row strong {
+  margin-right: 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.guide-stack-row p {
+  margin-block: 0.25rem 0;
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+}
+.guide-formula {
+  margin-block: 1.5rem;
+  border-block: 1px solid var(--border);
+  padding: 1.25rem 0.5rem;
+  color: var(--primary);
+  text-align: center;
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+.guide-article ol {
+  margin-block: 1rem;
+  padding-left: 1.5rem;
+  list-style: decimal;
+}
+.guide-article li {
+  padding-left: 0.25rem;
+  margin-block: 0.75rem;
+}
+.guide-article li::marker {
+  color: var(--primary);
+  font-size: 0.875rem;
+}
+@media print {
+  html,
+  body,
+  .backend-guide {
+    height: auto;
+    overflow: visible;
+  }
+  .backend-guide {
+    --background: #fff;
+    --foreground: #111;
+    --muted-foreground: #555;
+    --card: #fff;
+    color: var(--foreground);
+  }
+  .guide-table table {
+    min-width: 0;
+  }
+  .guide-table,
+  .guide-code pre {
+    overflow: visible;
+  }
+  .guide-code pre {
+    white-space: pre-wrap;
+  }
+}

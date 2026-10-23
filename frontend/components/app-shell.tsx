@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   createContext,
   useContext,
@@ -17,6 +18,7 @@ import { DropdownMenu } from "radix-ui";
 import {
   BookOpenIcon,
   ChevronDownIcon,
+  FileTextIcon,
   LeafIcon,
   MenuIcon,
   MessageSquareIcon,
@@ -218,24 +220,6 @@ function Navigation() {
     </div>
   );
 }
-function useTheme() {
-  const mode = useAppStore((state) => state.themeMode);
-  const color = useAppStore((state) => state.themeColor);
-  useEffect(() => {
-    document.documentElement.dataset.themeColor = color;
-  }, [color]);
-  useEffect(() => {
-    const media = matchMedia("(prefers-color-scheme: dark)");
-    const apply = () => {
-      const dark = mode === "dark" || (mode === "system" && media.matches);
-      document.documentElement.classList.toggle("dark", dark);
-      document.documentElement.style.colorScheme = dark ? "dark" : "light";
-    };
-    apply();
-    media.addEventListener("change", apply);
-    return () => media.removeEventListener("change", apply);
-  }, [mode]);
-}
 function SaveIndicator({ name }: { name: string }) {
   const status = useAppStore((state) => state.saveStatus);
   return (
@@ -269,7 +253,6 @@ export function AppShell() {
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [navOpen, setNavOpen] = useState(false);
   const [wide, setWide] = useState(false);
-  useTheme();
   useEffect(() => {
     void initialize();
     const blocked = () =>
@@ -347,6 +330,15 @@ export function AppShell() {
                   )}
                 </p>
               </div>
+              <Button variant="ghost" size="icon" className="size-11" asChild>
+                <Link
+                  href="/docs/backend"
+                  aria-label="Java 后端学习文档"
+                  title="Java 后端学习文档"
+                >
+                  <FileTextIcon />
+                </Link>
+              </Button>
               {character && (
                 <>
                   <Button

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AppTheme } from "@/components/app-theme";
 
 import "./globals.css";
 
@@ -14,7 +15,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN" className="h-dvh" suppressHydrationWarning>
-      <body className="h-dvh font-sans">{children}</body>
+      <body className="h-dvh font-sans">
+        <AppTheme />
+        {children}
+      </body>
     </html>
   );
 }
