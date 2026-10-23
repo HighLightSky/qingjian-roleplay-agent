@@ -13,13 +13,25 @@ export function attachmentAssetId(
 export function createImageAttachmentAdapter(
   sessionId: string,
   write: <T>(task: () => Promise<T>) => Promise<T>,
+  editing: () => { userMessageId?: string; submitting: boolean } = () => ({
+    submitting: false,
+  }),
 ): AttachmentAdapter {
   const assets = new Map<string, string>();
   const removed = new Set<string>();
+  const owners = new Map<string, string | undefined>();
+  let preparation: Promise<unknown> = Promise.resolve();
   return {
     accept: "image/jpeg,image/png",
     async *add({ file }) {
       const attachmentId = id();
+      const owner = editing().userMessageId;
+      owners.set(attachmentId, owner);
+      // 先占用顺序，再异步读取文件，避免解码速度改变附件顺序。
+      const ready = preparation.then(() =>
+        prepareImage(file, sessionId, write, owner),
+      );
+      preparation = ready.catch(() => {});
       const base = {
         id: attachmentId,
         type: "image",
@@ -31,10 +43,10 @@ export function createImageAttachmentAdapter(
         ...base,
         status: { type: "running", reason: "uploading", progress: 0 },
       };
-      const asset = await prepareImage(file, sessionId, write);
+      const asset = await ready;
       assets.set(attachmentId, asset.id);
       if (removed.has(attachmentId)) {
-        await write(() => removeDraftImage(sessionId, asset.id));
+        await write(() => removeDraftImage(sessionId, asset.id, owner));
         return;
       }
       yield {
@@ -53,10 +65,15 @@ export function createImageAttachmentAdapter(
       };
     },
     async remove(attachment) {
+      const current = editing();
+      const owner = owners.get(attachment.id);
+      // 编辑发送会立即关闭内联输入框；引用由重发事务转交，不能按取消清理。
+      if (owner && current.submitting) return;
       removed.add(attachment.id);
       const assetId =
         attachmentAssetId(attachment) ?? assets.get(attachment.id);
-      if (assetId) await write(() => removeDraftImage(sessionId, assetId));
+      if (assetId)
+        await write(() => removeDraftImage(sessionId, assetId, owner));
     },
   };
 }

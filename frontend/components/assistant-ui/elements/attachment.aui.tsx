@@ -1,4 +1,7 @@
 "use client";
+import { removeDraftImage } from "@/lib/images/repository";
+import { attachmentAssetId } from "@/lib/images/attachment-adapter";
+import { useAppStore, write, report } from "@/stores/use-app-store";
 
 import {
   type PropsWithChildren,
@@ -234,8 +237,27 @@ const AttachmentUI: FC = () => {
 };
 
 const AttachmentRemove: FC<{ name: string }> = ({ name }) => {
+  const aui = useAui();
+  const attachment = useAuiState((s) => s.attachment);
+  const sessionId = useAppStore((s) => s.sessionId)!;
   return (
-    <AttachmentPrimitive.Remove asChild>
+    <AttachmentPrimitive.Remove
+      asChild
+      onClick={(event) => {
+        if (attachment.status.type !== "complete") return;
+        const assetId = attachmentAssetId(attachment);
+        if (!assetId) throw new Error("已完成附件缺少本地图片引用。");
+        event.preventDefault();
+        const owner =
+          aui.composer.getState().type === "edit"
+            ? useAppStore.getState().editDraft!.userMessageId
+            : undefined;
+        // 完成态附件由组件库直接移除，不会调用 adapter.remove，需先提交引用变化。
+        void write(() => removeDraftImage(sessionId, assetId, owner))
+          .then(() => aui.attachment.remove())
+          .catch(report);
+      }}
+    >
       <TooltipIconButton
         tooltip={`移除 ${name}`}
         aria-label={`移除 ${name}`}

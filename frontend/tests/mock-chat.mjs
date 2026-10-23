@@ -343,7 +343,7 @@ createServer(async (request, response) => {
         compactionMaxBatches: 8,
         visionSupported: true,
         mimeTypes: ["image/png", "image/jpeg"],
-        maxImages: 4,
+        maxImages: 5,
         maxImageBytes: 10485760,
         maxPixels: 20000000,
         maxRequestBytes: 67108864,

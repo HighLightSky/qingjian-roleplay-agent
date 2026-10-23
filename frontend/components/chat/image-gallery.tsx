@@ -64,6 +64,11 @@ function Preview({ asset }: { asset: Metadata }) {
           .forEach((d) =>
             result.push(`${names.get(d.sessionId) ?? "会话"} · 草稿`),
           );
+        drafts
+          .filter((d) => imageIds(d.edit?.parts).includes(asset.id))
+          .forEach((d) =>
+            result.push(`${names.get(d.sessionId) ?? "会话"} · 编辑草稿`),
+          );
         for (const c of characters)
           if (c.appearancePhotoAssetId === asset.id)
             result.push(`${c.name} · 角色形象照片 v${c.profileVersion}`);

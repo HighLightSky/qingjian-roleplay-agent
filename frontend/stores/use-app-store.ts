@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  beginEditDraft,
+  discardEditDraft,
+  replaceFailedTurn,
+} from "@/lib/chat/edit";
 import { IMAGE_SEQUENCE_KEY } from "@/lib/images/ids";
 
 import { create } from "zustand";
@@ -50,6 +55,7 @@ import {
   plainText,
   parseInteractionSettings,
   visibleCharacters,
+  type EditDraft,
   type Character,
   type CharacterProfile,
   type Memory,
@@ -79,6 +85,8 @@ type AppState = {
   hasEarlier: boolean;
   loadingMessages: boolean;
   draft: string;
+  editDraft: EditDraft | null;
+  editSubmitting: boolean;
   themeMode: ThemeMode;
   themeColor: ThemeColor;
   interactionSettings: InteractionSettings;
@@ -105,6 +113,8 @@ export const useAppStore = create<AppState>(() => ({
   hasEarlier: false,
   loadingMessages: false,
   draft: "",
+  editDraft: null,
+  editSubmitting: false,
   themeMode: "system",
   themeColor: DEFAULT_THEME_COLOR,
   interactionSettings: { ...DEFAULT_INTERACTION_SETTINGS },
@@ -155,7 +165,12 @@ function readInteractionSettings(
 }
 const draftBuffers = new Map<
   string,
-  { text: string; timer: ReturnType<typeof setTimeout> }
+  {
+    sessionId: string;
+    editUserId?: string;
+    text: string;
+    timer: ReturnType<typeof setTimeout>;
+  }
 >();
 
 async function acquireWriteLock() {
@@ -243,6 +258,7 @@ export async function selectCharacter(
     goals: [],
     operations: [],
     draft: "",
+    editDraft: null,
     loadingMessages: true,
     memoryOpen: false,
   });
@@ -264,6 +280,7 @@ export async function selectSession(sessionId: string) {
     sessionId,
     messages: [],
     draft: "",
+    editDraft: null,
     loadingMessages: true,
     hasEarlier: false,
   });
@@ -281,6 +298,7 @@ export async function selectSession(sessionId: string) {
         )
       : page.messages,
     draft: draft?.text ?? "",
+    editDraft: get().readOnly ? null : (draft?.edit ?? null),
     loadingMessages: false,
   });
   if (!get().readOnly) await write(() => db.setting("sessionId", sessionId));
@@ -296,18 +314,23 @@ export async function loadEarlier() {
       hasEarlier: page.hasEarlier,
     }));
 }
-export function pauseDraft(sessionId: string) {
-  const draft = draftBuffers.get(sessionId);
+export function pauseDraft(sessionId: string, editUserId?: string) {
+  const draft = draftBuffers.get(editUserId ? `${sessionId}:edit` : sessionId);
   if (draft) clearTimeout(draft.timer);
 }
-export function scheduleDraft(sessionId: string, text: string) {
+export function scheduleDraft(
+  sessionId: string,
+  text: string,
+  editUserId?: string,
+) {
   if (get().readOnly) return;
-  const old = draftBuffers.get(sessionId);
+  const key = editUserId ? `${sessionId}:edit` : sessionId;
+  const old = draftBuffers.get(key);
   if (old) clearTimeout(old.timer);
   const timer = setTimeout(() => {
     void flushDrafts().catch(report);
   }, 300);
-  draftBuffers.set(sessionId, { text, timer });
+  draftBuffers.set(key, { sessionId, editUserId, text, timer });
   set({ saveStatus: "saving" });
 }
 export async function flushDrafts() {
@@ -318,14 +341,19 @@ export async function flushDrafts() {
   await write(async () => {
     const database = await db.database();
     const tx = database.transaction(["drafts", "sessions"], "readwrite");
-    for (const [sessionId, draft] of buffered)
-      if (await tx.objectStore("sessions").get(sessionId))
-        await tx.objectStore("drafts").put({
-          ...(await tx.objectStore("drafts").get(sessionId)),
-          sessionId,
-          text: draft.text,
-          updatedAt: now(),
-        });
+    for (const [, bufferedDraft] of buffered) {
+      const { sessionId, editUserId, text } = bufferedDraft;
+      if (!(await tx.objectStore("sessions").get(sessionId))) continue;
+      const draft = await tx.objectStore("drafts").get(sessionId);
+      if (!draft) throw new Error("会话草稿缺失。");
+      // 已取消或提交的编辑不接受迟到的输入法与防抖写入。
+      if (editUserId && draft.edit?.userMessageId !== editUserId) continue;
+      await tx.objectStore("drafts").put({
+        ...draft,
+        ...(editUserId ? { edit: { ...draft.edit!, text } } : { text }),
+        updatedAt: now(),
+      });
+    }
     await tx.done;
   });
 }
@@ -410,7 +438,13 @@ export async function removeSession(session: Session) {
     if (next) await selectSession(next.id);
     else {
       ++selection;
-      set({ sessionId: null, messages: [], draft: "", hasEarlier: false });
+      set({
+        sessionId: null,
+        messages: [],
+        draft: "",
+        editDraft: null,
+        hasEarlier: false,
+      });
     }
   }
 }
@@ -619,41 +653,27 @@ export async function sendMessage(
       const retryUser = retryUserId
         ? historyAtSend.find((m) => m.id === retryUserId && m.role === "user")
         : undefined;
-      if (
-        retryUserId &&
-        (!retryUser ||
-          retryUser.id !==
-            historyAtSend.filter((m) => m.role === "user").at(-1)?.id)
-      )
-        throw new Error("仅支持重试最近一条用户消息。");
-      const turn = await write(async () => {
-        if (!retryUser) return db.beginTurn(sessionId, text, parts);
-        const previous = historyAtSend.find(
-          (m) => m.role === "assistant" && m.replyToMessageId === retryUser.id,
-        );
-        if (!previous || previous.status === "complete")
-          throw new Error("这条消息无需重试。");
-        const assistant: Message = {
-          ...previous,
-          segments: [],
-          status: "pending",
-          error: undefined,
-          finishReason: undefined,
-          usage: unknownUsage(),
-          checkpointVersion: previous.checkpointVersion + 1,
-          updatedAt: now(),
-        };
-        await database.put("messages", assistant);
-        return { user: retryUser, assistant };
-      });
+      if (retryUserId && !retryUser) throw new Error("重发的用户消息不存在。");
+      const turn = await write(() =>
+        retryUser
+          ? replaceFailedTurn(sessionId, retryUser.id, text, parts)
+          : db.beginTurn(sessionId, text, parts),
+      );
+      await refreshActivity();
       reply = turn.assistant;
       liveReply = reply;
       if (get().sessionId === sessionId)
         set((state) => ({
           messages: retryUser
-            ? state.messages.map((m) => (m.id === reply!.id ? reply! : m))
+            ? state.messages.map((m) =>
+                m.id === turn.user.id
+                  ? turn.user
+                  : m.id === reply!.id
+                    ? reply!
+                    : m,
+              )
             : [...state.messages, turn.user, reply!],
-          draft: "",
+          ...(retryUser ? { editDraft: null } : { draft: "" }),
         }));
       const [character, session, memories, goals] = await Promise.all([
         database.get("characters", characterId),
@@ -964,6 +984,22 @@ export async function recoverStateTasks(operationId: string) {
   }
 }
 
+export async function startMessageEdit(userMessageId: string) {
+  const { sessionId, activeSessionId, readOnly } = get();
+  if (!sessionId || activeSessionId || readOnly)
+    throw new Error("当前不可编辑消息。");
+  const edit = await write(() => beginEditDraft(sessionId, userMessageId));
+  if (get().sessionId === sessionId) set({ editDraft: edit });
+  return edit;
+}
+
+export async function cancelMessageEdit(userMessageId: string) {
+  const { sessionId } = get();
+  if (!sessionId) return;
+  await write(() => discardEditDraft(sessionId, userMessageId));
+  if (get().sessionId === sessionId) set({ editDraft: null });
+}
+
 export async function retryLastMessage() {
   const sessionId = get().sessionId;
   if (!sessionId) return;
@@ -1044,6 +1080,8 @@ export async function importBackup(backup: Backup) {
     goals: [],
     operations: [],
     draft: "",
+    editDraft: null,
+    editSubmitting: false,
     error: "",
   });
   const character =
@@ -1074,6 +1112,8 @@ export async function clearData() {
     characterId: null,
     sessionId: null,
     draft: "",
+    editDraft: null,
+    editSubmitting: false,
     hasEarlier: false,
     themeMode: "system",
     themeColor: DEFAULT_THEME_COLOR,

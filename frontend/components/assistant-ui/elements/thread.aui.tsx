@@ -1,4 +1,7 @@
 "use client";
+import { MessageEditComposer } from "@/components/chat/message-edit";
+import { MessageCopyAction } from "@/components/chat/message-copy";
+import { failedTurn } from "@/lib/chat/edit";
 import { ContextBudgetIndicator } from "@/components/chat/context-budget";
 import { TurnTokenUsage } from "@/components/chat/turn-token-usage";
 import { ThinkingIndicator } from "@/components/chat/thinking-indicator";
@@ -52,10 +55,8 @@ import {
   ArrowDownIcon,
   ArrowUpIcon,
   AudioLinesIcon,
-  CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  CopyIcon,
   DownloadIcon,
   MicIcon,
   MoreHorizontalIcon,
@@ -258,7 +259,7 @@ const ThreadMessage: FC = () => {
   const isEditing = useAuiState((s) => s.message.composer.isEditing);
   const isSpoken = useAuiState((s) => s.message.metadata.modality === "voice");
 
-  if (isEditing) return <EditComposer />;
+  if (isEditing) return <MessageEditComposer />;
   if (isSpoken) return <SpokenMessage />;
   if (role === "user") return <UserMessage />;
   return <AssistantMessageComponent />;
@@ -355,16 +356,7 @@ const SpokenActionBar: FC = () => {
       autohide="always"
       className="aui-spoken-action-bar text-muted-foreground flex shrink-0 gap-1"
     >
-      <ActionBarPrimitive.Copy asChild>
-        <TooltipIconButton tooltip="Copy" className="size-6">
-          <AuiIf condition={(s) => s.message.isCopied}>
-            <CheckIcon className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
-          </AuiIf>
-          <AuiIf condition={(s) => !s.message.isCopied}>
-            <CopyIcon className="animate-in zoom-in-75 fade-in duration-150" />
-          </AuiIf>
-        </TooltipIconButton>
-      </ActionBarPrimitive.Copy>
+      <MessageCopyAction label="复制回复" className="size-6" />
     </ActionBarPrimitive.Root>
   );
 };
@@ -496,28 +488,31 @@ const ThreadSuggestionItem: FC = () => {
 };
 
 const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
+  const editing = useAppStore((s) => !!s.editDraft);
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
-      <ComposerPrimitive.AttachmentDropzone asChild>
-        <div
-          data-slot="aui_composer-shell"
-          className="border-foreground/10 focus-within:border-foreground/25 data-[dragging=true]:border-ring flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
-        >
-          <ComposerAttachments />
-          <ComposerPrimitive.Input
-            data-roleplay-composer
-            placeholder="写下你想说的话…"
-            className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
-            rows={1}
-            autoFocus={autoFocus}
-            enterKeyHint="enter"
-            unstable_insertNewlineOnTouchEnter
-            addAttachmentOnPaste={true}
-            aria-label="消息内容"
-          />
-          <ComposerAction />
-        </div>
-      </ComposerPrimitive.AttachmentDropzone>
+      <fieldset disabled={editing} className="contents">
+        <ComposerPrimitive.AttachmentDropzone asChild>
+          <div
+            data-slot="aui_composer-shell"
+            className="border-foreground/10 focus-within:border-foreground/25 data-[dragging=true]:border-ring flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
+          >
+            <ComposerAttachments />
+            <ComposerPrimitive.Input
+              data-roleplay-composer
+              placeholder="写下你想说的话…"
+              className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
+              rows={1}
+              autoFocus={autoFocus}
+              enterKeyHint="enter"
+              unstable_insertNewlineOnTouchEnter
+              addAttachmentOnPaste={true}
+              aria-label="消息内容"
+            />
+            <ComposerAction />
+          </div>
+        </ComposerPrimitive.AttachmentDropzone>
+      </fieldset>
     </ComposerPrimitive.Root>
   );
 };
@@ -727,16 +722,7 @@ const AssistantActionBar: FC = () => {
       autohide="not-last"
       className="aui-assistant-action-bar-root flex gap-1 text-muted-foreground"
     >
-      <ActionBarPrimitive.Copy asChild>
-        <TooltipIconButton tooltip="复制回复" aria-label="复制回复">
-          <AuiIf condition={(state) => state.message.isCopied}>
-            <CheckIcon />
-          </AuiIf>
-          <AuiIf condition={(state) => !state.message.isCopied}>
-            <CopyIcon />
-          </AuiIf>
-        </TooltipIconButton>
-      </ActionBarPrimitive.Copy>
+      <MessageCopyAction label="复制回复" />
       <AuiIf
         condition={(state) =>
           state.message.isLast && state.message.status?.type === "incomplete"
@@ -801,7 +787,7 @@ const UserMessage: FC = () => {
             }}
           />
         </div>
-        <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
+        <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 rtl:translate-x-full">
           <UserActionBar />
         </div>
       </div>
@@ -809,45 +795,31 @@ const UserMessage: FC = () => {
   );
 };
 
-const UserActionBar: FC = () => (
-  <ActionBarPrimitive.Root
-    hideWhenRunning
-    autohide="not-last"
-    className="text-muted-foreground"
-  >
-    <ActionBarPrimitive.Copy asChild>
-      <TooltipIconButton tooltip="复制消息" aria-label="复制消息">
-        <CopyIcon />
-      </TooltipIconButton>
-    </ActionBarPrimitive.Copy>
-  </ActionBarPrimitive.Root>
-);
-
-const EditComposer: FC = () => {
+const UserActionBar: FC = () => {
+  const messageId = useAuiState((s) => s.message.id);
+  const editable = useAppStore(
+    (s) =>
+      !s.activeSessionId &&
+      !s.readOnly &&
+      !s.busy &&
+      !s.characters.find((c) => c.id === s.characterId)?.archived &&
+      failedTurn(s.messages, s.operations)?.user.id === messageId,
+  );
   return (
-    <MessagePrimitive.Root
-      data-slot="aui_edit-composer-wrapper"
-      className="flex flex-col px-2 [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
+    <ActionBarPrimitive.Root
+      hideWhenRunning
+      autohide={editable ? "never" : "not-last"}
+      className="flex text-muted-foreground"
     >
-      <ComposerPrimitive.Root className="aui-edit-composer-root border-foreground/10 focus-within:border-foreground/25 ms-auto flex w-full max-w-[85%] cursor-text flex-col rounded-(--composer-radius) border bg-(--composer-bg) transition-[border-color]">
-        <ComposerPrimitive.Input
-          className="aui-edit-composer-input text-foreground min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base outline-none"
-          autoFocus
-        />
-        <div className="aui-edit-composer-footer mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
-          <ComposerPrimitive.Cancel asChild>
-            <Button variant="ghost" size="sm" className="h-8 px-3">
-              Cancel
-            </Button>
-          </ComposerPrimitive.Cancel>
-          <ComposerPrimitive.Send asChild>
-            <Button size="sm" className="h-8 px-3">
-              Update
-            </Button>
-          </ComposerPrimitive.Send>
-        </div>
-      </ComposerPrimitive.Root>
-    </MessagePrimitive.Root>
+      <MessageCopyAction label="复制消息" />
+      {editable && (
+        <ActionBarPrimitive.Edit asChild>
+          <TooltipIconButton tooltip="编辑并重发" aria-label="编辑并重发">
+            <PencilIcon />
+          </TooltipIconButton>
+        </ActionBarPrimitive.Edit>
+      )}
+    </ActionBarPrimitive.Root>
   );
 };
 

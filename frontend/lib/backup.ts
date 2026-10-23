@@ -327,7 +327,7 @@ function validateImages(snapshot: Snapshot) {
         ids.add(part.assetId);
       } else throw new Error("图片内容块类型无效。");
     }
-    if (texts.join("\n") !== text || ids.size > DEFAULT_LIMITS.maxImages)
+    if (texts.join("\n") !== text)
       throw new Error("图片消息的文字或数量不一致。");
   };
   for (const m of snapshot.messages)
@@ -339,6 +339,29 @@ function validateImages(snapshot: Snapshot) {
   for (const d of snapshot.drafts) {
     // 草稿内容块只保存附件引用，文字独立保存，避免干扰输入法。
     checkParts(d.parts, "");
+    if (d.edit !== undefined) {
+      const edit = d.edit;
+      object(edit);
+      const user = messages.get(edit.userMessageId);
+      const assistant = messages.get(edit.assistantMessageId);
+      if (
+        !user ||
+        !assistant ||
+        user.sessionId !== d.sessionId ||
+        user.role !== "user" ||
+        assistant.replyToMessageId !== user.id ||
+        assistant.sessionId !== d.sessionId ||
+        !["error", "cancelled", "interrupted"].includes(assistant.status) ||
+        snapshot.messages.some(
+          (m) => m.sessionId === d.sessionId && m.seq > assistant.seq,
+        ) ||
+        user.checkpointVersion !== edit.userCheckpointVersion ||
+        assistant.checkpointVersion !== edit.assistantCheckpointVersion
+      )
+        throw new Error("编辑草稿与最近失败轮次不一致。");
+      string(edit.text);
+      checkParts(edit.parts, "");
+    }
   }
   const sessionHasAsset = (sessionId: string, assetId: string) =>
     (assets.has(assetId) &&

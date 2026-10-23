@@ -13,7 +13,10 @@ export async function imageMetadata(context: ChatContext) {
   return Promise.all(
     imageIds(context.input.parts).map(async (assetId) => {
       const asset = await db.get("assets", assetId);
-      if (!asset) throw new Error("上下文预算缺少本轮图片原件。");
+      if (!asset)
+        throw new Error(
+          `上下文预算缺少本轮图片原件：${assetId}，请移除或重新选择。`,
+        );
       return { assetId, width: asset.width, height: asset.height };
     }),
   );

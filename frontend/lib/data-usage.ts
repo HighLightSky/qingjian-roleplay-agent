@@ -139,6 +139,7 @@ export async function localDataUsage(): Promise<LocalDataUsage> {
       const owner = sessionOwner(row.sessionId);
       owner.bytes += jsonBytes(row);
       imageIds(row.parts).forEach((id) => reference(id, owner));
+      imageIds(row.edit?.parts).forEach((id) => reference(id, owner));
     });
     await scan("memories", (row) => {
       character(row.characterId).bytes += jsonBytes(row);

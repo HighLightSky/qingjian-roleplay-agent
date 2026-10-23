@@ -320,7 +320,7 @@ export async function beginTurn(
   parts?: ContentPart[],
 ) {
   const db = await database();
-  const tx = db.transaction(["sessions", "messages", "drafts"], "readwrite");
+  const tx = db.transaction(TABLES, "readwrite");
   return atomic(tx, async () => {
     const session = await tx.objectStore("sessions").get(sessionId);
     if (!session) {
@@ -370,6 +370,7 @@ export async function beginTurn(
     await tx
       .objectStore("drafts")
       .put({ sessionId, text: "", updatedAt: now() });
+    await collectUnreferenced(tx);
     return { user, assistant, session: updated };
   });
 }
@@ -441,8 +442,10 @@ export async function collectUnreferenced(
       photo(parseCharacterProfile(JSON.parse(row.value), true));
   for (const row of await tx.objectStore("messages").getAll())
     imageIds(row.parts).forEach((assetId) => used.add(assetId));
-  for (const row of await tx.objectStore("drafts").getAll())
+  for (const row of await tx.objectStore("drafts").getAll()) {
     imageIds(row.parts).forEach((assetId) => used.add(assetId));
+    imageIds(row.edit?.parts).forEach((assetId) => used.add(assetId));
+  }
   for (const row of await tx.objectStore("visualObservations").getAll())
     used.add(row.assetId);
   for (const row of await tx.objectStore("imageUsages").getAll())

@@ -268,7 +268,7 @@ class AuxiliaryAgentsTest {
             }
             return new ChatResponse(response.toString(), "stop", TokenUsage.unavailable());
         });
-        var service = new VisualSelectionService(model, mapper, new VisualSelectionPromptBuilder(TestRequests.dispatch()),
+        var service = new VisualSelectionService(model, mapper, new VisualSelectionPromptBuilder(TestRequests.dispatch(), vision),
                 new ImageValidationService(vision), contexts(32768));
         var plan = service.select(context);
         assertEquals("ready", plan.status());
@@ -295,7 +295,7 @@ class AuxiliaryAgentsTest {
             clearInvocations(model);
             when(model.chat(any())).thenReturn(new ChatResponse(invalid, "stop", TokenUsage.unavailable()),
                     new ChatResponse(valid, "stop", TokenUsage.unavailable()));
-            var service = new VisualSelectionService(model, mapper, new VisualSelectionPromptBuilder(TestRequests.dispatch()),
+            var service = new VisualSelectionService(model, mapper, new VisualSelectionPromptBuilder(TestRequests.dispatch(), vision),
                     new ImageValidationService(vision), contexts(32768));
             assertEquals("img1", service.select(context).selectedHistoricalImages().getFirst().assetId());
             var calls = ArgumentCaptor.forClass(ChatRequest.class);
@@ -311,11 +311,38 @@ class AuxiliaryAgentsTest {
         var input = new InputDto("再次参考这张图", List.of(ContentPartDto.text("再次参考这张图"), new ContentPartDto("image", null, "img1")));
         var context = new ChatApiRequest(original.character(), original.state(), original.summary(), original.history(), input,
                 original.interactionSettings(), original.visual(), original.operationId());
-        var service = new VisualSelectionService(model, mapper, new VisualSelectionPromptBuilder(TestRequests.dispatch()),
+        var service = new VisualSelectionService(model, mapper, new VisualSelectionPromptBuilder(TestRequests.dispatch(), vision),
                 new ImageValidationService(vision), contexts(32768));
         assertEquals("ready", service.select(context).status());
         assertEquals(List.of("img1", "img2"), ImageValidationService.requiredIds(context));
         verifyNoInteractions(model);
+    }
+
+    @Test void selectionPromptAndSchemaFollowConfiguredTotalAndRemainingSlots() throws Exception {
+        for (int maximum : List.of(1, 2, 5, 7)) {
+            clearInvocations(model);
+            vision.setMaxImages(maximum);
+            var original = withCatalog(3);
+            var input = new InputDto("核对图片", List.of(new ContentPartDto("image", null, "img1")));
+            var context = new ChatApiRequest(original.character(), original.state(), original.summary(), original.history(),
+                    input, original.interactionSettings(), original.visual(), original.operationId());
+            doAnswer(i -> {
+                ChatRequest call = i.getArgument(0);
+                String rules = call.getMessages().getFirst().getContent();
+                assertTrue(rules.contains("图片总上限为 " + maximum + " 张"));
+                assertTrue(rules.contains("最多再选择 " + (maximum - 1) + " 张历史图"));
+                assertTrue(call.getMessages().get(1).getContent().contains("剩余历史图名额：" + (maximum - 1)));
+                assertEquals(Math.min(maximum - 1, 2), call.getResponseSchema().path("properties")
+                        .path("selectedHistoricalImages").path("maxItems").asInt());
+                return new ChatResponse("{\"status\":\"ready\",\"selectedHistoricalImages\":[],\"candidateAssetIds\":[],\"message\":\"\"}",
+                        "stop", TokenUsage.unavailable());
+            }).when(model).chat(any());
+            var selection = new VisualSelectionService(model, mapper,
+                    new VisualSelectionPromptBuilder(TestRequests.dispatch(), vision),
+                    new ImageValidationService(vision), contexts(32768));
+            assertEquals("ready", selection.select(context).status());
+            verify(model).chat(any());
+        }
     }
 
     @Test void selectionCorrectionIncludesConcreteErrorAndKeepsThinkingDisabled() throws Exception {
@@ -323,13 +350,15 @@ class AuxiliaryAgentsTest {
         String invalid = "{\"status\":\"ready\",\"selectedHistoricalImages\":[{\"assetId\":\"img99\",\"purpose\":\"核对\"}],\"candidateAssetIds\":[],\"message\":\"\"}";
         when(model.chat(any())).thenReturn(new ChatResponse(invalid, "stop", TokenUsage.unavailable()),
                 new ChatResponse(invalid.replace("img99", "img1"), "stop", TokenUsage.unavailable()));
-        var selection = new VisualSelectionService(model, mapper, new VisualSelectionPromptBuilder(TestRequests.dispatch()),
+        var selection = new VisualSelectionService(model, mapper, new VisualSelectionPromptBuilder(TestRequests.dispatch(), vision),
                 new ImageValidationService(vision), contexts(32768));
         assertEquals("img1", selection.select(context).selectedHistoricalImages().getFirst().assetId());
         var calls = ArgumentCaptor.forClass(ChatRequest.class);
         verify(model, times(2)).chat(calls.capture());
         assertTrue(calls.getAllValues().stream().noneMatch(ChatRequest::isThinkingEnabled));
         var retry = calls.getAllValues().getLast();
+        assertTrue(retry.getMessages().getFirst().getContent().contains("图片总上限为 " + vision.getMaxImages() + " 张"));
+        assertTrue(retry.getMessages().getFirst().getContent().contains("最多再选择 " + vision.getMaxImages() + " 张历史图"));
         assertEquals(invalid, retry.getMessages().get(2).getContent());
         assertTrue(retry.getMessages().getLast().getContent().contains("允许编号：[img1]"));
     }
@@ -351,7 +380,7 @@ class AuxiliaryAgentsTest {
             }
             return new ChatResponse(response.toString(), "stop", TokenUsage.unavailable());
         });
-        var selection = new VisualSelectionService(model, mapper, new VisualSelectionPromptBuilder(TestRequests.dispatch()),
+        var selection = new VisualSelectionService(model, mapper, new VisualSelectionPromptBuilder(TestRequests.dispatch(), vision),
                 new ImageValidationService(vision), contexts(14000));
         var result = selection.select(context);
         assertEquals("img1", result.selectedHistoricalImages().getFirst().assetId());

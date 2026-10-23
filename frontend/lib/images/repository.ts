@@ -155,6 +155,7 @@ export async function prepareImage(
   file: File,
   sessionId: string,
   commit: Commit = (task) => task(),
+  editUserId?: string,
 ): Promise<ImageAsset> {
   const { caps, info } = await inspectFile(file);
   return commit(async () => {
@@ -171,14 +172,32 @@ export async function prepareImage(
         text: "",
         updatedAt: now(),
       };
-      if (imageIds(draft.parts).length >= caps.maxImages)
+      const target = editUserId ? draft.edit : draft;
+      if (!target || (editUserId && draft.edit?.userMessageId !== editUserId))
+        throw new Error("图片准备期间编辑已结束。");
+      if (imageIds(target.parts).length >= caps.maxImages)
         throw new Error(`每条消息最多 ${caps.maxImages} 张图片。`);
       const asset = await getOrCreateImageAsset(tx, file, info);
-      if (imageIds(draft.parts).includes(asset.id))
+      if (imageIds(target.parts).includes(asset.id))
         throw new Error("该图片已经在草稿中。");
       await tx.objectStore("drafts").put({
         ...draft,
-        parts: [...(draft.parts ?? []), { type: "image", assetId: asset.id }],
+        ...(editUserId
+          ? {
+              edit: {
+                ...draft.edit!,
+                parts: [
+                  ...(target.parts ?? []),
+                  { type: "image" as const, assetId: asset.id },
+                ],
+              },
+            }
+          : {
+              parts: [
+                ...(target.parts ?? []),
+                { type: "image" as const, assetId: asset.id },
+              ],
+            }),
         updatedAt: now(),
       });
       return asset;
@@ -214,24 +233,33 @@ export async function prepareCharacterPhoto(
     });
   });
 }
-export async function removeDraftImage(sessionId: string, assetId: string) {
+export async function removeDraftImage(
+  sessionId: string,
+  assetId: string,
+  editUserId?: string,
+) {
   const db = await database();
   const tx = db.transaction(TABLES, "readwrite");
-  const draft = await tx.objectStore("drafts").get(sessionId);
-  if (draft)
-    await tx.objectStore("drafts").put({
-      ...draft,
-      parts: draft.parts?.filter(
+  await atomic(tx, async () => {
+    const draft = await tx.objectStore("drafts").get(sessionId);
+    if (draft && (!editUserId || draft.edit?.userMessageId === editUserId)) {
+      const target = editUserId ? draft.edit! : draft;
+      const parts = target.parts?.filter(
         (p) => p.type !== "image" || p.assetId !== assetId,
-      ),
-      updatedAt: now(),
-    });
-  await collectUnreferenced(tx);
-  await tx.done;
+      );
+      await tx.objectStore("drafts").put({
+        ...draft,
+        ...(editUserId ? { edit: { ...draft.edit!, parts } } : { parts }),
+        updatedAt: now(),
+      });
+    }
+    await collectUnreferenced(tx);
+  });
 }
 export async function getOriginal(assetId: string): Promise<ImageAsset> {
   const asset = await (await database()).get("assets", assetId);
-  if (!asset) throw new Error("本地原图缺失，请重新选择图片或恢复备份。");
+  if (!asset)
+    throw new Error(`本地原图缺失：${assetId}，请重新选择图片或恢复备份。`);
   if (
     sha256(new Uint8Array(await fileBytes(asset.originalBlob))) !== asset.sha256
   )

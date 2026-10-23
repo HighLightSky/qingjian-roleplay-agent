@@ -62,7 +62,7 @@ class VisualSelectionLiveTest {
                 }
             };
             long started = System.nanoTime();
-            var service = new VisualSelectionService(observed, mapper, new VisualSelectionPromptBuilder(TestRequests.dispatch()), images, materials);
+            var service = new VisualSelectionService(observed, mapper, new VisualSelectionPromptBuilder(TestRequests.dispatch(), vision), images, materials);
             var plan = service.select(context);
             assertEquals("ready", plan.status());
             Set<String> selected = new HashSet<>();

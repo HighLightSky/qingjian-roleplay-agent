@@ -12,10 +12,14 @@ import { inspectBudget } from "@/lib/context/coordinator";
 import type { ContextBudget } from "@/lib/context/types";
 import { errorText } from "@/lib/domain";
 
-export function ContextBudgetIndicator() {
+export function ContextBudgetIndicator({
+  editUserId,
+}: { editUserId?: string } = {}) {
   const text = useAuiState((s) => s.composer.text);
   const attachments = useAuiState((s) =>
-    s.composer.attachments.map((a) => a.id).join(","),
+    JSON.stringify(
+      s.composer.attachments.map((a) => [a.id, a.status.type, a.content]),
+    ),
   );
   const state = useAppStore(
     useShallow((s) => ({
@@ -73,8 +77,14 @@ export function ContextBudgetIndicator() {
           db.getAllFromIndex("goals", "session", sessionId),
           db.get("drafts", sessionId),
         ]);
+        const inputDraft = editUserId ? draft?.edit : draft;
+        const history = editUserId
+          ? messages.filter(
+              (m) => m.seq < messages.find((m) => m.id === editUserId)!.seq,
+            )
+          : messages;
         const imageParts =
-          draft?.parts?.filter((p) => p.type === "image") ?? [];
+          inputDraft?.parts?.filter((p) => p.type === "image") ?? [];
         const parts = imageParts.length
           ? [...(text ? [{ type: "text" as const, text }] : []), ...imageParts]
           : undefined;
@@ -82,7 +92,7 @@ export function ContextBudgetIndicator() {
           character,
           session,
           memories,
-          messages,
+          history,
           text,
           state.settings,
           parts,
@@ -91,7 +101,7 @@ export function ContextBudgetIndicator() {
         );
         context.visual = {
           sessionId,
-          assetCatalog: await buildCatalog(sessionId, messages),
+          assetCatalog: await buildCatalog(sessionId, history),
           plan: null,
           imagePayloads: [],
         };
@@ -131,6 +141,7 @@ export function ContextBudgetIndicator() {
     state.loading,
     text,
     attachments,
+    editUserId,
     composing,
   ]);
   const live =

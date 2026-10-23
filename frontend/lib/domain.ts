@@ -86,7 +86,16 @@ export type Message = {
   createdAt: string;
   updatedAt: string;
 };
+export type EditDraft = {
+  userMessageId: string;
+  assistantMessageId: string;
+  userCheckpointVersion: number;
+  assistantCheckpointVersion: number;
+  text: string;
+  parts?: ContentPart[];
+};
 export type Draft = {
+  edit?: EditDraft;
   sessionId: string;
   text: string;
   parts?: ContentPart[];
