@@ -23,7 +23,8 @@ public class CapabilitiesController {
 
     @GetMapping("/api/capabilities")
     public Map<String, Object> getCapabilities() {
-        var result = new java.util.LinkedHashMap<String, Object>(Map.of("visionSupported", properties.isSupported(), "mimeTypes", List.of("image/jpeg", "image/png"),
+        var result = new java.util.LinkedHashMap<String, Object>(Map.of("visionSupported", properties.isSupported(),
+                "mimeTypes", List.of("image/jpeg", "image/png"),
                 "maxImages", properties.getMaxImages(), "maxImageBytes", properties.getMaxImageBytes(),
                 "maxPixels", properties.getMaxPixels(), "maxRequestBytes", ImageValidationService.MAX_REQUEST_BYTES));
         result.put("contextWindowTokens", context.contextWindowTokens());

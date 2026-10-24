@@ -55,7 +55,7 @@ public class ApiExceptionHandler {
                 new ApiError("BAD_REQUEST", "请求正文缺失或 JSON 格式错误。"));
     }
 
-    @ExceptionHandler({IOException.class, InterruptedException.class, RuntimeException.class})
+    @ExceptionHandler({ IOException.class, InterruptedException.class, RuntimeException.class })
     public ResponseEntity<ApiError> modelError(Exception exception, HttpServletResponse response) {
         log.error("模型处理失败，异常类型：{}", exception.getClass().getName());
         // 已提交的 SSE 响应或已断开的连接不能再改成 JSON 响应。
@@ -63,7 +63,8 @@ public class ApiExceptionHandler {
             return null;
         }
         HttpStatus status = exception instanceof HttpTimeoutException
-                ? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY;
+                ? HttpStatus.GATEWAY_TIMEOUT
+                : HttpStatus.BAD_GATEWAY;
         return jsonError(status, toModelError(exception));
     }
 

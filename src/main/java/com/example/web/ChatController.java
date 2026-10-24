@@ -11,15 +11,31 @@ import com.example.web.dto.DispatchDtos.Request;
 @RequestMapping("/api/chat")
 public class ChatController {
     private final ChatDispatchService dispatch;
-    public ChatController(ChatDispatchService dispatch) { this.dispatch = dispatch; }
+
+    public ChatController(ChatDispatchService dispatch) {
+        this.dispatch = dispatch;
+    }
+
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<SseEmitter> chat(@RequestBody Request request) { return stream(dispatch.start(request)); }
+    public ResponseEntity<SseEmitter> chat(@RequestBody Request request) {
+        return stream(dispatch.start(request));
+    }
+
     @GetMapping(value = "/{runId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<SseEmitter> events(@PathVariable String runId) { return stream(dispatch.subscribe(runId)); }
+    public ResponseEntity<SseEmitter> events(@PathVariable String runId) {
+        return stream(dispatch.subscribe(runId));
+    }
+
     @PostMapping("/{runId}/cancel")
-    public void cancel(@PathVariable String runId) { dispatch.cancel(runId); }
+    public void cancel(@PathVariable String runId) {
+        dispatch.cancel(runId);
+    }
+
     @PostMapping("/{runId}/ack")
-    public void acknowledge(@PathVariable String runId) { dispatch.acknowledge(runId); }
+    public void acknowledge(@PathVariable String runId) {
+        dispatch.acknowledge(runId);
+    }
+
     private ResponseEntity<SseEmitter> stream(SseEmitter emitter) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).header("X-Accel-Buffering", "no").body(emitter);
     }
