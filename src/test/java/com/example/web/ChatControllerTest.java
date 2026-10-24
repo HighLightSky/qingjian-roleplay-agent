@@ -239,6 +239,64 @@ class ChatControllerTest {
         String output = post("/api/chat", request("继续")).body();
         assertTrue(output.contains("超过窗口")); verify(model, never()).chatStream(any(), any());
     }
+    @ParameterizedTest
+    @ValueSource(ints = {10, 11})
+    void configuredImageLimitReachesBodyAndStateAndRejectsExcess(int imageCount) throws Exception {
+        var parts = new ArrayList<ContentPartDto>();
+        var refs = new ArrayList<ImageRef>();
+        var observations = mapper.createArrayNode();
+        try (var client = HttpClient.newHttpClient()) {
+            var capabilities = client.send(HttpRequest.newBuilder(
+                    URI.create("http://127.0.0.1:" + port + "/api/capabilities")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(10, mapper.readTree(capabilities.body()).path("maxImages").asInt());
+            for (int index = 1; index <= imageCount; index++) {
+                String assetId = "img" + index;
+                var image = new java.awt.image.BufferedImage(3, 2, java.awt.image.BufferedImage.TYPE_INT_RGB);
+                image.setRGB(0, 0, index);
+                var bytes = new ByteArrayOutputStream();
+                javax.imageio.ImageIO.write(image, "png", bytes);
+                String hash = ImageValidationService.sha256(bytes.toByteArray());
+                var upload = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/images/" + hash))
+                        .PUT(HttpRequest.BodyPublishers.ofByteArray(bytes.toByteArray())).build();
+                assertEquals(200, client.send(upload, HttpResponse.BodyHandlers.ofString()).statusCode());
+                parts.add(new ContentPartDto("image", null, assetId));
+                refs.add(new ImageRef(assetId, hash));
+                var observation = observations.addObject().put("assetId", assetId).put("summary", "有色图片");
+                observation.putArray("visibleDetails");
+                observation.putArray("extractedText");
+                observation.putArray("uncertainDetails");
+            }
+        }
+        when(model.chat(any())).thenReturn(new ChatResponse(
+                EMPTY.replace("\"visualObservations\":[]", "\"visualObservations\":" + observations),
+                "stop", TokenUsage.unavailable()));
+        var base = request("查看这些图片");
+        var context = base.context();
+        var visual = new VisualDtos.Context("session", List.of(), null, List.of(), List.of());
+        var input = new InputDto("查看这些图片", parts);
+        var imageRequest = new Request(base.runId(), new ChatApiRequest(context.character(), context.state(),
+                context.summary(), context.history(), input, context.interactionSettings(), visual, context.operationId()),
+                base.user(), base.assistant(), refs);
+        var response = post("/api/chat", imageRequest);
+        assertEquals(200, response.statusCode(), response.body());
+        if (imageCount > 10) {
+            assertTrue(response.body().contains("本轮图片数量超限"), response.body());
+            verifyNoInteractions(model);
+            return;
+        }
+        assertTrue(response.body().contains("event:state_result"), response.body());
+        var body = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        var state = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model).chatStream(body.capture(), any());
+        verify(model).chat(state.capture());
+        for (var call : List.of(body.getValue(), state.getValue())) {
+            assertEquals(10, call.getMessages().stream().filter(message -> message.getParts() != null)
+                    .flatMap(message -> message.getParts().stream())
+                    .filter(part -> "image_url".equals(part.type())).count());
+        }
+    }
+
     @Test void cachedOriginalIsReadByBodyAndStateWithoutAnotherUpload() throws Exception {
         var bytes = new java.io.ByteArrayOutputStream();
         javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(3, 2, java.awt.image.BufferedImage.TYPE_INT_RGB), "png", bytes);

@@ -31,7 +31,7 @@ class AuxiliaryAgentsTest {
     private final ObjectMapper mapper = new ObjectMapper();
     private final LLMClient model = mock(LLMClient.class);
     private final LlamaTokenCounter counter = mock(LlamaTokenCounter.class);
-    private final VisionProperties vision = new VisionProperties();
+    private final VisionProperties vision = com.example.TestRequests.vision();
     private static final String EMPTY = "{\"visualObservations\":[],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}";
 
     @BeforeEach void setup() throws Exception {
@@ -319,7 +319,7 @@ class AuxiliaryAgentsTest {
     }
 
     @Test void selectionPromptAndSchemaFollowConfiguredTotalAndRemainingSlots() throws Exception {
-        for (int maximum : List.of(1, 2, 5, 7)) {
+        for (int maximum : List.of(1, 2, 5, 7, 10)) {
             clearInvocations(model);
             vision.setMaxImages(maximum);
             var original = withCatalog(3);

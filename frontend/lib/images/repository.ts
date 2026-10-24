@@ -6,7 +6,6 @@ import { allocateImageId, type ImageWriteTransaction } from "./ids";
 import { imageIds, type Capabilities, type ImageAsset } from "./types";
 
 export const DEFAULT_LIMITS = {
-  maxImages: 4,
   maxImageBytes: 10 * 1024 * 1024,
   maxPixels: 20_000_000,
   maxRequestBytes: 64 * 1024 * 1024,

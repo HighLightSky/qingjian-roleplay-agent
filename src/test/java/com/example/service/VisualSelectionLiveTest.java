@@ -32,7 +32,7 @@ class VisualSelectionLiveTest {
         var requests = new LlmRequestMapper(mapper, llm);
         var scenario = SelectionFixtures.scenario(history, photo);
         var context = scenario.context();
-        var vision = new VisionProperties();
+        var vision = com.example.TestRequests.vision();
         vision.setSupported(true);
         var images = new ImageValidationService(vision);
         new ContextValidation().validate(context);

@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "roleplay.vision")
 public class VisionProperties {
     private boolean supported = false;
-    private int maxImages = 4;
+    private int maxImages;
     private long maxImageBytes = 10L * 1024 * 1024;
     private long maxPixels = 20_000_000;
 

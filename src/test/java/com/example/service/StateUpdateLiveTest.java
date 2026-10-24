@@ -79,7 +79,7 @@ class StateUpdateLiveTest {
             var materials = new AuxiliaryContextService(mapper, counter, TestRequests.contextProperties(),
                     new AuxiliaryContextProperties(4, 8192, 8192, 32768, 32768, 2048, 2048));
             var service = new StateUpdateService(observed, mapper, new StateUpdatePromptBuilder(mapper, TestRequests.dispatch()),
-                    new ImageValidationService(new VisionProperties()), TestRequests.budgets(), materials);
+                    new ImageValidationService(com.example.TestRequests.vision()), TestRequests.budgets(), materials);
             new ContextValidation().validate(context);
             service.validateRequest(request);
 

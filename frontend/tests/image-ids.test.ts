@@ -1,4 +1,5 @@
 import "fake-indexeddb/auto";
+import { contextCapabilities } from "./context-fixture";
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -14,7 +15,6 @@ import {
   prepareImage,
   prepareCharacterPhoto,
   removeDraftImage,
-  DEFAULT_LIMITS,
 } from "../lib/images/repository";
 import { takeSnapshot, restoreSnapshot, validateBackup } from "../lib/backup";
 import { clearData } from "../stores/use-app-store";
@@ -45,20 +45,32 @@ async function setup() {
 
 async function withVision(work: () => Promise<void>) {
   const original = globalThis.fetch;
-  globalThis.fetch = async () =>
-    new Response(
-      JSON.stringify({
-        ...DEFAULT_LIMITS,
-        visionSupported: true,
-        mimeTypes: ["image/png", "image/jpeg"],
-      }),
-    );
+  globalThis.fetch = async () => Response.json(contextCapabilities);
   try {
     await work();
   } finally {
     globalThis.fetch = original;
   }
 }
+
+test("上传允许十张图片，第十一张失败并保留已有草稿和资产", async () => {
+  await withVision(async () => {
+    const { session } = await setup();
+    for (let index = 0; index < 10; index++) {
+      await prepareImage(file(index), session.id);
+    }
+    const db = await database();
+    const draft = await db.get("drafts", session.id);
+    assert.equal(draft!.parts!.length, 10);
+    await assert.rejects(
+      prepareImage(file(10), session.id),
+      /每条消息最多 10 张图片/,
+    );
+    assert.deepEqual(await db.get("drafts", session.id), draft);
+    assert.equal((await db.getAll("assets")).length, 10);
+    assert.equal((await db.get("settings", IMAGE_SEQUENCE_KEY))!.value, "10");
+  });
+});
 
 test("角色照片与所有会话共用持久编号，同文件复用，删除不回收，清空才归零", async () => {
   await withVision(async () => {

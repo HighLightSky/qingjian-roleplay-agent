@@ -5,6 +5,20 @@ import com.example.web.dto.StateDtos.*;
 
 /** 测试使用与浏览器一致的完整领域快照。 */
 public final class TestRequests {
+    private static final int MAX_IMAGES = configuredMaxImages();
+
+    private static int configuredMaxImages() {
+        var yaml = new org.springframework.beans.factory.config.YamlPropertiesFactoryBean();
+        yaml.setResources(new org.springframework.core.io.ClassPathResource("application.yml"));
+        return Integer.parseInt(Objects.requireNonNull(yaml.getObject()).getProperty("roleplay.vision.max-images"));
+    }
+
+    public static com.example.config.VisionProperties vision() {
+        var properties = new com.example.config.VisionProperties();
+        properties.setMaxImages(MAX_IMAGES);
+        return properties;
+    }
+
     public static com.example.config.DispatchProperties dispatch() {
         return new com.example.config.DispatchProperties(536870912, 1800, 7200, 600, 7200, 32, 67108864, 60, 4096, 8192);
     }
@@ -23,7 +37,7 @@ public final class TestRequests {
             org.mockito.Mockito.when(counter.count(org.mockito.ArgumentMatchers.any())).thenReturn(count);
             org.mockito.Mockito.when(counter.countText(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyList())).thenReturn(count);
         } catch (Exception e) { throw new AssertionError(e); }
-        var vision = new com.example.config.VisionProperties();
+        var vision = vision();
         var llm = new com.example.config.LlmProperties("", "", "test-model", .8, 800, 120);
         return new com.example.service.ContextBudgetService(counter, new com.example.prompt.PromptBuilder(llm),
                 contextProperties(), vision, new com.example.service.ContextValidation(),

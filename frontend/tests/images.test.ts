@@ -20,11 +20,7 @@ import {
   now,
 } from "../lib/domain";
 import { sha256 } from "../lib/images/hash";
-import {
-  inspectImage,
-  getOriginal,
-  DEFAULT_LIMITS,
-} from "../lib/images/repository";
+import { inspectImage, getOriginal } from "../lib/images/repository";
 import { buildCatalog } from "../lib/images/coordinator";
 import { chatContext } from "../lib/chat/context";
 import { takeSnapshot, restoreSnapshot, validateBackup } from "../lib/backup";
@@ -107,12 +103,6 @@ function mockFetch() {
     const fixture = contextFixture(path, init);
     if (fixture) return fixture;
     calls.push({ path, body });
-    if (path === "/api/capabilities")
-      return json({
-        ...DEFAULT_LIMITS,
-        visionSupported: true,
-        mimeTypes: ["image/png", "image/jpeg"],
-      });
     if (path === "/api/context/inspect")
       return json({
         status: "ready",

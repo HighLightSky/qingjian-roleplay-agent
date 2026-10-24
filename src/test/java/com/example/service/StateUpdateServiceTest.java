@@ -34,7 +34,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 class StateUpdateServiceTest {
     private final ObjectMapper mapper = new ObjectMapper();
     private final LLMClient model = mock(LLMClient.class);
-    private final VisionProperties vision = new VisionProperties();
+    private final VisionProperties vision = com.example.TestRequests.vision();
     private final StateUpdateService service;
 
     StateUpdateServiceTest() {

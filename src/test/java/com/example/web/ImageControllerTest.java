@@ -26,7 +26,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 class ImageControllerTest {
     private final ObjectMapper mapper = new ObjectMapper();
-    private final VisionProperties vision = new VisionProperties();
+    private final VisionProperties vision = com.example.TestRequests.vision();
     private final ImageCache cache = new ImageCache(TestRequests.dispatch(), vision, new MutableClock());
     private final MockMvc mvc = MockMvcBuilders.standaloneSetup(new ImageController(cache, vision))
             .setControllerAdvice(new ApiExceptionHandler()).build();

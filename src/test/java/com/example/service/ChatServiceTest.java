@@ -38,7 +38,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 class ChatServiceTest {
     private static final InteractionSettingsDto SETTINGS = new InteractionSettingsDto(ReplyLength.STANDARD, NarrativeMode.SCENE);
     private final LLMClient llmClient = mock(LLMClient.class);
-    private final ImageValidationService images = new ImageValidationService(new VisionProperties());
+    private final ImageValidationService images = new ImageValidationService(com.example.TestRequests.vision());
     private final ChatService service = new ChatService(
             com.example.TestRequests.budgets(), llmClient, images,
             new ContextValidation());

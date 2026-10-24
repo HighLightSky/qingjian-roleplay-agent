@@ -67,7 +67,7 @@ class ContextFlowTest {
         var requests = new LlmRequestMapper(mapper, llm);
         counter = new LlamaTokenCounter(http, mapper, requests, llm, properties);
         var prompts = new PromptBuilder(llm);
-        var vision = new VisionProperties();
+        var vision = com.example.TestRequests.vision();
         vision.setSupported(true);
         var images = new ImageValidationService(vision);
         var validation = new ContextValidation();

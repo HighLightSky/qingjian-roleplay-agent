@@ -14,7 +14,7 @@ import com.example.web.dto.DispatchDtos.ImageRef;
 class ImageCacheTest {
     @Test void statsDoNotRenewIdleExpiryAndIncludeExpiredPinnedBytes() throws Exception {
         var clock = new MutableClock();
-        var cache = new ImageCache(TestRequests.dispatch(), new VisionProperties(), clock);
+        var cache = new ImageCache(TestRequests.dispatch(), com.example.TestRequests.vision(), clock);
         byte[] bytes = image(9);
         String hash = ImageValidationService.sha256(bytes);
         cache.put(hash, bytes);
@@ -39,7 +39,7 @@ class ImageCacheTest {
         var small = new DispatchProperties(Math.max(bytes.length, other.length), config.imageIdleSeconds(), config.imageLifetimeSeconds(),
                 config.taskTimeoutSeconds(), config.resultRetentionSeconds(), config.maxResults(),
                 config.resultCacheBytes(), config.cleanupSeconds(), config.selectionOutputTokens(), config.stateOutputTokens());
-        var cache = new ImageCache(small, new VisionProperties(), new MutableClock());
+        var cache = new ImageCache(small, com.example.TestRequests.vision(), new MutableClock());
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             var start = new java.util.concurrent.CountDownLatch(1);
             var workers = new java.util.ArrayList<java.util.concurrent.Future<?>>();
@@ -81,7 +81,7 @@ class ImageCacheTest {
         var out = new ByteArrayOutputStream(); ImageIO.write(image, "png", out); return out.toByteArray();
     }
     @Test void validatesOnceAndDeduplicatesContentAcrossAssetNames() throws Exception {
-        var clock = new MutableClock(); var cache = new ImageCache(TestRequests.dispatch(), new VisionProperties(), clock);
+        var clock = new MutableClock(); var cache = new ImageCache(TestRequests.dispatch(), com.example.TestRequests.vision(), clock);
         byte[] bytes = image(2); String hash = ImageValidationService.sha256(bytes);
         cache.put(hash, bytes); cache.put(hash, bytes);
         try (var lease = cache.pin(List.of(new ImageRef("img1", hash), new ImageRef("img2", hash)))) {
@@ -91,7 +91,7 @@ class ImageCacheTest {
         assertThrows(IllegalArgumentException.class, () -> cache.put(ImageValidationService.sha256(new byte[]{1}), new byte[]{1}));
     }
     @Test void idleAndAbsoluteExpiryAreIndependentAndPinnedImagesSurvive() throws Exception {
-        var clock = new MutableClock(); var cache = new ImageCache(TestRequests.dispatch(), new VisionProperties(), clock);
+        var clock = new MutableClock(); var cache = new ImageCache(TestRequests.dispatch(), com.example.TestRequests.vision(), clock);
         byte[] bytes = image(4); String hash = ImageValidationService.sha256(bytes); cache.put(hash, bytes);
         clock.advance(Duration.ofMinutes(29));
         try (var lease = cache.pin(List.of(new ImageRef("img1", hash)))) {
@@ -117,7 +117,7 @@ class ImageCacheTest {
         var clock = new MutableClock(); byte[] one = image(1), two = image(2);
         var defaults = TestRequests.dispatch();
         var small = new DispatchProperties(Math.max(one.length, two.length), 1800, 7200, 600, 7200, 32, 67108864, 60, 4096, 8192);
-        var cache = new ImageCache(small, new VisionProperties(), clock);
+        var cache = new ImageCache(small, com.example.TestRequests.vision(), clock);
         String a = ImageValidationService.sha256(one), b = ImageValidationService.sha256(two);
         cache.put(a, one);
         try (var pinned = cache.pin(List.of(new ImageRef("img1", a)))) {

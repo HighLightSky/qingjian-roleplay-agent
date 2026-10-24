@@ -8,7 +8,7 @@ export const contextCapabilities = {
   compactionMaxBatches: 8,
   visionSupported: true,
   mimeTypes: ["image/png", "image/jpeg"],
-  maxImages: 4,
+  maxImages: 10,
   maxImageBytes: 10485760,
   maxPixels: 20000000,
   maxRequestBytes: 67108864,
