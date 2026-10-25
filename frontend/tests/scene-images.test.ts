@@ -574,3 +574,203 @@ test("v11 备份转为 v12 后移除所有参考 roles 并保留真实文本和�
     plan.prompt,
   );
 });
+
+test("放弃独有生成图立即回收原图，保留记录与引用且备份和存储统计可读", async () => {
+  const { db, generation, plan } = await fixture();
+  const uniqueBlob = new Blob(
+    [
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB0gX7h/C5SAAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    ],
+    { type: "image/png" },
+  );
+  await db.put("sceneGenerations", generation);
+  globalThis.fetch = async () => Response.json(caps);
+  await saveGeneratedImage(generation, plan, uniqueBlob, commit);
+  const saved = (await db.get("sceneGenerations", generation.id))!;
+  assert.notEqual(saved.assetId, "img1");
+  const nextPlan = {
+    ...plan,
+    id: "next-plan",
+    referenceImages: [
+      {
+        assetId: saved.assetId!,
+        scope: "上一张画面",
+        sourceSha256: (await db.get("assets", saved.assetId!))!.sha256,
+        sourceGenerationId: saved.id,
+      },
+    ],
+  };
+  await db.put("sceneImagePlans", nextPlan);
+  await db.put("sceneGenerations", {
+    ...generation,
+    id: "later-failed",
+    planId: nextPlan.id,
+    status: "failed",
+    acknowledged: true,
+    submission: {
+      ...generation.submission,
+      referenceImages: nextPlan.referenceImages.map((ref) => ({
+        ...ref,
+        sourceSha256: ref.sourceSha256!,
+        sha256: ref.sourceSha256!,
+      })),
+    },
+  });
+  await rejectSceneGeneration(saved.id, commit);
+  assert.equal(await db.get("assets", saved.assetId!), undefined);
+  assert.ok(await db.get("assets", "img1"));
+  assert.equal(
+    (await db.get("sceneGenerations", saved.id))!.referenceStatus,
+    "rejected",
+  );
+  const { localDataUsage } = await import("../lib/data-usage");
+  assert.deepEqual((await localDataUsage()).missingAssets, []);
+  const backup = await takeSnapshot();
+  validateBackup(backup);
+  await restoreSnapshot(backup);
+  assert.equal(await db.get("assets", saved.assetId!), undefined);
+  assert.equal(
+    (await db.get("sceneImagePlans", nextPlan.id))!.referenceImages[0].assetId,
+    saved.assetId,
+  );
+});
+
+test("从资源库添加剧情参考会保存选择和原件哈希，不改写提示词", async () => {
+  const { db, plan } = await fixture();
+  const { addSceneReferences, saveSceneDraft } =
+    await import("../lib/scene-images/coordinator");
+  await db.put("assets", {
+    ...(await db.get("assets", "img1"))!,
+    id: "img2",
+    sha256: "b".repeat(64),
+    displayName: "服装.png",
+  });
+  await saveSceneDraft(
+    plan.id,
+    {
+      prompt: "用户自写的<image3>提示词",
+      width: 320,
+      height: 640,
+      referenceAssetIds: [],
+    },
+    commit,
+  );
+  globalThis.fetch = async () => Response.json(caps);
+  await addSceneReferences(plan.id, ["img2", "img1"], commit);
+  const updated = (await db.get("sceneImagePlans", plan.id))!;
+  assert.deepEqual(updated.draft!.referenceAssetIds, ["img2", "img1"]);
+  assert.equal(updated.draft!.prompt, "用户自写的<image3>提示词");
+  assert.equal(updated.referenceImages[1].sourceSha256, "b".repeat(64));
+  assert.equal(updated.referenceImages[1].sourceGenerationId, null);
+  await assert.rejects(
+    addSceneReferences(plan.id, ["img999"], commit),
+    /原件缺失/,
+  );
+  assert.deepEqual(
+    (await db.get("sceneImagePlans", plan.id))!.draft,
+    updated.draft,
+  );
+});
+
+test("资源库显式保存独立于会话回收并随备份恢复，放弃后立即删除独占原件", async () => {
+  const { db } = await fixture();
+  const { saveLibraryImage, discardLibraryImage } =
+    await import("../lib/images/library");
+  const { collectUnreferenced } = await import("../lib/db");
+  globalThis.fetch = async () => Response.json(caps);
+  const file = new File(
+    [
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB0gX7h/C5SAAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    ],
+    "手动生成.png",
+    { type: "image/png" },
+  );
+  const asset = await saveLibraryImage(file, "generated", commit);
+  const { localDataUsage } = await import("../lib/data-usage");
+  const usage = await localDataUsage();
+  assert.equal(usage.publicData.imageCount, 1);
+  assert.deepEqual(usage.missingAssets, []);
+  const tx = db.transaction(TABLES, "readwrite");
+  await collectUnreferenced(tx);
+  await tx.done;
+  assert.ok(await db.get("assets", asset.id));
+  const backup = await takeSnapshot();
+  await restoreSnapshot(backup);
+  assert.ok(await db.get("assets", asset.id));
+  assert.equal(
+    (await db.get("settings", `libraryAsset:${asset.id}`))!.value,
+    asset.id,
+  );
+  await discardLibraryImage(asset.id, commit);
+  assert.equal(await db.get("assets", asset.id), undefined);
+  assert.ok(await db.get("assets", "img1"));
+  validateBackup(await takeSnapshot());
+});
+
+test("直接生图发送原始文件和提示词，临时结果不入库，取回成功后 ACK", async () => {
+  const { db } = await fixture();
+  const { generateDirectImage } =
+    await import("../lib/images/direct-generation");
+  const files = [
+    new File([png], "目标.png", { type: "image/png" }),
+    new File([png], "参考.png", { type: "image/png" }),
+  ];
+  const prompt = "把<image2>的服装用于<image1>。";
+  let acknowledgements = 0;
+  let submitted: any;
+  globalThis.fetch = async (path, init) => {
+    if (String(path).includes("/inputs/")) {
+      assert.equal(init!.method, "PUT");
+      assert.deepEqual(
+        new Uint8Array(await (init!.body as Blob).arrayBuffer()),
+        png,
+      );
+      return new Response(null);
+    }
+    if (path === "/api/scene-images/direct") {
+      submitted = JSON.parse(String(init!.body));
+      assert.equal(submitted.prompt, prompt);
+      assert.deepEqual(
+        submitted.referenceImages.map((ref: any) => ref.assetId),
+        ["img1", "img2"],
+      );
+      return Response.json({
+        runId: "direct",
+        status: "succeeded",
+        terminal: true,
+        revision: 2,
+        submission: {
+          prompt,
+          effectivePrompt: prompt,
+          width: null,
+          height: null,
+          referenceImages: submitted.referenceImages,
+        },
+      });
+    }
+    if (String(path).endsWith("/result"))
+      return new Response(new Blob([png], { type: "image/png" }));
+    if (String(path).endsWith("/ack")) {
+      acknowledgements++;
+      return new Response(null);
+    }
+    throw new Error(`意外请求：${path}`);
+  };
+  const result = await generateDirectImage(
+    prompt,
+    files,
+    "direct",
+    new AbortController().signal,
+    () => {},
+  );
+  assert.equal(result.type, "image/png");
+  assert.equal(acknowledgements, 1);
+  assert.equal((await db.getAll("assets")).length, 1);
+  assert.equal((await db.getAll("sceneGenerations")).length, 0);
+});

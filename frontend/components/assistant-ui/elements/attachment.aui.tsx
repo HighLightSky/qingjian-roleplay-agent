@@ -3,12 +3,7 @@ import { removeDraftImage } from "@/lib/images/repository";
 import { attachmentAssetId } from "@/lib/images/attachment-adapter";
 import { useAppStore, write, report } from "@/stores/use-app-store";
 
-import {
-  type PropsWithChildren,
-  useState,
-  type FC,
-  isValidElement,
-} from "react";
+import { type FC } from "react";
 import {
   XIcon,
   ImageIcon,
@@ -29,74 +24,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import { ImagePreviewDialog as AttachmentPreviewDialog } from "@/components/image-preview-dialog";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button";
 import { useAttachmentSrc } from "@/hooks/use-attachment-src";
 import { cn } from "@/lib/utils";
-
-type AttachmentPreviewProps = {
-  src: string;
-  name: string;
-};
-
-const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src, name }) => {
-  const [isLoaded, setIsLoaded] = useState(false);
-  return (
-    <img
-      src={src}
-      alt={`图片 ${name}`}
-      className={cn(
-        "block h-auto max-h-[80vh] w-auto max-w-full rounded-sm object-contain transition-opacity duration-300 motion-reduce:transition-none",
-        isLoaded
-          ? "aui-attachment-preview-image-loaded opacity-100"
-          : "aui-attachment-preview-image-loading opacity-0",
-      )}
-      onLoad={() => setIsLoaded(true)}
-    />
-  );
-};
-
-type AttachmentPreviewDialogProps = PropsWithChildren<{
-  src: string | undefined;
-  name: string;
-}>;
-
-const AttachmentPreviewDialog: FC<AttachmentPreviewDialogProps> = ({
-  children,
-  src,
-  name,
-}) => {
-  if (!src) return children;
-
-  return (
-    <Dialog>
-      <DialogTrigger
-        className="aui-attachment-preview-trigger cursor-zoom-in"
-        asChild
-      >
-        {isValidElement(children) ? (
-          children
-        ) : (
-          <button type="button">{children}</button>
-        )}
-      </DialogTrigger>
-      <DialogContent className="aui-attachment-preview-dialog-content [&>button]:bg-foreground/60 [&>button]:hover:bg-foreground/80 [&_svg]:text-background p-2 sm:max-w-3xl [&>button]:rounded-full [&>button]:p-1 [&>button]:opacity-100 [&>button]:ring-0!">
-        <DialogTitle className="aui-sr-only sr-only">
-          查看图片 {name}
-        </DialogTitle>
-        <div className="aui-attachment-preview bg-background relative mx-auto flex max-h-[80dvh] w-full items-center justify-center overflow-hidden rounded-sm">
-          <AttachmentPreview src={src} name={name} />
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-};
 
 const AttachmentThumb: FC<{ src: string | undefined }> = ({ src }) => {
   return (

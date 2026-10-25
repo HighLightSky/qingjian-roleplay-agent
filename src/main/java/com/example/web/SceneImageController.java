@@ -26,6 +26,10 @@ public class SceneImageController {
     public TaskSnapshot create(@RequestBody GenerationRequest request) throws IOException {
         return tasks.start(request);
     }
+    @PostMapping("/direct")
+    public TaskSnapshot direct(@RequestBody DirectGenerationRequest request) throws IOException {
+        return tasks.startDirect(request);
+    }
     @GetMapping("/{runId}")
     public TaskSnapshot snapshot(@PathVariable String runId) {
         return tasks.snapshot(runId);

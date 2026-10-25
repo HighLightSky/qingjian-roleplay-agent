@@ -71,6 +71,6 @@ roleplay:
     max-output-pixels: 20000000
     reference-max-edge: 1024
     reference-jpeg-quality: 0.85
-    default-width: 256
+    default-width: 512
     default-height: 512
     dimension-alignment: 32

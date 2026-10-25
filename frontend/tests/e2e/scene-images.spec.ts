@@ -9,7 +9,7 @@ const hash = createHash("sha256")
   .digest("hex");
 const generationCaps = {
   enabled: true,
-  defaultWidth: 256,
+  defaultWidth: 512,
   defaultHeight: 512,
   dimensionAlignment: 32,
   maxReferenceImages: 9,
@@ -201,6 +201,14 @@ test("生成不阻塞输入；刷新只恢复原任务，成功结果保存后�
   await page.reload();
   complete = true;
   await expect(page.getByAltText("剧情图")).toBeVisible();
+  await page.getByRole("button", { name: "预览剧情图" }).click();
+  const preview = page.getByRole("dialog", { name: "查看图片 剧情图.png" });
+  await expect(preview).toBeVisible();
+  await expect(preview.getByRole("link", { name: "下载图片" })).toHaveAttribute(
+    "download",
+    "剧情图.png",
+  );
+  await preview.getByRole("button", { name: "关闭", exact: true }).click();
   expect(starts).toBe(1);
   await expect(
     page.getByRole("button", { name: "再次生成", exact: true }),
@@ -428,13 +436,11 @@ test("编辑提示词先确认；取消不提交，确认后冻结参数；放�
   expect(requests[0].height).toBe(544);
   expect(requests[0].prompt).toContain("参考 img1");
   await restored.getByRole("button", { name: "放弃这张", exact: true }).click();
-  await expect(
-    restored.getByText("已放弃，不参与后续参考", { exact: true }),
-  ).toBeVisible();
+  await expect(restored.getByAltText("剧情图", { exact: true })).toHaveCount(0);
   await restored.getByLabel("生图提示词").fill("李白换成红袍。");
   await restored.getByRole("button", { name: "再次生成", exact: true }).click();
   await page.getByRole("button", { name: "继续生成", exact: true }).click();
-  await expect(restored.getByAltText("剧情图")).toHaveCount(2);
+  await expect(restored.getByAltText("剧情图")).toHaveCount(1);
   expect(requests).toHaveLength(2);
   expect(requests[1].runId).not.toBe(requests[0].runId);
   expect(requests[1].prompt).toBe("李白换成红袍。");
@@ -486,11 +492,106 @@ test("无身份照片且参考建议报错时，仍允许仅用提示词生成�
   const card = page.getByTestId("scene-image-card").last();
   await card.locator("summary").click();
   await expect(card.getByLabel("生图提示词")).toHaveValue("李白站在瀑布旁。");
-  await expect(card.getByLabel("画面宽度")).toHaveValue("256");
+  await expect(card.getByLabel("画面宽度")).toHaveValue("512");
   await expect(card.getByLabel("画面高度")).toHaveValue("512");
-  await card.getByLabel("画面宽度").fill("512");
+  await card.getByLabel("画面宽度").fill("768");
   await card.getByRole("button", { name: "生成图片", exact: true }).click();
-  await expect.poll(() => request?.width).toBe(512);
+  await expect.poll(() => request?.width).toBe(768);
   expect(request.referenceImages).toEqual([]);
   await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+test("剧情图从资源库添加列表外参考，上传先入库且刷新保留选择", async ({
+  page,
+}) => {
+  await setup(page);
+  const encodedImage = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d")!;
+    context.fillStyle = "#3366ff";
+    context.fillRect(0, 0, 1, 1);
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  const image = Buffer.from(encodedImage, "base64");
+  await page.evaluate(
+    async ({ encoded, hash }) => {
+      const request = indexedDB.open("roleplay-agent");
+      const db = await new Promise<IDBDatabase>((resolve) => {
+        request.onsuccess = () => resolve(request.result);
+      });
+      const tx = db.transaction(["assets", "settings"], "readwrite");
+      const bytes = Uint8Array.from(atob(encoded), (value) =>
+        value.charCodeAt(0),
+      );
+      tx.objectStore("assets").put({
+        id: "img2",
+        creationOrigin: "uploaded",
+        sha256: hash,
+        mimeType: "image/png",
+        byteSize: bytes.length,
+        width: 1,
+        height: 1,
+        originalBlob: new Blob([bytes], { type: "image/png" }),
+        displayName: "服装.png",
+        createdAt: new Date().toISOString(),
+      });
+      tx.objectStore("settings").put({ key: "imageAssetSequence", value: "2" });
+      tx.objectStore("settings").put({
+        key: "libraryAsset:img2",
+        value: "img2",
+      });
+      await new Promise<void>((resolve) => {
+        tx.oncomplete = () => resolve();
+      });
+      db.close();
+    },
+    {
+      encoded: image.toString("base64"),
+      hash: createHash("sha256").update(image).digest("hex"),
+    },
+  );
+  const card = page.getByTestId("scene-image-card").last();
+  await card.locator("summary").click();
+  await card.getByRole("button", { name: "从资源库添加" }).click();
+  await page.getByLabel("选择 img2", { exact: true }).check();
+  await page.getByRole("button", { name: "添加所选图片（1）" }).click();
+  await expect(card.getByLabel("使用参考图 img2")).toBeChecked();
+  const uploaded = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 2;
+    canvas.height = 2;
+    canvas.getContext("2d")!.fillRect(0, 0, 2, 2);
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  await card
+    .getByLabel("上传剧情参考图")
+    .setInputFiles({
+      name: "新参考.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(uploaded, "base64"),
+    });
+  await expect(card.getByLabel("使用参考图 img3")).toBeChecked();
+  await page.reload();
+  const restored = page.getByTestId("scene-image-card").last();
+  await restored.locator("summary").click();
+  await expect(restored.getByLabel("使用参考图 img2")).toBeChecked();
+  await expect(restored.getByLabel("使用参考图 img3")).toBeChecked();
+  const pin = await page.evaluate(async () => {
+    const request = indexedDB.open("roleplay-agent");
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      request.onsuccess = () => resolve(request.result);
+    });
+    const row = await new Promise<any>((resolve) => {
+      const request = db
+        .transaction("settings")
+        .objectStore("settings")
+        .get("libraryAsset:img3");
+      request.onsuccess = () => resolve(request.result);
+    });
+    db.close();
+    return row;
+  });
+  expect(pin.value).toBe("img3");
 });

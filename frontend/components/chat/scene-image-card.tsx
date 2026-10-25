@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useAuiState } from "@assistant-ui/react";
+import { ImagePreviewDialog } from "@/components/image-preview-dialog";
+import { ResourcePicker } from "./resource-picker";
+import { saveLibraryImage } from "@/lib/images/library";
 import { capabilities } from "@/lib/images/repository";
 import type { Capabilities } from "@/lib/images/types";
 import {
@@ -22,6 +25,7 @@ import {
   followSceneGeneration,
   initialSceneDraft,
   saveSceneDraft,
+  addSceneReferences,
 } from "@/lib/scene-images/coordinator";
 import {
   isActiveGeneration,
@@ -35,13 +39,15 @@ function AssetPreview({ assetId }: { assetId: string }) {
   return missing ? (
     <p>图片原件缺失。</p>
   ) : url ? (
-    <a href={url} target="_blank" rel="noreferrer">
-      <img
-        src={url}
-        alt="剧情图"
-        className="mt-2 max-h-[32rem] rounded-lg object-contain"
-      />
-    </a>
+    <ImagePreviewDialog src={url} name="剧情图.png">
+      <button type="button" aria-label="预览剧情图">
+        <img
+          src={url}
+          alt="剧情图"
+          className="mt-2 max-h-[32rem] rounded-lg object-contain"
+        />
+      </button>
+    </ImagePreviewDialog>
   ) : null;
 }
 function ReferencePreview({
@@ -91,6 +97,8 @@ export function SceneImageCard() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmEdit, setConfirmEdit] = useState(false);
+  const [picker, setPicker] = useState(false);
+  const upload = useRef<HTMLInputElement>(null);
   const [widthText, setWidthText] = useState("");
   const [heightText, setHeightText] = useState("");
   const loaded = useRef("");
@@ -177,6 +185,13 @@ export function SceneImageCard() {
       await startSceneGeneration(plan!.id, write);
     });
   }
+  async function addReferences(ids: string[]) {
+    await writes.current;
+    await addSceneReferences(plan!.id, ids, write);
+    const updated = await (await database()).get("sceneImagePlans", plan!.id);
+    setPlan(updated!);
+    setDraft(updated!.draft!);
+  }
   const disabled = readOnly || busy || active;
   return (
     <div
@@ -246,6 +261,55 @@ export function SceneImageCard() {
               第一张为指定画幅的黑色画布。参考图可不选，最多{" "}
               {caps?.imageGeneration.maxReferenceImages} 张。
             </p>
+            <div className="flex flex-wrap gap-3">
+              <button
+                disabled={
+                  disabled ||
+                  !caps ||
+                  draft.referenceAssetIds.length >=
+                    caps.imageGeneration.maxReferenceImages
+                }
+                onClick={() => setPicker(true)}
+              >
+                从资源库添加
+              </button>
+              <button
+                disabled={
+                  disabled ||
+                  !caps ||
+                  draft.referenceAssetIds.length >=
+                    caps.imageGeneration.maxReferenceImages
+                }
+                onClick={() => upload.current?.click()}
+              >
+                上传参考图
+              </button>
+              <input
+                ref={upload}
+                type="file"
+                accept="image/png,image/jpeg"
+                multiple
+                hidden
+                aria-label="上传剧情参考图"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files!);
+                  e.target.value = "";
+                  void action(async () => {
+                    if (
+                      draft.referenceAssetIds.length + files.length >
+                      caps!.imageGeneration.maxReferenceImages
+                    )
+                      throw new Error("参考图数量超限，请减少图片。");
+                    const ids = [];
+                    for (const file of files)
+                      ids.push(
+                        (await saveLibraryImage(file, "uploaded", write)).id,
+                      );
+                    await addReferences(ids);
+                  });
+                }}
+              />
+            </div>
             {!!plan?.referenceImages.length && (
               <ul className="text-xs">
                 {plan.referenceImages.map((ref) => {
@@ -336,28 +400,34 @@ export function SceneImageCard() {
         )}
       </div>
       {generations
-        .filter((g) => g.assetId)
+        .filter((g) => g.assetId && g.referenceStatus !== "rejected")
         .map((g) => (
           <div key={g.id}>
             <AssetPreview assetId={g.assetId!} />
             <span className="text-xs text-muted-foreground">
-              {g.referenceStatus === "rejected"
-                ? "已放弃，不参与后续参考"
-                : "生成要求，未经图像核实"}
+              生成要求，未经图像核实
             </span>
-            {g.referenceStatus === "eligible" && (
-              <button
-                className="ml-3 text-xs"
-                disabled={readOnly || busy || active}
-                onClick={() =>
-                  void action(() => rejectSceneGeneration(g.id, write))
-                }
-              >
-                放弃这张
-              </button>
-            )}
+            <button
+              className="ml-3 text-xs"
+              disabled={readOnly || busy || active}
+              onClick={() =>
+                void action(() => rejectSceneGeneration(g.id, write))
+              }
+            >
+              放弃这张
+            </button>
           </div>
         ))}
+      <ResourcePicker
+        open={picker}
+        onOpenChange={setPicker}
+        excluded={draft?.referenceAssetIds ?? []}
+        limit={
+          (caps?.imageGeneration.maxReferenceImages ?? 0) -
+          (draft?.referenceAssetIds.length ?? 0)
+        }
+        onSelect={addReferences}
+      />
       <Dialog open={confirmEdit} onOpenChange={setConfirmEdit}>
         <DialogContent>
           <DialogHeader>

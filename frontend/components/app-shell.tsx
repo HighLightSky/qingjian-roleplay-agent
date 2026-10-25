@@ -19,6 +19,7 @@ import {
   BookOpenIcon,
   ChevronDownIcon,
   FileTextIcon,
+  ImagePlusIcon,
   LeafIcon,
   MenuIcon,
   MessageSquareIcon,
@@ -330,6 +331,11 @@ export function AppShell() {
                   )}
                 </p>
               </div>
+              <Button variant="ghost" size="icon" className="size-11" asChild>
+                <Link href="/images" aria-label="直接生图" title="直接生图">
+                  <ImagePlusIcon />
+                </Link>
+              </Button>
               <Button variant="ghost" size="icon" className="size-11" asChild>
                 <Link
                   href="/docs/backend"

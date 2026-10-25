@@ -31,7 +31,7 @@ public class SceneImageTaskService {
 
     private static final class Task {
         final String runId, taskId = UUID.randomUUID().toString();
-        final GenerationRequest request;
+        final TaskRequest request;
         final Submission submission;
         String status = "running", errorCode, error;
         long revision = 1, finishedAt;
@@ -40,7 +40,7 @@ public class SceneImageTaskService {
         int subscribers;
         ScheduledFuture<?> deadline;
 
-        Task(GenerationRequest request, Submission submission) {
+        Task(TaskRequest request, Submission submission) {
             this.runId = request.runId();
             this.request = request;
             this.submission = submission;
@@ -63,7 +63,14 @@ public class SceneImageTaskService {
     }
 
     public synchronized TaskSnapshot start(GenerationRequest request) throws IOException {
-        var submission = validation.validateRequest(request);
+        return start(request, validation.validateRequest(request), true);
+    }
+
+    public synchronized TaskSnapshot startDirect(DirectGenerationRequest request) throws IOException {
+        return start(request, validation.validateDirectRequest(request), false);
+    }
+
+    private TaskSnapshot start(TaskRequest request, Submission submission, boolean canvas) throws IOException {
         if (config.apiToken().isBlank())
             throw new DispatchException(HttpStatus.SERVICE_UNAVAILABLE, "GENERATION_NOT_CONFIGURED", "未配置生图服务 Token");
         Task previous = tasks.get(request.runId());
@@ -78,12 +85,13 @@ public class SceneImageTaskService {
         if (tasks.size() >= config.maxResults())
             throw conflict("GENERATION_RESULTS_FULL", "生图结果额度已满，请先取回结果");
         var lease = cache
-                .pin(request.referenceImages().stream().map(i -> new ImageRef(i.assetId(), i.sha256())).toList());
+                .pin(submission.referenceImages().stream().map(i -> new ImageRef(i.assetId(), i.sha256())).toList());
         List<QwenImageClient.Image> images;
         try {
             images = new ArrayList<>();
-            images.add(validation.blackCanvas(submission));
-            images.addAll(lease.binaryImages(request.referenceImages().stream().map(InputImage::assetId).toList()));
+            if (canvas)
+                images.add(validation.blackCanvas(submission));
+            images.addAll(lease.binaryImages(submission.referenceImages().stream().map(InputImage::assetId).toList()));
             validation.validateInputImages(images);
         } catch (IOException | RuntimeException e) {
             lease.close();

@@ -1,4 +1,4 @@
-import { database, atomic } from "../db";
+import { database, atomic, TABLES, collectUnreferenced } from "../db";
 import { id, now } from "../domain";
 import type { Commit, ImageAsset } from "../images/types";
 import { allocateImageId } from "../images/ids";
@@ -66,6 +66,48 @@ export async function saveSceneDraft(
     if (!plan) throw new Error("画面草稿不存在。");
     await db.put("sceneImagePlans", { ...plan, draft });
   });
+}
+
+export async function addSceneReferences(
+  planId: string,
+  assetIds: string[],
+  commit: Commit,
+) {
+  const caps = await capabilities();
+  await commit(async () => {
+    const db = await database();
+    const tx = db.transaction(["sceneImagePlans", "assets"], "readwrite");
+    await atomic(tx, async () => {
+      const plan = await tx.objectStore("sceneImagePlans").get(planId);
+      if (!plan) throw new Error("画面草稿不存在。");
+      const draft = initialSceneDraft(plan, caps);
+      const selected = [...new Set([...draft.referenceAssetIds, ...assetIds])];
+      if (selected.length > caps.imageGeneration.maxReferenceImages)
+        throw new Error(
+          `最多选择 ${caps.imageGeneration.maxReferenceImages} 张参考图。`,
+        );
+      const references = [...plan.referenceImages];
+      for (const assetId of assetIds) {
+        const asset = await tx.objectStore("assets").get(assetId);
+        if (!asset) throw new Error(`参考图原件缺失：${assetId}`);
+        if (!references.some((ref) => ref.assetId === assetId))
+          references.push({
+            assetId,
+            scope: "用户添加的参考",
+            sourceSha256: asset.sha256,
+            sourceGenerationId: null,
+          });
+      }
+      await tx
+        .objectStore("sceneImagePlans")
+        .put({
+          ...plan,
+          referenceImages: references,
+          draft: { ...draft, referenceAssetIds: selected },
+        });
+    });
+  });
+  notifySceneImages();
 }
 
 export async function startSceneGeneration(planId: string, commit: Commit) {
@@ -418,16 +460,20 @@ export async function resumeSceneGenerations(commit: Commit) {
 }
 export async function rejectSceneGeneration(runId: string, commit: Commit) {
   const db = await database();
-  const generation = await db.get("sceneGenerations", runId);
-  if (!generation || generation.status !== "succeeded")
-    throw new Error("只能排除已生成图片。");
-  await commit(() =>
-    db.put("sceneGenerations", {
-      ...generation,
-      referenceStatus: "rejected",
-      rejectionReason: "用户放弃这张图片",
-      updatedAt: now(),
-    }),
-  );
+  await commit(async () => {
+    const tx = db.transaction(TABLES, "readwrite");
+    await atomic(tx, async () => {
+      const generation = await tx.objectStore("sceneGenerations").get(runId);
+      if (!generation || generation.status !== "succeeded")
+        throw new Error("只能放弃已生成图片。");
+      await tx.objectStore("sceneGenerations").put({
+        ...generation,
+        referenceStatus: "rejected",
+        rejectionReason: "用户放弃这张图片",
+        updatedAt: now(),
+      });
+      await collectUnreferenced(tx);
+    });
+  });
   notifySceneImages();
 }

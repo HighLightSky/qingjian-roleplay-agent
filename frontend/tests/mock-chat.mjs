@@ -371,7 +371,7 @@ createServer(async (request, response) => {
         mimeTypes: ["image/png", "image/jpeg"],
         imageGeneration: {
           enabled: true,
-          defaultWidth: 256,
+          defaultWidth: 512,
           defaultHeight: 512,
           dimensionAlignment: 32,
           maxReferenceImages: 9,

@@ -34,14 +34,25 @@ public final class SceneImageDtos {
             String sourceGenerationId) {
     }
 
+    public sealed interface TaskRequest permits GenerationRequest, DirectGenerationRequest {
+        String runId();
+    }
+
     public record GenerationRequest(String runId, Source source, String prompt, int width, int height,
-            List<InputImage> referenceImages) {
+            List<InputImage> referenceImages) implements TaskRequest {
         public GenerationRequest {
             referenceImages = referenceImages == null ? List.of() : List.copyOf(referenceImages);
         }
     }
 
-    public record Submission(String prompt, String effectivePrompt, int width, int height,
+    public record DirectGenerationRequest(String runId, String prompt, List<InputImage> referenceImages)
+            implements TaskRequest {
+        public DirectGenerationRequest {
+            referenceImages = referenceImages == null ? List.of() : List.copyOf(referenceImages);
+        }
+    }
+
+    public record Submission(String prompt, String effectivePrompt, Integer width, Integer height,
             List<InputImage> referenceImages) {
     }
 

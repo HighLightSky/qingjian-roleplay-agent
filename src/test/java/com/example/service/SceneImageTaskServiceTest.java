@@ -135,6 +135,49 @@ class SceneImageTaskServiceTest {
     }
 
     @Test
+    void directGenerationKeepsOriginalPromptAndFirstImageAndSharesPermit() throws Exception {
+        String hash = ImageValidationService.sha256(png);
+        var request = new DirectGenerationRequest(UUID.randomUUID().toString(), "将<image1>背景改成蓝色。",
+                List.of(new InputImage("img1", "编辑目标", hash, hash, null)));
+        mvc.perform(post("/api/scene-images/direct").contentType("application/json")
+                .content(mapper.writeValueAsBytes(request)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.submission.effectivePrompt").value(request.prompt()));
+        assertTrue(received.await(3, TimeUnit.SECONDS));
+        assertTrue(multipart.contains(request.prompt()));
+        assertFalse(multipart.contains("纯黑画布"));
+        assertFalse(multipart.contains("image2.png"));
+        String wire = new String(multipartBytes, StandardCharsets.ISO_8859_1);
+        int firstPng = wire.indexOf("\u0089PNG\r\n\u001a\n");
+        var target = ImageIO.read(new ByteArrayInputStream(multipartBytes, firstPng, multipartBytes.length - firstPng));
+        assertEquals(32, target.getWidth());
+        assertEquals(32, target.getHeight());
+        assertThrows(DispatchException.class, () -> tasks.start(request()));
+        tasks.startDirect(request);
+        assertEquals(1, edits.get());
+        finish.countDown();
+        assertEquals("succeeded", terminal(request.runId()).status());
+        mvc.perform(get("/api/scene-images/" + request.runId() + "/result"))
+                .andExpect(status().isOk()).andExpect(content().bytes(png));
+        mvc.perform(post("/api/scene-images/" + request.runId() + "/ack")).andExpect(status().isOk());
+    }
+
+    @Test
+    void directGenerationValidatesRequiredImagesCountAndPromptAtEntry() throws Exception {
+        String hash = ImageValidationService.sha256(png);
+        var reference = new InputImage("img1", "编辑目标", hash, hash, null);
+        var requests = List.of(
+                new DirectGenerationRequest("empty", "提示词", List.of()),
+                new DirectGenerationRequest("blank", " ", List.of(reference)),
+                new DirectGenerationRequest("long", "字".repeat(16385), List.of(reference)),
+                new DirectGenerationRequest("many", "提示词", Collections.nCopies(11, reference)),
+                new DirectGenerationRequest("duplicate", "提示词", List.of(reference, reference)));
+        for (var request : requests)
+            mvc.perform(post("/api/scene-images/direct").contentType("application/json")
+                    .content(mapper.writeValueAsBytes(request))).andExpect(status().isBadRequest());
+        assertEquals(0, edits.get());
+    }
+
+    @Test
     void explicitClickUploadsOrderedFilesOnceAndAckReleasesResult() throws Exception {
         var request = request();
         mvc.perform(

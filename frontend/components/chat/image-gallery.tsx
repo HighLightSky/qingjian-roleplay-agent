@@ -120,6 +120,15 @@ function Preview({ asset }: { asset: Metadata }) {
         alt={asset.displayName}
         className="max-h-[60dvh] w-full object-contain"
       />
+      {src && (
+        <a
+          href={src}
+          download={asset.displayName}
+          className="text-sm text-primary"
+        >
+          下载图片
+        </a>
+      )}
       <p className="max-h-24 overflow-y-auto whitespace-pre-line text-xs text-muted-foreground">
         {sources.join("\n") || "保存在本地数据库"}
       </p>

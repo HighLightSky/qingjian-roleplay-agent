@@ -1,6 +1,6 @@
 import { database, TABLES, type RoleplayDB } from "./db";
 import { parseCharacterProfile, type CharacterProfile } from "./domain";
-import { imageIds } from "./images/types";
+import { imageIds, LIBRARY_ASSET_PREFIX } from "./images/types";
 import type { ChatContext } from "./chat/context";
 
 export type CharacterUsage = {
@@ -180,20 +180,29 @@ export async function localDataUsage(): Promise<LocalDataUsage> {
         reference(row.assetId, owner, row.sessionId);
       });
     }
+    const rejectedGenerations = new Set(
+      (await tx.objectStore("sceneGenerations").getAll())
+        .filter((g) => g.referenceStatus === "rejected")
+        .map((g) => g.id),
+    );
+    const retainedReference = (ref: { sourceGenerationId: string | null }) =>
+      !ref.sourceGenerationId ||
+      !rejectedGenerations.has(ref.sourceGenerationId);
     await scan("sceneImagePlans", (row) => {
       const owner = sessionOwner(row.sessionId);
       owner.bytes += jsonBytes(row);
-      row.referenceImages.forEach((ref) =>
-        reference(ref.assetId, owner, row.sessionId),
-      );
+      row.referenceImages
+        .filter(retainedReference)
+        .forEach((ref) => reference(ref.assetId, owner, row.sessionId));
     });
     await scan("sceneGenerations", (row) => {
       const owner = sessionOwner(row.sessionId);
       owner.bytes += jsonBytes(row);
-      if (row.assetId) reference(row.assetId, owner, row.sessionId);
-      row.submission.referenceImages.forEach((ref) =>
-        reference(ref.assetId, owner, row.sessionId),
-      );
+      if (row.assetId && row.referenceStatus !== "rejected")
+        reference(row.assetId, owner, row.sessionId);
+      row.submission.referenceImages
+        .filter(retainedReference)
+        .forEach((ref) => reference(ref.assetId, owner, row.sessionId));
     });
     await scan("operations", (row) => {
       const owner = sessionOwner(row.sessionId);
@@ -202,9 +211,9 @@ export async function localDataUsage(): Promise<LocalDataUsage> {
         const plan = (row.result as import("./state/types").StateResult)
           .scenePlan;
         if (plan !== null)
-          plan.referenceImages.forEach((ref) =>
-            reference(ref.assetId, owner, row.sessionId),
-          );
+          plan.referenceImages
+            .filter(retainedReference)
+            .forEach((ref) => reference(ref.assetId, owner, row.sessionId));
       }
     });
     for (const table of ["goals"] as const) {
@@ -221,6 +230,7 @@ export async function localDataUsage(): Promise<LocalDataUsage> {
     }
     await scan("settings", (row) => {
       result.publicData.bytes += jsonBytes(row);
+      if (row.key.startsWith(LIBRARY_ASSET_PREFIX)) reference(row.value);
       if (row.key.startsWith("characterDraft:"))
         photo(parseCharacterProfile(JSON.parse(row.value), true));
     });

@@ -1,3 +1,5 @@
+export const LIBRARY_ASSET_PREFIX = "libraryAsset:";
+
 export type ContentPart =
   { type: "text"; text: string } | { type: "image"; assetId: string };
 /** id 为浏览器数据库内全局递增的 imgN，与聊天上传顺序无关。 */

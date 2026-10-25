@@ -28,18 +28,7 @@ public class ImageGenerationValidation {
         StateValidation.id(source.assistantMessageId());
         if (source.sourceSeq() < 1 || source.sourceCheckpointVersion() < 1)
             throw new IllegalArgumentException("画面来源检查点无效");
-        if (request.prompt() == null || request.prompt().isBlank())
-            throw new IllegalArgumentException("生图提示词不能为空");
-        if (request.referenceImages().size() + 1 > vision.getMaxImages())
-            throw new IllegalArgumentException("参考图数量超限，黑色画布占用一个图片名额");
-        for (var reference : request.referenceImages()) {
-            ImageIds.requireValid(reference.assetId());
-            ImageCache.hash(reference.sha256());
-            ImageCache.hash(reference.sourceSha256());
-            StateValidation.nonblank(reference.scope());
-            if (reference.sourceGenerationId() != null)
-                StateValidation.id(reference.sourceGenerationId());
-        }
+        validatePromptAndReferences(request.prompt(), request.referenceImages(), true);
         int width = aligned(request.width()), height = aligned(request.height());
         if ((long) width * height > config.maxPixels())
             throw new IllegalArgumentException("黑色画布像素超出生图限制");
@@ -47,6 +36,36 @@ public class ImageGenerationValidation {
         if (effectivePrompt.codePointCount(0, effectivePrompt.length()) > config.maxPromptCharacters())
             throw new IllegalArgumentException("包含参考说明的实际提示词长度超限");
         return new Submission(request.prompt(), effectivePrompt, width, height, request.referenceImages());
+    }
+
+    public Submission validateDirectRequest(DirectGenerationRequest request) {
+        if (request == null)
+            throw new IllegalArgumentException("生图请求不能为空");
+        StateValidation.id(request.runId());
+        validatePromptAndReferences(request.prompt(), request.referenceImages(), false);
+        if (request.referenceImages().isEmpty())
+            throw new IllegalArgumentException("直接生图至少需要一张参考图，第一张为编辑目标");
+        if (request.prompt().codePointCount(0, request.prompt().length()) > config.maxPromptCharacters())
+            throw new IllegalArgumentException("生图提示词长度超限");
+        return new Submission(request.prompt(), request.prompt(), null, null, request.referenceImages());
+    }
+
+    private void validatePromptAndReferences(String prompt, List<InputImage> references, boolean canvas) {
+        if (prompt == null || prompt.isBlank())
+            throw new IllegalArgumentException("生图提示词不能为空");
+        if (references.size() + (canvas ? 1 : 0) > vision.getMaxImages())
+            throw new IllegalArgumentException("生图参考图数量超限" + (canvas ? "，黑色画布占用一个图片名额" : ""));
+        var ids = new HashSet<String>();
+        for (var reference : references) {
+            ImageIds.requireValid(reference.assetId());
+            if (!ids.add(reference.assetId()))
+                throw new IllegalArgumentException("参考图编号重复");
+            ImageCache.hash(reference.sha256());
+            ImageCache.hash(reference.sourceSha256());
+            StateValidation.nonblank(reference.scope());
+            if (reference.sourceGenerationId() != null)
+                StateValidation.id(reference.sourceGenerationId());
+        }
     }
 
     private int aligned(int value) {

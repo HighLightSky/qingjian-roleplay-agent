@@ -1,3 +1,4 @@
+import { LIBRARY_ASSET_PREFIX } from "./images/types";
 import {
   convertV10Backup,
   convertV9Backup,
@@ -273,6 +274,14 @@ export function validateBackup(value: unknown): Backup {
   }
   for (const setting of snapshot.settings) {
     string(setting.value);
+    if (setting.key.startsWith(LIBRARY_ASSET_PREFIX)) {
+      assertImageId(setting.value);
+      if (
+        setting.key !== `${LIBRARY_ASSET_PREFIX}${setting.value}` ||
+        !snapshot.assets.some((a) => a.id === setting.value)
+      )
+        throw new Error("资源库引用了不存在的图片。");
+    }
     if (setting.key.startsWith("characterDraft:")) {
       parseCharacterProfile(JSON.parse(setting.value), true);
     }
@@ -306,12 +315,19 @@ export function validateBackup(value: unknown): Backup {
       throw new Error("生成记录的画面来源无效。");
     if (
       generation.assetId &&
+      generation.referenceStatus !== "rejected" &&
       !snapshot.assets.some((a) => a.id === generation.assetId)
     )
       throw new Error("生成图片原件缺失。");
     for (const ref of generation.submission.referenceImages) {
       const asset = snapshot.assets.find((asset) => asset.id === ref.assetId);
-      if (!asset || asset.sha256 !== ref.sourceSha256)
+      const rejected = snapshot.sceneGenerations.some(
+        (g) =>
+          g.id === ref.sourceGenerationId &&
+          g.assetId === ref.assetId &&
+          g.referenceStatus === "rejected",
+      );
+      if ((!asset && !rejected) || (asset && asset.sha256 !== ref.sourceSha256))
         throw new Error("生成快照参考原件缺失或不一致。");
       if (ref.sourceGenerationId) {
         const related = snapshot.sceneGenerations.find(
@@ -356,9 +372,16 @@ function checkScenePlan(plan: SceneImagePlan, snapshot: Snapshot) {
     throw new Error("画面计划来源无效。");
   for (const reference of plan.referenceImages) {
     const asset = snapshot.assets.find((a) => a.id === reference.assetId);
+    const rejected = snapshot.sceneGenerations.some(
+      (g) =>
+        g.id === reference.sourceGenerationId &&
+        g.assetId === reference.assetId &&
+        g.referenceStatus === "rejected",
+    );
     if (
       reference.sourceSha256 !== null &&
-      (!asset || asset.sha256 !== reference.sourceSha256)
+      ((!asset && !rejected) ||
+        (asset && asset.sha256 !== reference.sourceSha256))
     )
       throw new Error("画面参考原件缺失或哈希不一致。");
     if (reference.sourceGenerationId) {

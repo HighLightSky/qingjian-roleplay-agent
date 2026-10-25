@@ -1,3 +1,4 @@
+import { LIBRARY_ASSET_PREFIX } from "./images/types";
 import {
   emptyVisualState,
   isActiveGeneration,
@@ -532,9 +533,11 @@ export async function collectUnreferenced(
   for (const row of await tx.objectStore("characters").getAll()) photo(row);
   for (const row of await tx.objectStore("sessions").getAll())
     photo(row.characterSnapshot);
-  for (const row of await tx.objectStore("settings").getAll())
+  for (const row of await tx.objectStore("settings").getAll()) {
     if (row.key.startsWith("characterDraft:"))
       photo(parseCharacterProfile(JSON.parse(row.value), true));
+    if (row.key.startsWith(LIBRARY_ASSET_PREFIX)) used.add(row.value);
+  }
   for (const row of await tx.objectStore("messages").getAll())
     imageIds(row.parts).forEach((assetId) => used.add(assetId));
   for (const row of await tx.objectStore("drafts").getAll()) {
@@ -557,17 +560,30 @@ export async function collectUnreferenced(
     row.context.visual?.assetCatalog.forEach((a) => used.add(a.assetId));
     row.context.visual?.missingAssets?.forEach((a) => used.add(a.assetId));
   }
+  const generations = await tx.objectStore("sceneGenerations").getAll();
+  const rejected = new Set(
+    generations
+      .filter((g) => g.referenceStatus === "rejected")
+      .map((g) => g.id),
+  );
+  const reference = (ref: {
+    assetId: string;
+    sourceGenerationId: string | null;
+  }) => {
+    if (!ref.sourceGenerationId || !rejected.has(ref.sourceGenerationId))
+      used.add(ref.assetId);
+  };
   for (const row of await tx.objectStore("sceneImagePlans").getAll())
-    row.referenceImages.forEach((ref) => used.add(ref.assetId));
-  for (const row of await tx.objectStore("sceneGenerations").getAll()) {
-    if (row.assetId) used.add(row.assetId);
-    row.submission.referenceImages.forEach((ref) => used.add(ref.assetId));
+    row.referenceImages.forEach(reference);
+  for (const row of generations) {
+    if (row.assetId && row.referenceStatus !== "rejected")
+      used.add(row.assetId);
+    row.submission.referenceImages.forEach(reference);
   }
   for (const operation of await tx.objectStore("operations").getAll()) {
     if (operation.kind === "state_update" && operation.result) {
       const plan = (operation.result as StateResult).scenePlan;
-      if (plan !== null)
-        plan.referenceImages.forEach((ref) => used.add(ref.assetId));
+      if (plan !== null) plan.referenceImages.forEach(reference);
     }
   }
   for (const asset of await tx.objectStore("assets").getAll())
