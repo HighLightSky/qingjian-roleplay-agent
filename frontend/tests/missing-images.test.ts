@@ -437,5 +437,5 @@ test("完整备份拒绝缺失原件，已恢复原件的冻结缺图记录仍�
   assert.throws(() => validateBackup(incomplete), /图片引用缺失/);
   await db.put("assets", images[1]);
   const complete = await takeSnapshot();
-  assert.equal(validateBackup(complete).formatVersion, 10);
+  assert.equal(validateBackup(complete).formatVersion, 11);
 });

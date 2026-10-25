@@ -721,7 +721,7 @@ export async function sendMessage(
         ...context,
         visual: {
           sessionId,
-          ...(await buildCatalog(sessionId, history)),
+          ...(await buildCatalog(sessionId, [...history, turn.user])),
           plan: null,
           imagePayloads: [],
         },

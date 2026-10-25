@@ -105,11 +105,7 @@ public class ImageValidationService {
                 } else if (source instanceof GenerationSource generated) {
                     StateValidation.id(generated.generationId());
                     StateValidation.id(generated.planId());
-                    if (generated.target() == null) throw new IllegalArgumentException("生成图片缺少画面目标");
-                    StateValidation.collection(generated.target().entrySet(), "画面目标");
-                    generated.target().values().forEach(StateValidation::text);
                     StateValidation.id(generated.messageId());
-                    StateValidation.id(generated.sceneId());
                     StateValidation.nonblank(generated.summary());
                     if (generated.seq() < 1 || generated.rejected()) throw new IllegalArgumentException("生成图片来源无效或已排除");
                     for (var message : r.history()) {

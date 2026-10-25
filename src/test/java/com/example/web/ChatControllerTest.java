@@ -327,7 +327,9 @@ class ChatControllerTest {
         }
     }
 
-    @Test void cachedOriginalIsReadByBodyAndStateWithoutAnotherUpload() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void cachedOriginalIsReadByBodyAndStateWithoutAnotherUpload(boolean includesCurrentMetadata) throws Exception {
         var bytes = new java.io.ByteArrayOutputStream();
         javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(3, 2, java.awt.image.BufferedImage.TYPE_INT_RGB), "png", bytes);
         String hash = ImageValidationService.sha256(bytes.toByteArray());
@@ -343,7 +345,10 @@ class ChatControllerTest {
                 List.of(new VisualDtos.MessageSource("missing-user", 1, "旧图", 1, 1)), null);
         var history = List.of(new HistoryMessageDto("user", "旧图", "missing-user",
                 List.of(ContentPartDto.text("旧图"), new ContentPartDto("image", null, "img2")), 1, "complete", 1));
-        var visual = new VisualDtos.Context("session", List.of(), null, List.of(), List.of(missing));
+        var currentAsset = new VisualDtos.Asset("img1", hash, "image/png", bytes.size(), 3, 2,
+                List.of(new VisualDtos.MessageSource(base.user().id(), 3, "看图", 1, 2)), null, List.of(), hash);
+        var visual = new VisualDtos.Context("session", includesCurrentMetadata ? List.of(currentAsset) : List.of(),
+                null, List.of(), List.of(missing));
         var input = new InputDto("看图", List.of(ContentPartDto.text("看图"), new ContentPartDto("image", null, "img1")));
         var imageRequest = new Request(base.runId(), new ChatApiRequest(context.character(), context.state(), context.summary(),
                 history, input, context.interactionSettings(), visual, context.operationId()),
@@ -353,6 +358,7 @@ class ChatControllerTest {
         String output = post("/api/chat", imageRequest).body();
         assertTrue(output.contains("event:state_result"), output);
         assertTrue(output.contains("\"uploadIndex\":2"), output);
+        assertFalse(output.contains("\"uploadIndex\":3"), output);
         var bodyCall = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         var stateCall = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(model).chatStream(bodyCall.capture(), any()); verify(model).chat(stateCall.capture());

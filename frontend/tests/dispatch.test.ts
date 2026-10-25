@@ -442,3 +442,47 @@ test("新整理任务使旧任务不可重试，已提交结果重复取回不�
     0,
   );
 });
+
+test("本轮新附件的原件元信息进入生图目录，但仍由系统必选而不参加历史选图", async () => {
+  await setup();
+  const { sha256 } = await import("../lib/images/hash");
+  const bytes = Uint8Array.from(
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP2kAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  );
+  const hash = sha256(bytes);
+  const db = await database();
+  await db.put("assets", {
+    id: "img1",
+    creationOrigin: "uploaded",
+    sha256: hash,
+    mimeType: "image/png",
+    byteSize: bytes.length,
+    width: 1,
+    height: 1,
+    displayName: "本轮.png",
+    originalBlob: new Blob([bytes], { type: "image/png" }),
+    createdAt: new Date().toISOString(),
+  });
+  let captured: any;
+  globalThis.fetch = async (path, init) => {
+    const context = contextFixture(String(path), init);
+    if (context) return context;
+    if (path === "/api/images/missing") return Response.json({ missing: [] });
+    if (path === "/api/chat") {
+      captured = JSON.parse(String(init!.body));
+      return dispatchResponse(captured);
+    }
+    if (String(path).endsWith("/ack")) return new Response(null);
+    throw new Error(`意外请求：${path}`);
+  };
+  await sendMessage("参考这张照片", [{ type: "image", assetId: "img1" }]);
+  assert.ok(captured, useAppStore.getState().error);
+  const entry = captured.context.visual.assetCatalog[0];
+  assert.equal(entry.assetId, "img1");
+  assert.equal(entry.sourceSha256, hash);
+  assert.equal(entry.sources[0].messageId, captured.user.id);
+  assert.deepEqual(captured.context.visual.imagePayloads, []);
+});

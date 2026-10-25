@@ -63,12 +63,11 @@ function Preview({ asset }: { asset: Metadata }) {
         await tx.done;
         const names = new Map(sessions.map((s) => [s.id, s.title]));
         const generated = await db.getAll("sceneGenerations");
-        const plans = await db.getAll("sceneImagePlans");
         const result = generated
           .filter((g) => g.assetId === asset.id)
           .map(
             (g) =>
-              `${names.get(g.sessionId)} · 回复 ${g.sourceSeq} · ${g.referenceStatus === "rejected" ? "已排除" : "生成要求，未核实"}\n${plans.find((p) => p.id === g.planId)!.summary}`,
+              `${names.get(g.sessionId)} · 回复 ${g.sourceSeq} · ${g.referenceStatus === "rejected" ? "已放弃" : "生成要求，未核实"}\n${g.submission.effectivePrompt ?? g.submission.prompt}`,
           );
         result.push(
           ...messages

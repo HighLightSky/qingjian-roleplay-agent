@@ -30,7 +30,6 @@ class SceneImageTaskServiceTest {
     HttpServer remote;
     SceneImageTaskService tasks;
     ImageCache cache;
-    SceneImagePlanService plans;
     ImageGenerationValidation validation;
     MockMvc mvc;
     final ObjectMapper mapper = new ObjectMapper();
@@ -44,6 +43,7 @@ class SceneImageTaskServiceTest {
     volatile String taskId, multipart, token, cancelToken;
     volatile int generationPort, cancellationPort;
     byte[] png;
+    volatile byte[] multipartBytes;
 
     @BeforeEach
     void setup() throws Exception {
@@ -55,12 +55,11 @@ class SceneImageTaskServiceTest {
         remote.createContext("/api/image/edit", this::handle);
         remote.start();
         var config = TestRequests.generation("http://127.0.0.1:" + remote.getAddress().getPort());
-        plans = new SceneImagePlanService(mapper, TestRequests.vision(), config);
-        validation = new ImageGenerationValidation(config, plans);
+        validation = new ImageGenerationValidation(config, TestRequests.vision());
         cache = new ImageCache(TestRequests.dispatch(), TestRequests.vision(), Clock.systemUTC());
         cache.put(ImageValidationService.sha256(png), png);
         tasks = new SceneImageTaskService(config, new QwenImageClient(HttpClient.newHttpClient(), mapper, config),
-                validation, cache, mapper, Clock.systemUTC());
+                validation, cache, Clock.systemUTC());
         mvc = MockMvcBuilders.standaloneSetup(new SceneImageController(tasks, cache, config))
                 .setControllerAdvice(new ApiExceptionHandler()).build();
     }
@@ -84,7 +83,8 @@ class SceneImageTaskServiceTest {
                 generationPort = exchange.getRemoteAddress().getPort();
                 taskId = exchange.getRequestHeaders().getFirst("X-Task-ID");
                 token = exchange.getRequestHeaders().getFirst("Authorization");
-                multipart = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                multipartBytes = exchange.getRequestBody().readAllBytes();
+                multipart = new String(multipartBytes, StandardCharsets.UTF_8);
                 received.countDown();
                 if (!finish.await(10, TimeUnit.SECONDS))
                     throw new IOException("测试生成未被释放");
@@ -102,12 +102,14 @@ class SceneImageTaskServiceTest {
             exchange.close();
         }
     }
+
     void json(HttpExchange exchange, int status, String value) throws IOException {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json");
         exchange.sendResponseHeaders(status, bytes.length);
         exchange.getResponseBody().write(bytes);
     }
+
     @AfterEach
     void close() {
         finish.countDown();
@@ -117,19 +119,11 @@ class SceneImageTaskServiceTest {
 
     GenerationRequest request() {
         String hash = ImageValidationService.sha256(png);
-        String prompt = "[参考图说明]以 <image1> 为底图和人物身份参考，服装按主体段。\n[主体]林溪穿白裙坐在木椅上，微笑。\n[环境]室内窗边。\n[光线]午后自然光。\n[材质]棉布裙。\n[构图]半身。\n[风格]写实。\n[画面摘要]林溪穿白裙坐在室内木椅上微笑，午后自然光，写实半身像。";
-        var ref = new Reference("img1", List.of("base", "identity"), "人物身份", hash, null);
-        var target = Map.of("subject", "林溪", "outfit", "白裙", "pose", "坐姿微笑", "environment", "室内", "light", "午后",
-                "material", "棉布", "composition", "半身", "style", "写实");
-        var initial = new Plan("plan", "session", "assistant", 2, 1, 1, "scene", "", "new_scene", target, List.of(ref),
-                prompt, SceneImagePromptAssembler.summary(prompt), "", "ready", null);
-        var plan = new Plan(initial.id(), initial.sessionId(), initial.assistantMessageId(), initial.sourceSeq(),
-                initial.sourceCheckpointVersion(), initial.profileVersion(), initial.sceneId(),
-                initial.previousPlanId(), initial.continuity(), initial.target(), initial.referenceImages(),
-                initial.prompt(), initial.summary(), plans.fingerprint(initial), initial.status(), null);
-        return new GenerationRequest(UUID.randomUUID().toString(), plan, new CharacterDto("林溪", "", "", "img1", 1),
-                List.of(new InputImage("img1", hash, hash)));
+        return new GenerationRequest(UUID.randomUUID().toString(), new Source("plan", "session", "assistant", 2, 1),
+                "参考 img1 的人物，林溪穿白裙坐在木椅上微笑。", 256, 512,
+                List.of(new InputImage("img1", List.of("identity"), "人物身份", hash, hash, null)));
     }
+
     TaskSnapshot terminal(String id) throws Exception {
         for (int i = 0; i < 300; i++) {
             var snapshot = tasks.snapshot(id);
@@ -151,8 +145,18 @@ class SceneImageTaskServiceTest {
         assertEquals("Bearer test-token", token);
         assertTrue(multipart.contains("name=\"images\""));
         assertTrue(multipart.contains("name=\"prompt\""));
-        assertTrue(multipart.contains("<image1>"));
+        assertTrue(multipart.contains("第2张图片（img1）参考用途"));
+        assertTrue(multipart.contains("纯黑画布"));
         assertTrue(multipart.contains("林溪穿白裙"));
+        String wire = new String(multipartBytes, StandardCharsets.ISO_8859_1);
+        int firstPng = wire.indexOf("\u0089PNG\r\n\u001a\n");
+        assertTrue(firstPng > wire.indexOf("image1.png"));
+        assertTrue(firstPng < wire.indexOf("image2.png"));
+        var canvas = ImageIO.read(new ByteArrayInputStream(multipartBytes, firstPng, multipartBytes.length - firstPng));
+        assertEquals(256, canvas.getWidth());
+        assertEquals(512, canvas.getHeight());
+        assertEquals(0xff000000, canvas.getRGB(128, 256));
+
         tasks.start(request);
         assertEquals(1, edits.get());
         finish.countDown();
@@ -268,16 +272,67 @@ class SceneImageTaskServiceTest {
     }
 
     @Test
-    void untrustedPromptReferencesAndTruncatedPngAreRejected() throws Exception {
+    void blackOnlyAlignedCanvasAndFreeTextWorkWithoutIdentityOrPreviousImage() throws Exception {
+        var request = new GenerationRequest(UUID.randomUUID().toString(),
+                new Source("plan", "session", "assistant", 2, 1), "李白站在瀑布旁，无需固定段落或图片编号。", 255, 511, List.of());
+        var snapshot = tasks.start(request);
+        assertEquals(256, snapshot.submission().width());
+        assertEquals(512, snapshot.submission().height());
+        assertTrue(received.await(3, TimeUnit.SECONDS));
+        assertEquals(1, multipart.split("filename=", -1).length - 1);
+        finish.countDown();
+        assertEquals("succeeded", terminal(request.runId()).status());
+    }
+
+    @Test
+    void inputLimitsAndCorruptPngStillFailAtBoundary() throws Exception {
         var request = request();
-        assertThrows(IllegalArgumentException.class,
-                () -> plans.validatePrompt(request.plan().prompt().replace("<image1>", "<image2>"),
-                        request.plan().referenceImages()));
         assertThrows(IOException.class, () -> validation.validateOutput(Arrays.copyOf(png, png.length - 8)));
-        var input = request.images().getFirst();
-        assertThrows(IllegalArgumentException.class,
-                () -> tasks.start(new GenerationRequest(request.runId(), request.plan(), request.character(),
-                        List.of(new InputImage(input.assetId(), "f".repeat(64), input.sourceSha256())))));
+        assertThrows(IllegalArgumentException.class, () -> tasks.start(
+                new GenerationRequest(request.runId(), request.source(), "画面", Integer.MAX_VALUE, 512, List.of())));
+        var input = request.referenceImages().getFirst();
+        assertThrows(DispatchException.class,
+                () -> tasks.start(new GenerationRequest(request.runId(), request.source(), request.prompt(), 256, 512,
+                        List.of(new InputImage(input.assetId(), input.roles(), input.scope(), "f".repeat(64),
+                                input.sourceSha256(), null)))));
         assertEquals(0, edits.get());
     }
+
+    @Test
+    void blackCanvasConsumesReferenceSlotAndPixelBudget() throws Exception {
+        var refs = new ArrayList<InputImage>();
+        String hash = ImageValidationService.sha256(png);
+        for (int i = 1; i <= TestRequests.vision().getMaxImages(); i++)
+            refs.add(new InputImage("img" + i, List.of(), "参考", hash, hash, null));
+        var request = request();
+        assertThrows(IllegalArgumentException.class, () -> tasks
+                .start(new GenerationRequest(request.runId(), request.source(), request.prompt(), 256, 512, refs)));
+        var submission = validation
+                .validateRequest(new GenerationRequest(request.runId(), request.source(), "画面", 256, 512, List.of()));
+        var canvas = validation.blackCanvas(submission);
+        var decoded = ImageIO.read(new ByteArrayInputStream(canvas.bytes()));
+        assertEquals(256, decoded.getWidth());
+        assertEquals(512, decoded.getHeight());
+        assertFalse(decoded.getColorModel().hasAlpha());
+        for (int y = 0; y < decoded.getHeight(); y++)
+            for (int x = 0; x < decoded.getWidth(); x++)
+                assertEquals(0xff000000, decoded.getRGB(x, y));
+    }
+
+    @Test
+    void blackPixelsCountTowardActualTotalAndFailBeforeRemoteCall() throws Exception {
+        var bytes = new ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(2048, 2048, BufferedImage.TYPE_INT_RGB), "png", bytes);
+        String hash = ImageValidationService.sha256(bytes.toByteArray());
+        cache.putGenerationInput(hash, bytes.toByteArray(), 16777216, 4194304);
+        var refs = new ArrayList<InputImage>();
+        for (int i = 1; i <= 4; i++)
+            refs.add(new InputImage("img" + i, List.of("identity"), "人物", hash, hash, null));
+        var request = request();
+        assertThrows(IllegalArgumentException.class,
+                () -> tasks.start(new GenerationRequest(request.runId(), request.source(), "画面", 256, 512, refs)));
+        assertEquals(0, edits.get());
+        assertEquals(0, cache.stats(List.of(hash)).inUseImageCount());
+    }
+
 }

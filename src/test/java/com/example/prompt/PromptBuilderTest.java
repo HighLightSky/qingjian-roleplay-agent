@@ -22,7 +22,7 @@ import com.example.web.dto.InteractionSettingsDto.NarrativeMode;
 import com.example.web.dto.InteractionSettingsDto.ReplyLength;
 
 class PromptBuilderTest {
-    private final PromptBuilder builder = new PromptBuilder(new LlmProperties("", "", "", 0.8, 8192, 120), com.example.TestRequests.vision());
+    private final PromptBuilder builder = new PromptBuilder(new LlmProperties("", "", "", 0.8, 8192, 120), com.example.TestRequests.vision(), com.example.TestRequests.auxiliaryContexts());
 
     static Stream<Arguments> combinations() {
         return Arrays.stream(ReplyLength.values()).flatMap(length ->
@@ -31,7 +31,7 @@ class PromptBuilderTest {
 
     @ParameterizedTest
     @MethodSource("combinations")
-    void appliesIndependentLengthAndNarrativeRulesWithoutChangingTheModelBudget(ReplyLength length, NarrativeMode mode) {
+    void appliesIndependentLengthAndNarrativeRulesWithoutChangingTheModelBudget(ReplyLength length, NarrativeMode mode) throws Exception {
         var request = builder.build(new ChatApiRequest(new CharacterDto("林溪", "旅馆老板，也是我的旧友", "好奇，说话简短，生活在山城。", null, 1), com.example.TestRequests.state(List.of("用户叫阿远")), new com.example.web.dto.ContextDtos.HistorySummary("用户带来了一张地图。", 1, 1), List.of(new HistoryMessageDto("assistant", "[台词]让我看看。", "history", null, 1, "complete", 0)), new InputDto("我把地图递给她，让她看看", null), new InteractionSettingsDto(length, mode), null, "operation"));
         String system = request.getMessages().getFirst().getContent();
         String expectedRange = switch (length) {

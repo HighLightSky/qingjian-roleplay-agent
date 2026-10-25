@@ -9,6 +9,10 @@ const hash = createHash("sha256")
   .digest("hex");
 const generationCaps = {
   enabled: true,
+  defaultWidth: 256,
+  defaultHeight: 512,
+  dimensionAlignment: 32,
+  maxReferenceImages: 9,
   maxImageBytes: 16777216,
   maxPixels: 4194304,
   maxEdge: 8192,
@@ -46,7 +50,7 @@ async function setup(page: Page) {
   await expect
     .poll(() =>
       page.evaluate(async () => {
-        const request = indexedDB.open("roleplay-agent", 9);
+        const request = indexedDB.open("roleplay-agent", 10);
         const db = await new Promise<IDBDatabase>((resolve) => {
           request.onsuccess = () => resolve(request.result);
         });
@@ -66,7 +70,7 @@ async function setup(page: Page) {
     .toBe(true);
   await page.evaluate(
     async ({ base64, hash }) => {
-      const request = indexedDB.open("roleplay-agent", 9);
+      const request = indexedDB.open("roleplay-agent", 10);
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
@@ -129,14 +133,10 @@ async function setup(page: Page) {
         sourceSeq: assistant.seq,
         sourceCheckpointVersion: assistant.checkpointVersion,
         profileVersion: session.profileVersion,
-        sceneId: "scene",
-        previousPlanId: "",
-        continuity: "new_scene",
-        target: { outfit: "白裙" },
         referenceImages: [
           {
             assetId: "img1",
-            roles: ["base", "identity"],
+            roles: ["identity"],
             scope: "人物身份",
             sourceSha256: hash,
             sourceGenerationId: null,
@@ -144,9 +144,6 @@ async function setup(page: Page) {
         ],
         prompt:
           "[参考图说明]参考 <image1> 的人物。\n[画面摘要]白裙人物坐在窗边。",
-        summary: "白裙人物坐在窗边。",
-        fingerprint: "a".repeat(64),
-        status: "ready",
         error: null,
       });
       await new Promise<void>((resolve, reject) => {
@@ -166,18 +163,21 @@ async function setup(page: Page) {
 test("生成不阻塞输入；刷新只恢复原任务，成功结果保存后展示", async ({
   page,
 }) => {
+  let submission: any;
   let starts = 0,
     complete = false,
     runId = "";
   await page.route("**/api/scene-images", async (route) => {
     starts++;
-    runId = route.request().postDataJSON().runId;
+    const request = route.request().postDataJSON();
+    runId = request.runId;
+    submission = { ...request, effectivePrompt: request.prompt };
     await route.fulfill({ json: { runId } });
   });
   await page.route("**/api/scene-images/*/events", (route) =>
     route.fulfill({
       contentType: "text/event-stream",
-      body: `event: snapshot\ndata: ${JSON.stringify({ runId, revision: complete ? 2 : 1, status: complete ? "succeeded" : "running", error: null, errorCode: null, terminal: complete })}\n\n`,
+      body: `event: snapshot\ndata: ${JSON.stringify({ runId, revision: complete ? 2 : 1, status: complete ? "succeeded" : "running", error: null, errorCode: null, terminal: complete, submission })}\n\n`,
     }),
   );
   await page.route("**/api/scene-images/*/result", (route) =>
@@ -201,25 +201,28 @@ test("生成不阻塞输入；刷新只恢复原任务，成功结果保存后�
   await expect(page.getByAltText("剧情图")).toBeVisible();
   expect(starts).toBe(1);
   await expect(
-    page.getByRole("button", { name: "重新生成", exact: true }),
+    page.getByRole("button", { name: "再次生成", exact: true }),
   ).toBeVisible();
 });
 
 test("停止收到 202 显示取消中，等原任务终态才允许重新生成", async ({
   page,
 }) => {
+  let submission: any;
   let runId = "",
     cancelling = false,
     cancelled = false,
     stops = 0;
   await page.route("**/api/scene-images", (route) => {
-    runId = route.request().postDataJSON().runId;
+    const request = route.request().postDataJSON();
+    runId = request.runId;
+    submission = { ...request, effectivePrompt: request.prompt };
     return route.fulfill({ json: { runId } });
   });
   await page.route("**/api/scene-images/*/events", (route) =>
     route.fulfill({
       contentType: "text/event-stream",
-      body: `event: snapshot\ndata: ${JSON.stringify({ runId, revision: cancelled ? 3 : cancelling ? 2 : 1, status: cancelled ? "cancelled" : cancelling ? "cancelling" : "running", error: null, errorCode: null, terminal: cancelled })}\n\n`,
+      body: `event: snapshot\ndata: ${JSON.stringify({ runId, revision: cancelled ? 3 : cancelling ? 2 : 1, status: cancelled ? "cancelled" : cancelling ? "cancelling" : "running", error: null, errorCode: null, terminal: cancelled, submission })}\n\n`,
     }),
   );
   await page.route("**/api/scene-images/*/cancel", (route) => {
@@ -238,15 +241,15 @@ test("停止收到 202 显示取消中，等原任务终态才允许重新生成
   ).toBeDisabled();
   expect(stops).toBe(1);
   await expect(
-    page.getByRole("button", { name: "重新生成", exact: true }),
-  ).toHaveCount(0);
+    page.getByRole("button", { name: "再次生成", exact: true }),
+  ).toBeDisabled();
   cancelled = true;
   await expect(
-    page.getByRole("button", { name: "重新生成", exact: true }),
+    page.getByRole("button", { name: "再次生成", exact: true }),
   ).toBeVisible();
 });
 
-test("底图与身份上传原件，辅助服装按用途压缩且顺序不变", async ({ page }) => {
+test("身份和服装参考均可压缩，黑图由后端注入", async ({ page }) => {
   await setup(page);
   const auxiliaryHash = await page.evaluate(async () => {
     const canvas = document.createElement("canvas");
@@ -264,7 +267,7 @@ test("底图与身份上传原件，辅助服装按用途压缩且顺序不变",
       ),
       (b) => b.toString(16).padStart(2, "0"),
     ).join("");
-    const request = indexedDB.open("roleplay-agent", 9);
+    const request = indexedDB.open("roleplay-agent", 10);
     const db = await new Promise<IDBDatabase>((resolve) => {
       request.onsuccess = () => resolve(request.result);
     });
@@ -312,6 +315,9 @@ test("底图与身份上传原件，辅助服装按用途压缩且顺序不变",
     window.dispatchEvent(new Event("scene-images-changed"));
     return hash;
   });
+  const card = page.getByTestId("scene-image-card").last();
+  await card.locator("summary").click();
+  await card.getByLabel("使用参考图 img2").check();
   const uploaded: { hash: string; bytes: Buffer }[] = [];
   await page.route("**/api/images/missing", (route) =>
     route.fulfill({ json: { missing: route.request().postDataJSON().hashes } }),
@@ -325,7 +331,7 @@ test("底图与身份上传原件，辅助服装按用途压缩且顺序不变",
   });
   let inputs: { assetId: string; sha256: string; sourceSha256: string }[] = [];
   await page.route("**/api/scene-images", async (route) => {
-    inputs = route.request().postDataJSON().images;
+    inputs = route.request().postDataJSON().referenceImages;
     await route.fulfill({ json: {} });
   });
   await page.route("**/api/scene-images/*/events", (route) =>
@@ -349,4 +355,140 @@ test("底图与身份上传原件，辅助服装按用途压缩且顺序不变",
     return size;
   }, uploaded[1].bytes.toString("base64"));
   expect(dimensions).toEqual({ width: 1024, height: 512 });
+});
+
+test("编辑提示词先确认；取消不提交，确认后冻结参数；放弃后继续编辑生成", async ({
+  page,
+}) => {
+  const requests: any[] = [];
+  await page.route("**/api/scene-images", async (route) => {
+    const request = route.request().postDataJSON();
+    requests.push(request);
+    await route.fulfill({ json: { runId: request.runId } });
+  });
+  await page.route("**/api/scene-images/*/events", (route) => {
+    const request = requests.find((request) =>
+      route.request().url().includes(request.runId),
+    );
+    return route.fulfill({
+      contentType: "text/event-stream",
+      body: `event: snapshot\ndata: ${JSON.stringify({
+        runId: request.runId,
+        revision: 2,
+        status: "succeeded",
+        error: null,
+        terminal: true,
+        submission: {
+          ...request,
+          effectivePrompt: `实际提交：${request.prompt}`,
+        },
+      })}\n\n`,
+    });
+  });
+  await page.route("**/api/scene-images/*/result", (route) =>
+    route.fulfill({
+      contentType: "image/png",
+      body: Buffer.from(base64, "base64"),
+    }),
+  );
+  await page.route("**/api/scene-images/*/ack", (route) =>
+    route.fulfill({ json: {} }),
+  );
+  await setup(page);
+  const card = page.getByTestId("scene-image-card").last();
+  await card.locator("summary").click();
+  await card
+    .getByLabel("生图提示词")
+    .fill("李白穿蓝袍站在瀑布旁，参考 img1。无需图片编号和固定段落。");
+  await card.getByLabel("画面宽度").fill("257");
+  await card.getByLabel("画面高度").fill("513");
+  await expect(card.getByText("实际画幅：288 × 544")).toBeVisible();
+  await card.getByRole("button", { name: "生成图片", exact: true }).click();
+  await expect(
+    page.getByText("修改提示词可能导致视觉上下文不连贯，是否要继续？", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "返回修改", exact: true }).click();
+  expect(requests).toHaveLength(0);
+  await page.reload();
+  const restored = page.getByTestId("scene-image-card").last();
+  await restored.locator("summary").click();
+  await expect(restored.getByLabel("生图提示词")).toHaveValue(/李白穿蓝袍/);
+  await expect(restored.getByLabel("画面宽度")).toHaveValue("257");
+  await restored.getByRole("button", { name: "生成图片", exact: true }).click();
+  await page.getByRole("button", { name: "继续生成", exact: true }).click();
+  await expect(
+    restored.getByRole("button", { name: "放弃这张", exact: true }),
+  ).toBeVisible();
+  expect(requests).toHaveLength(1);
+  expect(requests[0].width).toBe(288);
+  expect(requests[0].height).toBe(544);
+  expect(requests[0].prompt).toContain("参考 img1");
+  await restored.getByRole("button", { name: "放弃这张", exact: true }).click();
+  await expect(
+    restored.getByText("已放弃，不参与后续参考", { exact: true }),
+  ).toBeVisible();
+  await restored.getByLabel("生图提示词").fill("李白换成红袍。");
+  await restored.getByRole("button", { name: "再次生成", exact: true }).click();
+  await page.getByRole("button", { name: "继续生成", exact: true }).click();
+  await expect(restored.getByAltText("剧情图")).toHaveCount(2);
+  expect(requests).toHaveLength(2);
+  expect(requests[1].runId).not.toBe(requests[0].runId);
+  expect(requests[1].prompt).toBe("李白换成红袍。");
+});
+
+test("无身份照片且参考建议报错时，仍允许仅用提示词生成；只改尺寸不弹窗", async ({
+  page,
+}) => {
+  let request: any;
+  await page.route("**/api/scene-images", (route) => {
+    request = route.request().postDataJSON();
+    return route.fulfill({ json: { runId: request.runId } });
+  });
+  await page.route("**/api/scene-images/*/events", (route) =>
+    route.fulfill({ status: 404, json: { message: "测试任务结束" } }),
+  );
+  await setup(page);
+  await page.evaluate(async () => {
+    const opening = indexedDB.open("roleplay-agent", 10);
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      opening.onsuccess = () => resolve(opening.result);
+    });
+    const tx = db.transaction(["sceneImagePlans", "sessions"], "readwrite");
+    const getPlan = tx.objectStore("sceneImagePlans").get("plan");
+    getPlan.onsuccess = () => {
+      const plan = getPlan.result;
+      tx.objectStore("sceneImagePlans").put({
+        ...plan,
+        id: "free-plan",
+        referenceImages: [],
+        prompt: "李白站在瀑布旁。",
+        error: "参考建议解析失败",
+      });
+      tx.objectStore("sceneImagePlans").delete("plan");
+      const getSession = tx.objectStore("sessions").get(plan.sessionId);
+      getSession.onsuccess = () => {
+        const session = getSession.result;
+        delete session.characterSnapshot.appearancePhotoAssetId;
+        tx.objectStore("sessions").put(session);
+      };
+    };
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+    window.dispatchEvent(new Event("scene-images-changed"));
+  });
+  const card = page.getByTestId("scene-image-card").last();
+  await card.locator("summary").click();
+  await expect(card.getByLabel("生图提示词")).toHaveValue("李白站在瀑布旁。");
+  await expect(card.getByLabel("画面宽度")).toHaveValue("256");
+  await expect(card.getByLabel("画面高度")).toHaveValue("512");
+  await card.getByLabel("画面宽度").fill("512");
+  await card.getByRole("button", { name: "生成图片", exact: true }).click();
+  await expect.poll(() => request?.width).toBe(512);
+  expect(request.referenceImages).toEqual([]);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });

@@ -23,17 +23,17 @@ export type VisualSources = Partial<
 export type SceneReference = {
   assetId: string;
   roles: (
-    | "base"
-    | "identity"
-    | "continuity"
-    | "outfit"
-    | "environment"
-    | "pose"
-    | "prop"
+    "identity" | "continuity" | "outfit" | "environment" | "pose" | "prop"
   )[];
   scope: string;
-  sourceSha256: string;
+  sourceSha256: string | null;
   sourceGenerationId: string | null;
+};
+export type SceneDraft = {
+  prompt: string;
+  width: number;
+  height: number;
+  referenceAssetIds: string[];
 };
 export type SceneImagePlan = {
   id: string;
@@ -42,16 +42,22 @@ export type SceneImagePlan = {
   sourceSeq: number;
   sourceCheckpointVersion: number;
   profileVersion: number;
-  sceneId: string;
-  previousPlanId: string;
-  continuity: "new_scene" | "continue_scene" | "restage";
-  target: Record<string, string>;
   referenceImages: SceneReference[];
   prompt: string;
-  summary: string;
-  fingerprint: string;
-  status: "ready" | "reuse" | "unavailable" | "invalid";
   error: string | null;
+  draft?: SceneDraft;
+};
+export type SceneInputReference = Omit<SceneReference, "sourceSha256"> & {
+  sourceSha256: string;
+  sha256: string | null;
+};
+export type SceneSubmission = {
+  prompt: string;
+  effectivePrompt: string | null;
+  // 旧失败任务无法还原请求尺寸，迁移时明确保留未知值。
+  width: number | null;
+  height: number | null;
+  referenceImages: SceneInputReference[];
 };
 export type GenerationStatus =
   | "pending"
@@ -68,7 +74,7 @@ export type SceneGeneration = {
   assistantMessageId: string;
   sourceCheckpointVersion: number;
   sourceSeq: number;
-  sceneId: string;
+  submission: SceneSubmission;
   status: GenerationStatus;
   assetId?: string;
   referenceStatus: "eligible" | "rejected";
@@ -87,9 +93,14 @@ export type SceneTaskSnapshot = {
   errorCode: string | null;
   error: string | null;
   terminal: boolean;
+  submission: SceneSubmission;
 };
 export type GenerationCapabilities = {
   enabled: boolean;
+  defaultWidth: number;
+  defaultHeight: number;
+  dimensionAlignment: number;
+  maxReferenceImages: number;
   maxImageBytes: number;
   maxPixels: number;
   maxEdge: number;

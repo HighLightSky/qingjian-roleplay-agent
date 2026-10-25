@@ -9,8 +9,10 @@ import {
   type SceneImagePlan,
   type SceneGeneration,
   type SceneTaskSnapshot,
+  type SceneDraft,
 } from "./types";
 import { validateScenePlan } from "./validation";
+import type { Capabilities } from "../images/types";
 import { SSEParser } from "../chat/sse";
 
 const following = new Map<string, Promise<void>>();
@@ -39,10 +41,37 @@ async function ack(runId: string, commit: Commit) {
   });
 }
 
+export function initialSceneDraft(
+  plan: SceneImagePlan,
+  caps: Capabilities,
+): SceneDraft {
+  return (
+    plan.draft ?? {
+      prompt: plan.prompt,
+      width: caps.imageGeneration.defaultWidth,
+      height: caps.imageGeneration.defaultHeight,
+      referenceAssetIds: plan.referenceImages.map((ref) => ref.assetId),
+    }
+  );
+}
+
+export async function saveSceneDraft(
+  planId: string,
+  draft: SceneDraft,
+  commit: Commit,
+) {
+  const db = await database();
+  await commit(async () => {
+    const plan = await db.get("sceneImagePlans", planId);
+    if (!plan) throw new Error("画面草稿不存在。");
+    await db.put("sceneImagePlans", { ...plan, draft });
+  });
+}
+
 export async function startSceneGeneration(planId: string, commit: Commit) {
   const db = await database();
   const plan = await db.get("sceneImagePlans", planId);
-  if (!plan) throw new Error("画面计划不存在。");
+  if (!plan) throw new Error("画面草稿不存在。");
   validateScenePlan(plan);
   const [session, source, generations, caps] = await Promise.all([
     db.get("sessions", plan.sessionId),
@@ -53,24 +82,34 @@ export async function startSceneGeneration(planId: string, commit: Commit) {
   if (
     !session ||
     source?.status !== "complete" ||
-    source.checkpointVersion !== plan.sourceCheckpointVersion ||
-    session.profileVersion !== plan.profileVersion ||
-    plan.status !== "ready"
+    source.checkpointVersion !== plan.sourceCheckpointVersion
   )
-    throw new Error("画面来源已变化或计划不可执行。");
+    throw new Error("画面来源回复已变化，请使用当前回复的生图草稿。");
   if (!caps.imageGeneration.enabled)
     throw new Error("服务端尚未配置生图 Token。");
   if (generations.some((g) => isActiveGeneration(g.status)))
     throw new Error("已有图片正在生成或取消。");
-  if (plan.referenceImages.length > caps.maxImages)
-    throw new Error("生图参考图片数量超限。");
-  for (const ref of plan.referenceImages) {
+  const draft = initialSceneDraft(plan, caps);
+  if (!draft.prompt.trim()) throw new Error("生图提示词不能为空。");
+  const align = caps.imageGeneration.dimensionAlignment;
+  const width = Math.ceil(draft.width / align) * align;
+  const height = Math.ceil(draft.height / align) * align;
+  const references = plan.referenceImages.filter((ref) =>
+    draft.referenceAssetIds.includes(ref.assetId),
+  );
+  if (references.length > caps.imageGeneration.maxReferenceImages)
+    throw new Error(
+      "生图参考图数量超限，请移除部分参考，黑色画布占用一个名额。",
+    );
+  for (const ref of references) {
+    if (!ref.sourceSha256)
+      throw new Error(`参考原件不可用，请移除后生成：${ref.assetId}`);
     const related = generations.find((g) => g.id === ref.sourceGenerationId);
     if (
       ref.sourceGenerationId &&
       (!related || related.referenceStatus === "rejected")
     )
-      throw new Error("参考图已被标记有误，请先重新规划。");
+      throw new Error(`参考图已放弃或不可用，请移除：${ref.assetId}`);
   }
   const previous = generations.filter((g) => g.planId === plan.id).at(-1);
   const generation: SceneGeneration = {
@@ -80,10 +119,16 @@ export async function startSceneGeneration(planId: string, commit: Commit) {
     assistantMessageId: plan.assistantMessageId,
     sourceCheckpointVersion: plan.sourceCheckpointVersion,
     sourceSeq: plan.sourceSeq,
-    sceneId: plan.sceneId,
     status: "pending",
     referenceStatus: "eligible",
     revision: 0,
+    submission: {
+      prompt: draft.prompt,
+      effectivePrompt: null,
+      width,
+      height,
+      referenceImages: [],
+    },
     createdAt: now(),
     updatedAt: now(),
     ...(previous ? { supersedesGenerationId: previous.id } : {}),
@@ -92,23 +137,29 @@ export async function startSceneGeneration(planId: string, commit: Commit) {
   notifySceneImages();
   let submitted = false;
   try {
-    const inputs = await prepareGenerationInputs(plan.referenceImages, caps);
-    if (
-      inputs.some(
-        (input, index) =>
-          input.sourceSha256 !== plan.referenceImages[index].sourceSha256,
-      )
-    )
-      throw new Error("参考原件与冻结计划不一致。");
+    const inputs = await prepareGenerationInputs(
+      references,
+      caps,
+      width,
+      height,
+    );
+    const frozen = inputs.map((input, index) => {
+      const ref = references[index];
+      if (input.sourceSha256 !== ref.sourceSha256)
+        throw new Error(`参考原件与草稿不一致，请重新选择：${ref.assetId}`);
+      return { ...ref, sourceSha256: input.sourceSha256, sha256: input.sha256 };
+    });
+    generation.submission.referenceImages = frozen;
+    await commit(() => db.put("sceneGenerations", generation));
     const missingResponse = await fetch("/api/images/missing", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hashes: inputs.map((i) => i.sha256) }),
+      body: JSON.stringify({ hashes: inputs.map((input) => input.sha256) }),
     });
     if (!missingResponse.ok) throw await responseError(missingResponse);
     const { missing } = (await missingResponse.json()) as { missing: string[] };
     for (const hash of missing) {
-      const input = inputs.find((i) => i.sha256 === hash)!;
+      const input = inputs.find((input) => input.sha256 === hash)!;
       const response = await fetch(`/api/scene-images/inputs/${hash}`, {
         method: "PUT",
         body: input.blob,
@@ -121,28 +172,29 @@ export async function startSceneGeneration(planId: string, commit: Commit) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         runId: generation.id,
-        plan,
-        character: {
-          ...session.characterSnapshot,
-          profileVersion: session.profileVersion,
+        source: {
+          planId: plan.id,
+          sessionId: plan.sessionId,
+          assistantMessageId: plan.assistantMessageId,
+          sourceSeq: plan.sourceSeq,
+          sourceCheckpointVersion: plan.sourceCheckpointVersion,
         },
-        images: inputs.map(({ assetId, sha256, sourceSha256 }) => ({
-          assetId,
-          sha256,
-          sourceSha256,
-        })),
+        prompt: generation.submission.prompt,
+        width,
+        height,
+        referenceImages: frozen,
       }),
     });
     if (!response.ok) {
       submitted = false;
       throw await responseError(response);
     }
+    // 订阅快照携带最终提交参数；POST 响应丢失也能恢复同一个任务。
     void followSceneGeneration(generation.id, commit).catch(() =>
       notifySceneImages(),
     );
   } catch (error) {
     if (submitted) {
-      // POST 可能已经被接受，只查询原任务，不重发生成。
       void followSceneGeneration(generation.id, commit).catch(() =>
         notifySceneImages(),
       );
@@ -296,9 +348,11 @@ async function follow(runId: string, commit: Commit) {
       applying = applying
         .then(async () => {
           if (applyError) return;
-          const current = await db.get("sceneGenerations", runId);
+          let current = await db.get("sceneGenerations", runId);
           if (!current) throw new Error("生图记录已删除。");
           if (current.assetId || snapshot.revision < current.revision) return;
+          current = { ...current, submission: snapshot.submission };
+          await commit(() => db.put("sceneGenerations", current!));
           if (snapshot.status === "succeeded") {
             const result = await fetch(`/api/scene-images/${runId}/result`);
             if (!result.ok) throw await responseError(result);
@@ -371,7 +425,7 @@ export async function rejectSceneGeneration(runId: string, commit: Commit) {
     db.put("sceneGenerations", {
       ...generation,
       referenceStatus: "rejected",
-      rejectionReason: "用户标记图片有误",
+      rejectionReason: "用户放弃这张图片",
       updatedAt: now(),
     }),
   );

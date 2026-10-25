@@ -125,11 +125,10 @@ export async function buildCatalog(
       type: "scene_generation",
       generationId: generation.id,
       planId: plan.id,
-      target: plan.target,
       messageId: generation.assistantMessageId,
       seq: generation.sourceSeq,
-      sceneId: generation.sceneId,
-      summary: plan.summary,
+      summary:
+        generation.submission.effectivePrompt ?? generation.submission.prompt,
       rejected: false,
     });
   }

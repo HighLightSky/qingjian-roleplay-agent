@@ -1,7 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuiState } from "@assistant-ui/react";
+import { capabilities } from "@/lib/images/repository";
+import type { Capabilities } from "@/lib/images/types";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { database } from "@/lib/db";
 import { useImageUrl } from "@/hooks/use-image-url";
 import { useAppStore, write } from "@/stores/use-app-store";
@@ -10,11 +20,14 @@ import {
   stopSceneGeneration,
   rejectSceneGeneration,
   followSceneGeneration,
+  initialSceneDraft,
+  saveSceneDraft,
 } from "@/lib/scene-images/coordinator";
 import {
   isActiveGeneration,
   type SceneImagePlan,
   type SceneGeneration,
+  type SceneDraft,
 } from "@/lib/scene-images/types";
 
 function AssetPreview({ assetId }: { assetId: string }) {
@@ -37,7 +50,7 @@ function ReferencePreview({
   scope,
 }: {
   assetId: string;
-  number: number;
+  number?: number;
   scope: string;
 }) {
   const { url, missing } = useImageUrl(assetId, true);
@@ -46,12 +59,13 @@ function ReferencePreview({
       {url && (
         <img
           src={url}
-          alt={`参考图 ${number}`}
+          alt={number === undefined ? "未使用参考图" : `参考图 ${number}`}
           className="h-12 w-12 rounded object-contain"
         />
       )}
       <span>
-        参考图 {number}：{assetId} · {scope}
+        {number === undefined ? "未使用参考" : `参考图 ${number}`}：{assetId} ·{" "}
+        {scope}
         {missing ? "（原件缺失）" : ""}
       </span>
     </li>
@@ -70,51 +84,55 @@ const labels = {
 export function SceneImageCard() {
   const messageId = useAuiState((s) => s.message.id);
   const readOnly = useAppStore((s) => s.readOnly);
-  const draft = useAppStore((s) => s.imageDrafts[messageId]);
+  const streaming = useAppStore((s) => s.imageDrafts[messageId]);
   const [plan, setPlan] = useState<SceneImagePlan>();
+  const [draft, setDraft] = useState<SceneDraft>();
+  const [caps, setCaps] = useState<Capabilities>();
   const [generations, setGenerations] = useState<SceneGeneration[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirmEdit, setConfirmEdit] = useState(false);
+  const [widthText, setWidthText] = useState("");
+  const [heightText, setHeightText] = useState("");
+  const loaded = useRef("");
+  const writes = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
     let live = true;
+    loaded.current = "";
+    let capabilityLoad: Promise<Capabilities> | undefined;
+    function showDraft(selected: SceneImagePlan, next: SceneDraft) {
+      loaded.current = selected.id;
+      setDraft(next);
+      setWidthText(String(next.width));
+      setHeightText(String(next.height));
+    }
     async function load() {
       const db = await database();
       const [plans, generated] = await Promise.all([
         db.getAllFromIndex("sceneImagePlans", "message", messageId),
         db.getAllFromIndex("sceneGenerations", "message", messageId),
       ]);
-      const selectedPlan = plans
+      if (!live) return;
+      const selected = plans
         .sort((a, b) => a.sourceCheckpointVersion - b.sourceCheckpointVersion)
         .at(-1);
-      const displayed =
-        selectedPlan?.status === "reuse"
-          ? [
-              ...generated,
-              ...(
-                await db.getAllFromIndex(
-                  "sceneGenerations",
-                  "session",
-                  selectedPlan.sessionId,
-                )
-              ).filter(
-                (g) =>
-                  g.planId === selectedPlan.previousPlanId &&
-                  g.status === "succeeded" &&
-                  g.referenceStatus === "eligible",
-              ),
-            ]
-          : generated;
-      if (live) {
-        setPlan(selectedPlan);
-        setGenerations(
-          displayed.sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
-        );
-      }
+      setPlan(selected);
+      setGenerations(
+        generated.sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+      );
+      if (!selected) return;
+      if (selected.draft && loaded.current !== selected.id)
+        showDraft(selected, selected.draft);
+      const capabilitiesValue = await (capabilityLoad ??= capabilities());
+      if (!live) return;
+      setCaps(capabilitiesValue);
+      if (loaded.current !== selected.id)
+        showDraft(selected, initialSceneDraft(selected, capabilitiesValue));
     }
-    void load().catch((e) => setError((e as Error).message));
     const refresh = () => {
       void load().catch((e) => setError((e as Error).message));
     };
+    refresh();
     window.addEventListener("scene-images-changed", refresh);
     return () => {
       live = false;
@@ -122,8 +140,26 @@ export function SceneImageCard() {
     };
   }, [messageId]);
   const latest = generations.at(-1);
-  const active = latest && isActiveGeneration(latest.status);
-  if (!plan && !draft) return null;
+  const active = generations.some((g) => isActiveGeneration(g.status));
+  if (!plan && !streaming) return null;
+  const sizeValid = [widthText, heightText].every(
+    (text) => Number.isSafeInteger(Number(text)) && Number(text) > 0,
+  );
+  const alignment = caps?.imageGeneration.dimensionAlignment;
+  const width = alignment
+    ? Math.ceil(Number(widthText) / alignment) * alignment
+    : undefined;
+  const height = alignment
+    ? Math.ceil(Number(heightText) / alignment) * alignment
+    : undefined;
+
+  function updateDraft(next: SceneDraft) {
+    setDraft(next);
+    writes.current = writes.current
+      .catch(() => {})
+      .then(() => saveSceneDraft(plan!.id, next, write));
+    void writes.current.catch((e) => setError((e as Error).message));
+  }
   async function action(run: () => Promise<unknown>) {
     setBusy(true);
     setError("");
@@ -135,9 +171,14 @@ export function SceneImageCard() {
       setBusy(false);
     }
   }
-  const prompt =
-    plan?.prompt ||
-    (draft?.raw ? draft.raw.replace(/^\[画面计划][^\n]*(?:\n|$)/, "") : "");
+  function generate() {
+    setConfirmEdit(false);
+    void action(async () => {
+      await writes.current;
+      await startSceneGeneration(plan!.id, write);
+    });
+  }
+  const disabled = readOnly || busy || active;
   return (
     <div
       className="mt-3 rounded-lg border p-3 text-sm"
@@ -146,44 +187,139 @@ export function SceneImageCard() {
       <details>
         <summary className="cursor-pointer">
           剧情图 ·{" "}
-          {latest
-            ? labels[latest.status]
-            : plan?.status === "ready"
-              ? "待生成"
-              : draft?.error || plan?.error
-                ? "暂不可生成"
-                : "整理画面中"}
+          {latest ? labels[latest.status] : plan ? "待生成" : "整理画面中"}
         </summary>
-        <pre className="mt-2 whitespace-pre-wrap break-words text-xs">
-          {prompt}
-        </pre>
-        {!!plan?.referenceImages.length && (
-          <ul className="mt-2 text-xs">
-            {plan.referenceImages.map((ref, index) => (
-              <ReferencePreview
-                key={ref.assetId}
-                assetId={ref.assetId}
-                number={index + 1}
-                scope={ref.scope}
+        {draft ? (
+          <div className="mt-3 grid gap-3">
+            <label className="grid gap-1">
+              生图提示词
+              <textarea
+                aria-label="生图提示词"
+                className="min-h-40 w-full rounded border bg-background p-2 text-xs"
+                value={draft.prompt}
+                disabled={disabled}
+                onChange={(e) =>
+                  updateDraft({ ...draft, prompt: e.target.value })
+                }
               />
-            ))}
-          </ul>
+            </label>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="grid gap-1">
+                宽度
+                <input
+                  aria-label="画面宽度"
+                  type="number"
+                  min="1"
+                  className="w-28 rounded border bg-background p-2"
+                  value={widthText}
+                  disabled={disabled}
+                  onChange={(e) => {
+                    setWidthText(e.target.value);
+                    const value = Number(e.target.value);
+                    if (Number.isSafeInteger(value) && value > 0)
+                      updateDraft({ ...draft, width: value });
+                  }}
+                />
+              </label>
+              <label className="grid gap-1">
+                高度
+                <input
+                  aria-label="画面高度"
+                  type="number"
+                  min="1"
+                  className="w-28 rounded border bg-background p-2"
+                  value={heightText}
+                  disabled={disabled}
+                  onChange={(e) => {
+                    setHeightText(e.target.value);
+                    const value = Number(e.target.value);
+                    if (Number.isSafeInteger(value) && value > 0)
+                      updateDraft({ ...draft, height: value });
+                  }}
+                />
+              </label>
+              {sizeValid && (
+                <span>
+                  实际画幅：{width} × {height}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              第一张为指定画幅的黑色画布。参考图可不选，最多{" "}
+              {caps?.imageGeneration.maxReferenceImages} 张。
+            </p>
+            {!!plan?.referenceImages.length && (
+              <ul className="text-xs">
+                {plan.referenceImages.map((ref) => {
+                  const related = generations.find(
+                    (g) => g.id === ref.sourceGenerationId,
+                  );
+                  const selectedIndex = plan.referenceImages
+                    .filter((item) =>
+                      draft.referenceAssetIds.includes(item.assetId),
+                    )
+                    .findIndex((item) => item.assetId === ref.assetId);
+                  return (
+                    <li key={ref.assetId} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        aria-label={`使用参考图 ${ref.assetId}`}
+                        disabled={disabled}
+                        checked={draft.referenceAssetIds.includes(ref.assetId)}
+                        onChange={(e) =>
+                          updateDraft({
+                            ...draft,
+                            referenceAssetIds: e.target.checked
+                              ? [...draft.referenceAssetIds, ref.assetId]
+                              : draft.referenceAssetIds.filter(
+                                  (id) => id !== ref.assetId,
+                                ),
+                          })
+                        }
+                      />
+                      <ul>
+                        <ReferencePreview
+                          assetId={ref.assetId}
+                          number={
+                            selectedIndex < 0 ? undefined : selectedIndex + 2
+                          }
+                          scope={ref.scope}
+                        />
+                      </ul>
+                      {related?.referenceStatus === "rejected" && (
+                        <span>已放弃，请移除参考</span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        ) : (
+          <pre className="mt-2 whitespace-pre-wrap break-words text-xs">
+            {streaming?.raw}
+          </pre>
         )}
       </details>
-      {(error || latest?.error || draft?.error || plan?.error) && (
+      {(error || latest?.error) && (
         <p role="alert" className="mt-2 text-destructive">
-          {error || latest?.error || draft?.error || plan?.error}
+          {error || latest?.error}
+        </p>
+      )}
+      {(plan?.error || streaming?.error) && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {plan?.error || streaming?.error}。可调整提示词和参考后生成。
         </p>
       )}
       <div className="mt-2 flex flex-wrap gap-3">
-        {plan?.status === "ready" && !active && (
+        {plan && draft && (
           <button
-            disabled={readOnly || busy}
+            disabled={disabled || !sizeValid || !draft.prompt.trim()}
             onClick={() =>
-              void action(() => startSceneGeneration(plan.id, write))
+              draft.prompt !== plan.prompt ? setConfirmEdit(true) : generate()
             }
           >
-            {latest ? "重新生成" : "生成图片"}
+            {latest ? "再次生成" : "生成图片"}
           </button>
         )}
         {latest && ["running", "cancelling"].includes(latest.status) && (
@@ -212,22 +348,38 @@ export function SceneImageCard() {
             <AssetPreview assetId={g.assetId!} />
             <span className="text-xs text-muted-foreground">
               {g.referenceStatus === "rejected"
-                ? "已排除参考"
-                : "生成要求摘要，未经图像核实"}
+                ? "已放弃，不参与后续参考"
+                : "生成要求，未经图像核实"}
             </span>
             {g.referenceStatus === "eligible" && (
               <button
                 className="ml-3 text-xs"
-                disabled={readOnly || busy}
+                disabled={readOnly || busy || active}
                 onClick={() =>
                   void action(() => rejectSceneGeneration(g.id, write))
                 }
               >
-                此图有误
+                放弃这张
               </button>
             )}
           </div>
         ))}
+      <Dialog open={confirmEdit} onOpenChange={setConfirmEdit}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认修改后的提示词</DialogTitle>
+            <DialogDescription>
+              修改提示词可能导致视觉上下文不连贯，是否要继续？
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button onClick={() => setConfirmEdit(false)}>返回修改</button>
+            <button disabled={disabled} onClick={generate}>
+              继续生成
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

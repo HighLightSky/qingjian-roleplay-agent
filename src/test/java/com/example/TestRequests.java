@@ -21,7 +21,7 @@ public final class TestRequests {
 
     public static com.example.config.ImageGenerationProperties generation(String baseUrl) {
         return new com.example.config.ImageGenerationProperties(baseUrl, "test-token", 5, 1, 6, 7200, 2, 140000000,
-                16777216, 4194304, 8192, 16777216, 134217728, 16384, 67108864, 20000000, 1024, .85);
+                16777216, 4194304, 8192, 16777216, 134217728, 16384, 67108864, 20000000, 1024, .85, 256, 512, 32);
     }
 
     public static com.example.config.DispatchProperties dispatch() {
@@ -44,7 +44,7 @@ public final class TestRequests {
         } catch (Exception e) { throw new AssertionError(e); }
         var vision = vision();
         var llm = new com.example.config.LlmProperties("", "", "test-model", .8, 800, 120);
-        return new com.example.service.ContextBudgetService(counter, new com.example.prompt.PromptBuilder(llm, com.example.TestRequests.vision()),
+        return new com.example.service.ContextBudgetService(counter, new com.example.prompt.PromptBuilder(llm, com.example.TestRequests.vision(), auxiliaryContexts()),
                 contextProperties(), vision, new com.example.service.ContextValidation(),
                 new com.example.service.ImageValidationService(vision), mapper);
     }

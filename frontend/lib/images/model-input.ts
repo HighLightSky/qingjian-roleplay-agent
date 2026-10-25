@@ -93,69 +93,59 @@ export async function prepareAuxiliaryReference(
 export async function prepareGenerationInputs(
   references: SceneReference[],
   caps: Capabilities,
+  width: number,
+  height: number,
 ): Promise<ModelInput[]> {
   const limits = caps.imageGeneration;
   const inputs: ModelInput[] = [];
   const assets = await Promise.all(
     references.map((ref) => getOriginal(ref.assetId)),
   );
-  let fixedPixels = 0;
-  for (let i = 0; i < references.length; i++) {
-    if (i === 0 || references[i].roles.includes("identity")) {
-      const asset = assets[i];
-      if (
-        asset.byteSize > limits.maxImageBytes ||
-        asset.width * asset.height > limits.maxPixels ||
-        Math.max(asset.width, asset.height) > limits.maxEdge
-      )
-        throw new Error("底图或人物身份原图超出服务限制，请选择合规原图。");
-      fixedPixels += asset.width * asset.height;
-    }
-  }
-  if (fixedPixels > limits.maxTotalPixels)
-    throw new Error("底图及身份原图总像素超限。");
-  const auxiliaryCount = references.filter(
-    (ref, index) => index !== 0 && !ref.roles.includes("identity"),
-  ).length;
-  const auxiliaryEdge = Math.min(
+  if (references.length > limits.maxReferenceImages)
+    throw new Error("生图参考图数量超限，黑色画布占用一个名额。");
+  const blackPixels = width * height;
+  if (
+    blackPixels > limits.maxPixels ||
+    Math.max(width, height) > limits.maxEdge
+  )
+    throw new Error("黑色画布尺寸或像素超过服务限制。");
+  const edgeBudget = Math.min(
     limits.referenceMaxEdge,
+    limits.maxEdge,
+    Math.floor(Math.sqrt(limits.maxPixels)),
     Math.floor(
       Math.sqrt(
-        (limits.maxTotalPixels - fixedPixels) / Math.max(1, auxiliaryCount),
+        (limits.maxTotalPixels - blackPixels) / Math.max(1, references.length),
       ),
     ),
   );
-  if (auxiliaryCount && auxiliaryEdge < 1)
-    throw new Error("没有足够的辅助参考像素预算。");
+  if (references.length && edgeBudget < 1)
+    throw new Error("没有足够的参考图像素预算。");
   for (let i = 0; i < references.length; i++) {
     const ref = references[i];
-    let input =
-      i === 0 || ref.roles.includes("identity")
-        ? original(assets[i])
-        : await encode(
-            assets[i],
-            auxiliaryEdge,
-            limits.referenceJpegQuality,
-            ref.roles.every((role) => ["environment", "pose"].includes(role)),
-          );
-    while (
-      input.byteSize > limits.maxImageBytes &&
-      i !== 0 &&
-      !ref.roles.includes("identity")
-    ) {
+    let input = await encode(
+      assets[i],
+      edgeBudget,
+      limits.referenceJpegQuality,
+      ref.roles.length > 0 &&
+        ref.roles.every((role) => ["environment", "pose"].includes(role)),
+    );
+    while (input.byteSize > limits.maxImageBytes) {
       const edge = Math.floor(Math.max(input.width, input.height) * 0.7);
-      if (edge < 1) throw new Error("辅助参考无法压缩到服务限制。");
+      if (edge < 1) throw new Error(`参考图无法压缩到服务限制：${ref.assetId}`);
       input = await encode(assets[i], edge, limits.referenceJpegQuality, false);
     }
     inputs.push(input);
   }
   if (
-    inputs.reduce((sum, image) => sum + image.width * image.height, 0) >
-      limits.maxTotalPixels ||
+    inputs.reduce(
+      (sum, image) => sum + image.width * image.height,
+      blackPixels,
+    ) > limits.maxTotalPixels ||
     inputs.reduce((sum, image) => sum + image.byteSize, 0) + 65536 >
       limits.maxRequestBytes
   )
-    throw new Error("参考图片总体积或像素超过生图限制。");
+    throw new Error("参考图片总体积或像素超过生图限制，请调整参考清单。");
   return inputs;
 }
 

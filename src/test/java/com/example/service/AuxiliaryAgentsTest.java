@@ -280,7 +280,7 @@ class AuxiliaryAgentsTest {
         actual.addAll(ImageValidationService.requiredIds(context));
         var payloads = scenario.images().stream().filter(p -> actual.contains(p.assetId())).toList();
         var prepared = ChatDispatchService.withImages(context, plan, payloads);
-        var body = new PromptBuilder(new LlmProperties("", "", "test", .8, 8192, 120), com.example.TestRequests.vision()).build(prepared);
+        var body = new PromptBuilder(new LlmProperties("", "", "test", .8, 8192, 120), com.example.TestRequests.vision(), com.example.TestRequests.auxiliaryContexts()).build(prepared);
         long originals = body.getMessages().stream().filter(m -> m.getParts() != null).flatMap(m -> m.getParts().stream())
                 .filter(p -> "image_url".equals(p.type())).count();
         assertEquals(actual.size(), originals);

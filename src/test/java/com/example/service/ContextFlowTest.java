@@ -66,7 +66,7 @@ class ContextFlowTest {
                 "test", "test-model", .8, 1000, 5);
         var requests = new LlmRequestMapper(mapper, llm);
         counter = new LlamaTokenCounter(http, mapper, requests, llm, properties);
-        var prompts = new PromptBuilder(llm, com.example.TestRequests.vision());
+        var prompts = new PromptBuilder(llm, com.example.TestRequests.vision(), com.example.TestRequests.auxiliaryContexts());
         var vision = com.example.TestRequests.vision();
         vision.setSupported(true);
         var images = new ImageValidationService(vision);
@@ -148,7 +148,7 @@ class ContextFlowTest {
         assertTrue(calls > 1);
         assertEquals(60, current.summary().throughSeq());
         assertEquals(original.history().subList(60, 80), current.history());
-        var assembled = new PromptBuilder(new LlmProperties("", "", "test", .8, 1000, 5), com.example.TestRequests.vision()).build(current);
+        var assembled = new PromptBuilder(new LlmProperties("", "", "test", .8, 1000, 5), com.example.TestRequests.vision(), com.example.TestRequests.auxiliaryContexts()).build(current);
         assertTrue(assembled.getMessages().getFirst().getContent().contains(current.summary().text()));
         assertEquals(22, assembled.getMessages().size());
         verify(model, times(calls)).chat(argThat(call -> {

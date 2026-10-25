@@ -251,10 +251,7 @@ export function validateVisualSources(
     } else if (source.type === "scene_generation") {
       string(source.generationId, 200);
       string(source.planId, 200);
-      object(source.target);
-      Object.values(source.target).forEach((v) => string(v));
       string(source.messageId, 200);
-      string(source.sceneId, 200);
       integer(source.seq, 1);
       string(source.summary);
       if (typeof source.rejected !== "boolean")

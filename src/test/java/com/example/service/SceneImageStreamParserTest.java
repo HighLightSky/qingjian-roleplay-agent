@@ -11,7 +11,7 @@ class SceneImageStreamParserTest {
         var body = new ArrayList<SegmentDelta>();
         var prompt = new StringBuilder();
         var parser = new SceneImageStreamParser(body::add, prompt::append);
-        String tail = "[画面计划]{\"action\":\"create\"}\n[参考图说明]参考 <image1>\n[主体]白裙人物\n[画面摘要]白裙人物坐在窗边";
+        String tail = "[画面计划]{\"referenceImages\":[]}\n[参考图说明]参考 <image1>\n[主体]白裙人物\n[画面摘要]白裙人物坐在窗边";
         String text = "[台词]你好\n[描写]她坐下。\n" + tail;
         for (char ch : text.toCharArray())
             parser.feed(String.valueOf(ch));

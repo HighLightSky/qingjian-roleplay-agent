@@ -14,7 +14,6 @@ import com.example.image.QwenImageClient;
 import com.example.image.QwenImageClient.ServiceError;
 import com.example.web.dto.DispatchDtos.ImageRef;
 import com.example.web.dto.SceneImageDtos.*;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** 只保留短期任务与结果，浏览器断开不影响执行线程。 */
 @Service
@@ -25,49 +24,51 @@ public class SceneImageTaskService {
     private final QwenImageClient client;
     private final ImageGenerationValidation validation;
     private final ImageCache cache;
-    private final ObjectMapper mapper;
     private final Clock clock;
     private final ScheduledExecutorService cleanup = Executors
             .newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
     private Task active;
 
     private static final class Task {
-        final String runId, fingerprint, taskId = UUID.randomUUID().toString();
+        final String runId, taskId = UUID.randomUUID().toString();
+        final GenerationRequest request;
+        final Submission submission;
         String status = "running", errorCode, error;
         long revision = 1, finishedAt;
         byte[] result;
         CompletableFuture<TaskSnapshot> cancellation;
         int subscribers;
         ScheduledFuture<?> deadline;
-        Task(String runId, String fingerprint) {
-            this.runId = runId;
-            this.fingerprint = fingerprint;
+
+        Task(GenerationRequest request, Submission submission) {
+            this.runId = request.runId();
+            this.request = request;
+            this.submission = submission;
         }
+
         TaskSnapshot snapshot() {
-            return new TaskSnapshot(runId, revision, status, errorCode, error, TERMINAL.contains(status));
+            return new TaskSnapshot(runId, revision, status, errorCode, error, TERMINAL.contains(status), submission);
         }
     }
 
     public SceneImageTaskService(ImageGenerationProperties config, QwenImageClient client,
-            ImageGenerationValidation validation, ImageCache cache, ObjectMapper mapper, Clock clock) {
+            ImageGenerationValidation validation, ImageCache cache, Clock clock) {
         this.config = config;
         this.client = client;
         this.validation = validation;
         this.cache = cache;
-        this.mapper = mapper;
         this.clock = clock;
         cleanup.scheduleWithFixedDelay(this::cleanup, config.resultRetentionSeconds(), config.resultRetentionSeconds(),
                 TimeUnit.SECONDS);
     }
 
     public synchronized TaskSnapshot start(GenerationRequest request) throws IOException {
-        validation.validateRequest(request);
+        var submission = validation.validateRequest(request);
         if (config.apiToken().isBlank())
             throw new DispatchException(HttpStatus.SERVICE_UNAVAILABLE, "GENERATION_NOT_CONFIGURED", "未配置生图服务 Token");
-        String fingerprint = ImageValidationService.sha256(mapper.writeValueAsBytes(request));
         Task previous = tasks.get(request.runId());
         if (previous != null) {
-            if (!previous.fingerprint.equals(fingerprint))
+            if (!previous.request.equals(request))
                 throw conflict("RUN_ID_CONFLICT", "相同任务 ID 的请求内容不同");
             return previous.snapshot();
         }
@@ -76,23 +77,26 @@ public class SceneImageTaskService {
             throw conflict("GENERATION_BUSY", "已有图片正在生成或取消，请等待结束");
         if (tasks.size() >= config.maxResults())
             throw conflict("GENERATION_RESULTS_FULL", "生图结果额度已满，请先取回结果");
-        var lease = cache.pin(request.images().stream().map(i -> new ImageRef(i.assetId(), i.sha256())).toList());
+        var lease = cache
+                .pin(request.referenceImages().stream().map(i -> new ImageRef(i.assetId(), i.sha256())).toList());
         List<QwenImageClient.Image> images;
         try {
-            images = lease.binaryImages(request.images().stream().map(InputImage::assetId).toList());
+            images = new ArrayList<>();
+            images.add(validation.blackCanvas(submission));
+            images.addAll(lease.binaryImages(request.referenceImages().stream().map(InputImage::assetId).toList()));
             validation.validateInputImages(images);
-        } catch (RuntimeException e) {
+        } catch (IOException | RuntimeException e) {
             lease.close();
             throw e;
         }
-        Task task = new Task(request.runId(), fingerprint);
+        Task task = new Task(request, submission);
         active = task;
         tasks.put(task.runId, task);
         var worker = Thread.ofVirtual().unstarted(() -> {
             byte[] output = null;
             String status, code = null, error = null;
             try (lease) {
-                output = client.edit(task.taskId, request.plan().prompt(), images);
+                output = client.edit(task.taskId, submission.effectivePrompt(), images);
                 try {
                     validation.validateOutput(output);
                 } catch (IOException e) {

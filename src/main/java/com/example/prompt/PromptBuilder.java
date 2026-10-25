@@ -35,10 +35,13 @@ public class PromptBuilder {
 
     private final LlmProperties llmProperties;
     private final com.example.config.VisionProperties vision;
+    private final com.example.service.AuxiliaryContextService auxiliary;
 
-    public PromptBuilder(LlmProperties llmProperties, com.example.config.VisionProperties vision) {
+    public PromptBuilder(LlmProperties llmProperties, com.example.config.VisionProperties vision,
+            com.example.service.AuxiliaryContextService auxiliary) {
         this.llmProperties = llmProperties;
         this.vision = vision;
+        this.auxiliary = auxiliary;
     }
 
     /**
@@ -47,23 +50,25 @@ public class PromptBuilder {
      * @param request 已完成输入校验的聊天请求
      * @return 包含消息列表与生成参数的模型请求
      */
-    public ChatRequest build(ChatApiRequest request) {
+    public ChatRequest build(ChatApiRequest request) throws java.io.IOException, InterruptedException {
         return assemble(request, true);
     }
 
     /** 预算预览允许尚未加载图片字节，原图另按尺寸估算，不发送此请求生成正文。 */
-    public ChatRequest buildText(ChatApiRequest request) {
+    public ChatRequest buildText(ChatApiRequest request) throws java.io.IOException, InterruptedException {
         return assemble(request, false);
     }
 
-    private ChatRequest assemble(ChatApiRequest request, boolean includeImages) {
+    private ChatRequest assemble(ChatApiRequest request, boolean includeImages)
+            throws java.io.IOException, InterruptedException {
         StringBuilder systemPrompt = new StringBuilder(buildSystemPrompt(
                 request.character(), request.state(), request.summary().text(), request.interactionSettings()));
         List<Message> messages = new ArrayList<>();
         List<Message.Part> references = new ArrayList<>();
         appendVisualContext(systemPrompt, messages, references, request, includeImages);
         SceneImagePromptRules.appendTo(systemPrompt, request);
-        systemPrompt.append("最终生图参考图上限为 ").append(vision.getMaxImages()).append(" 张，包含身份图。\n");
+        systemPrompt.append(auxiliary.sceneImageCatalog(request));
+        systemPrompt.append("最终生图参考图上限为 ").append(vision.getMaxImages() - 1).append(" 张，另有程序提供的一张黑色画布。\n");
         messages.addFirst(new Message("system", systemPrompt.toString()));
 
         return new ChatRequest(
@@ -198,7 +203,7 @@ public class PromptBuilder {
         for (var asset : ImageValidationService.missingAssets(request)) {
             missingIds.add(asset.assetId());
             systemPrompt.append("\n【原件缺失，已跳过，本次无法复核】").append(asset.assetId())
-                    .append("，来源：").append(asset.sources());
+                    .append("，来源：").append(sourceLabels(asset));
             if (asset.observation() != null)
                 systemPrompt.append("，已有有损观察（不能声称本轮已看图或已核实细节）：").append(asset.observation());
             systemPrompt.append('\n');
@@ -244,7 +249,7 @@ public class PromptBuilder {
             if (currentIds.contains(p.assetId()) || !sent.add(p.assetId()))
                 continue;
             archived.add(Message.Part.text("历史视觉参考（不是本轮上传），assetId：" + p.assetId() + "，来源："
-                    + assetsById.get(p.assetId()).sources() + "，用途：" + p.purpose()));
+                    + sourceLabels(assetsById.get(p.assetId())) + "，用途：" + p.purpose()));
             if (includeImages) archived.add(Message.Part.image(payloads.get(p.assetId())));
         }
         if (!archived.isEmpty())
@@ -259,6 +264,11 @@ public class PromptBuilder {
             }
         }
         messages.add(toMessage("user", current));
+    }
+
+    private List<?> sourceLabels(com.example.web.dto.VisualDtos.ReferencedAsset asset) {
+        return asset.sources().stream().map(source -> source instanceof com.example.web.dto.VisualDtos.GenerationSource g
+                ? "生成记录 " + g.generationId() + "，来自回复 " + g.seq() + "，画面要求见参考目录" : source).toList();
     }
 
     private Message toMessage(String role, List<Message.Part> parts) {

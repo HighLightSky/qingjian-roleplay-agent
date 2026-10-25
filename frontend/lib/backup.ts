@@ -1,4 +1,4 @@
-import { convertV9Backup } from "./scene-images/migration";
+import { convertV10Backup, convertV9Backup } from "./scene-images/migration";
 import {
   isActiveGeneration,
   type SceneImagePlan,
@@ -81,7 +81,7 @@ export type Snapshot = {
 };
 export type Backup = {
   format: "roleplay-agent-backup";
-  formatVersion: 10;
+  formatVersion: 11;
   exportedAt: string;
   data: Snapshot;
 };
@@ -98,7 +98,11 @@ export function validateBackup(value: unknown): Backup {
     value = convertV9Backup(value);
     object(value);
   }
-  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 10)
+  if (value.format === "roleplay-agent-backup" && value.formatVersion === 10) {
+    value = convertV10Backup(value);
+    object(value);
+  }
+  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 11)
     throw new Error("不支持此备份格式或版本，请选择本应用导出的文件。");
   date(value.exportedAt);
   object(value.data);
@@ -293,21 +297,12 @@ export function validateBackup(value: unknown): Backup {
       session.profileVersion !== plan.profileVersion
     )
       throw new Error("画面计划来源无效。");
-    if (plan.previousPlanId) {
-      const previous = snapshot.sceneImagePlans.find(
-        (p) => p.id === plan.previousPlanId,
-      );
-      if (
-        !previous ||
-        previous.id === plan.id ||
-        previous.sessionId !== plan.sessionId ||
-        previous.sourceSeq > plan.sourceSeq
-      )
-        throw new Error("画面计划的前序来源无效。");
-    }
     for (const reference of plan.referenceImages) {
       const asset = snapshot.assets.find((a) => a.id === reference.assetId);
-      if (!asset || asset.sha256 !== reference.sourceSha256)
+      if (
+        reference.sourceSha256 !== null &&
+        (!asset || asset.sha256 !== reference.sourceSha256)
+      )
         throw new Error("画面参考原件缺失或哈希不一致。");
       if (reference.sourceGenerationId) {
         const sourceGeneration = snapshot.sceneGenerations.find(
@@ -332,7 +327,6 @@ export function validateBackup(value: unknown): Backup {
       !plan ||
       plan.sessionId !== generation.sessionId ||
       plan.assistantMessageId !== generation.assistantMessageId ||
-      plan.sceneId !== generation.sceneId ||
       plan.sourceSeq !== generation.sourceSeq ||
       plan.sourceCheckpointVersion !== generation.sourceCheckpointVersion
     )
@@ -342,6 +336,22 @@ export function validateBackup(value: unknown): Backup {
       !snapshot.assets.some((a) => a.id === generation.assetId)
     )
       throw new Error("生成图片原件缺失。");
+    for (const ref of generation.submission.referenceImages) {
+      const asset = snapshot.assets.find((asset) => asset.id === ref.assetId);
+      if (!asset || asset.sha256 !== ref.sourceSha256)
+        throw new Error("生成快照参考原件缺失或不一致。");
+      if (ref.sourceGenerationId) {
+        const related = snapshot.sceneGenerations.find(
+          (g) => g.id === ref.sourceGenerationId,
+        );
+        if (
+          !related ||
+          related.sessionId !== generation.sessionId ||
+          related.assetId !== ref.assetId
+        )
+          throw new Error("生成快照参考来源无效。");
+      }
+    }
     generation.acknowledged = true;
     if (isActiveGeneration(generation.status)) {
       generation.status = "unknown";
@@ -351,7 +361,7 @@ export function validateBackup(value: unknown): Backup {
   validateImages(snapshot);
   return {
     format: "roleplay-agent-backup",
-    formatVersion: 10,
+    formatVersion: 11,
     exportedAt: value.exportedAt as string,
     data: snapshot,
   };
@@ -501,8 +511,7 @@ function validateImages(snapshot: Snapshot) {
           !generation ||
           generation.sessionId !== sessionId ||
           generation.assetId !== assetId ||
-          generation.assistantMessageId !== source.messageId ||
-          generation.sceneId !== source.sceneId
+          generation.assistantMessageId !== source.messageId
         )
           throw new Error("生成视觉来源无效。");
       } else {
@@ -943,7 +952,7 @@ export async function takeSnapshot(): Promise<Backup> {
   }
   const backup: Backup = {
     format: "roleplay-agent-backup",
-    formatVersion: 10,
+    formatVersion: 11,
     exportedAt: new Date().toISOString(),
     data: { ...data, assets: serialized },
   };

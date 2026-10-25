@@ -26,8 +26,8 @@ public final class VisualDtos {
         public record CharacterPhotoSource(String characterId, int profileVersion) implements Source {
         }
 
-        public record GenerationSource(String generationId, String planId, String messageId, int seq, String sceneId,
-                        String summary, boolean rejected, java.util.Map<String, String> target) implements Source {
+        public record GenerationSource(String generationId, String planId, String messageId, int seq,
+                        String summary, boolean rejected) implements Source {
         }
 
         /** 有损视觉观察，不等于原图全部细节；assetId 为 imgN，版本由服务端基于旧观察推进。 */

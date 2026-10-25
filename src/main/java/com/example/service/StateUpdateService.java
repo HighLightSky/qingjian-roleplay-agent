@@ -326,11 +326,14 @@ public class StateUpdateService {
             if (index > 0) {
                 var user = r.messages().stream().filter(m -> "user".equals(m.role())).reduce((a, b) -> b)
                         .orElseThrow(() -> new IllegalArgumentException("新图片缺少上传消息"));
-                int uploads = ImageValidationService.referencedAssets(r.context()).stream().flatMap(a -> a.sources().stream())
-                        .filter(s -> s instanceof MessageSource).mapToInt(s -> ((MessageSource) s).uploadIndex())
-                        .max().orElse(0);
-                sources.add(
-                        new MessageSource(user.id(), user.seq(), r.context().input().textOf(), index, uploads + index));
+                if (sources.stream().noneMatch(source -> source instanceof MessageSource message
+                        && message.messageId().equals(user.id()))) {
+                    int uploads = ImageValidationService.referencedAssets(r.context()).stream().flatMap(a -> a.sources().stream())
+                            .filter(s -> s instanceof MessageSource).mapToInt(s -> ((MessageSource) s).uploadIndex())
+                            .max().orElse(0);
+                    sources.add(
+                            new MessageSource(user.id(), user.seq(), r.context().input().textOf(), index, uploads + index));
+                }
             }
             result.add(new Observation(o.assetId(), o.summary(), o.visibleDetails(), o.extractedText(),
                     o.uncertainDetails(), List.copyOf(sources), version));

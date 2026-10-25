@@ -11,48 +11,62 @@ import com.example.web.dto.SceneImageDtos.*;
 @Service
 public class ImageGenerationValidation {
     private final ImageGenerationProperties config;
-    private final SceneImagePlanService plans;
+    private final VisionProperties vision;
 
-    public ImageGenerationValidation(ImageGenerationProperties config, SceneImagePlanService plans) {
+    public ImageGenerationValidation(ImageGenerationProperties config, VisionProperties vision) {
         this.config = config;
-        this.plans = plans;
+        this.vision = vision;
     }
 
-    public void validateRequest(GenerationRequest request) {
-        if (request == null)
-            throw new IllegalArgumentException("生图请求不能为空");
+    public Submission validateRequest(GenerationRequest request) {
+        if (request == null || request.source() == null)
+            throw new IllegalArgumentException("生图请求缺少来源");
         StateValidation.id(request.runId());
-        var plan = request.plan();
-        if (plan == null || !"ready".equals(plan.status()) || request.character() == null)
-            throw new IllegalArgumentException("只有完整的可执行画面计划才能生成");
-        StateValidation.id(plan.id());
-        StateValidation.id(plan.sessionId());
-        StateValidation.id(plan.assistantMessageId());
-        StateValidation.id(plan.sceneId());
-        if (plan.sourceSeq() < 1 || plan.sourceCheckpointVersion() < 1
-                || plan.profileVersion() != request.character().profileVersion())
-            throw new IllegalArgumentException("画面来源版本无效");
-        plans.validateReferences(plan.referenceImages(), request.character().appearancePhotoAssetId());
-        if (request.images().size() != plan.referenceImages().size())
-            throw new IllegalArgumentException("生图参考图片数量超限或不匹配");
-        plans.validateTarget(plan.target());
-        plans.validatePrompt(plan.prompt(), plan.referenceImages());
-        if (!SceneImagePromptAssembler.summary(plan.prompt()).equals(plan.summary()))
-            throw new IllegalArgumentException("生成摘要与画面提示词不一致");
-        if (!plans.fingerprint(plan).equals(plan.fingerprint()))
-            throw new IllegalArgumentException("画面计划指纹不一致");
-        for (int i = 0; i < request.images().size(); i++) {
-            var input = request.images().get(i);
-            var reference = plan.referenceImages().get(i);
-            if (!reference.assetId().equals(input.assetId()))
-                throw new IllegalArgumentException("上传顺序与画面编号不一致");
-            ImageCache.hash(input.sha256());
-            ImageCache.hash(input.sourceSha256());
-            if (!input.sourceSha256().equals(reference.sourceSha256()))
-                throw new IllegalArgumentException("参考图原件与冻结计划不一致");
-            if ((i == 0 || reference.roles().contains("identity")) && !input.sha256().equals(input.sourceSha256()))
-                throw new IllegalArgumentException("底图和身份参考必须使用原图");
+        var source = request.source();
+        StateValidation.id(source.planId());
+        StateValidation.id(source.sessionId());
+        StateValidation.id(source.assistantMessageId());
+        if (source.sourceSeq() < 1 || source.sourceCheckpointVersion() < 1)
+            throw new IllegalArgumentException("画面来源检查点无效");
+        if (request.prompt() == null || request.prompt().isBlank())
+            throw new IllegalArgumentException("生图提示词不能为空");
+        if (request.referenceImages().size() + 1 > vision.getMaxImages())
+            throw new IllegalArgumentException("参考图数量超限，黑色画布占用一个图片名额");
+        for (var reference : request.referenceImages()) {
+            ImageIds.requireValid(reference.assetId());
+            ImageCache.hash(reference.sha256());
+            ImageCache.hash(reference.sourceSha256());
+            StateValidation.nonblank(reference.scope());
+            StateValidation.collection(reference.roles(), "参考用途");
+            reference.roles().forEach(StateValidation::nonblank);
+            if (reference.sourceGenerationId() != null)
+                StateValidation.id(reference.sourceGenerationId());
         }
+        int width = aligned(request.width()), height = aligned(request.height());
+        if ((long) width * height > config.maxPixels())
+            throw new IllegalArgumentException("黑色画布像素超出生图限制");
+        String effectivePrompt = SceneImagePromptAssembler.assemble(request.prompt(), request.referenceImages());
+        if (effectivePrompt.codePointCount(0, effectivePrompt.length()) > config.maxPromptCharacters())
+            throw new IllegalArgumentException("包含参考说明的实际提示词长度超限");
+        return new Submission(request.prompt(), effectivePrompt, width, height, request.referenceImages());
+    }
+
+    private int aligned(int value) {
+        if (value < 1)
+            throw new IllegalArgumentException("画面宽高必须为正整数");
+        long aligned = ((long) value + config.dimensionAlignment() - 1) / config.dimensionAlignment()
+                * config.dimensionAlignment();
+        if (aligned > config.maxEdge())
+            throw new IllegalArgumentException("画面宽高超出生图最长边限制");
+        return (int) aligned;
+    }
+
+    public Image blackCanvas(Submission submission) throws IOException {
+        var image = new java.awt.image.BufferedImage(submission.width(), submission.height(),
+                java.awt.image.BufferedImage.TYPE_INT_RGB);
+        var bytes = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", bytes);
+        return new Image("黑色画布", "image/png", submission.width(), submission.height(), bytes.toByteArray());
     }
 
     public void validateInputImages(List<Image> images) {

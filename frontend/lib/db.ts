@@ -4,7 +4,7 @@ import {
   type SceneImagePlan,
   type SceneGeneration,
 } from "./scene-images/types";
-import { upgradeV8Record } from "./scene-images/migration";
+import { upgradeV9Data, upgradeV8Record } from "./scene-images/migration";
 import { IMAGE_SEQUENCE_KEY } from "./images/ids";
 import {
   emptySummary,
@@ -99,16 +99,23 @@ let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
     let upgradeError: unknown;
-    connection = openDB<RoleplayDB>("roleplay-agent", 9, {
+    connection = openDB<RoleplayDB>("roleplay-agent", 10, {
       upgrade(db, oldVersion, _newVersion, tx) {
         void tx.done.catch((error: unknown) => {
           upgradeError ??= error;
         });
-        if (oldVersion !== 0 && oldVersion !== 8) {
+        if (oldVersion !== 0 && oldVersion !== 8 && oldVersion !== 9) {
           upgradeError = new Error(
             "当前数据库版本不支持自动升级，原数据已保留，请使用旧版本导出备份。",
           );
           tx.abort();
+          return;
+        }
+        if (oldVersion === 9) {
+          void migrateV9ToV10(tx).catch((error) => {
+            upgradeError = error;
+            tx.abort();
+          });
           return;
         }
         for (const name of ["sceneImagePlans", "sceneGenerations"] as const) {
@@ -526,8 +533,10 @@ export async function collectUnreferenced(
   }
   for (const row of await tx.objectStore("sceneImagePlans").getAll())
     row.referenceImages.forEach((ref) => used.add(ref.assetId));
-  for (const row of await tx.objectStore("sceneGenerations").getAll())
+  for (const row of await tx.objectStore("sceneGenerations").getAll()) {
     if (row.assetId) used.add(row.assetId);
+    row.submission.referenceImages.forEach((ref) => used.add(ref.assetId));
+  }
   for (const asset of await tx.objectStore("assets").getAll())
     if (!used.has(asset.id)) await tx.objectStore("assets").delete(asset.id);
 }
@@ -630,5 +639,23 @@ export async function migrateV8ToV9(
   while (cursor) {
     if (cursor.value.key.startsWith("dispatch:")) await cursor.delete();
     cursor = await cursor.continue();
+  }
+}
+
+async function migrateV9ToV10(
+  tx: import("idb").IDBPTransaction<
+    RoleplayDB,
+    Array<(typeof TABLES)[number]>,
+    "versionchange"
+  >,
+) {
+  const data: Record<string, unknown[]> = {};
+  for (const table of TABLES)
+    data[table] = await tx.objectStore(table).getAll();
+  const converted = upgradeV9Data(data);
+  for (const table of TABLES) {
+    await tx.objectStore(table).clear();
+    for (const row of converted[table])
+      await tx.objectStore(table).put(row as never);
   }
 }

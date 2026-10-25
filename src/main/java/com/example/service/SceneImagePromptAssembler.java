@@ -1,50 +1,21 @@
 package com.example.service;
 
-import java.util.*;
-import java.util.regex.Pattern;
-import com.example.web.dto.SceneImageDtos.Reference;
+import java.util.List;
+import com.example.web.dto.SceneImageDtos.InputImage;
 
 public final class SceneImagePromptAssembler {
     public static final List<String> SECTIONS = List.of("参考图说明", "主体", "环境", "光线", "材质", "构图", "风格", "画面摘要");
-    private static final Pattern SECTION = Pattern.compile("(?m)^\\[([^]\\n]+)]");
-    private static final Pattern IMAGE = Pattern.compile("<image(\\d+)>");
+
     private SceneImagePromptAssembler() {
     }
 
-    public static String summary(String prompt) {
-        var matcher = SECTION.matcher(prompt);
-        var names = new ArrayList<String>();
-        var starts = new ArrayList<Integer>();
-        var ends = new ArrayList<Integer>();
-        while (matcher.find()) {
-            names.add(matcher.group(1));
-            starts.add(matcher.start());
-            ends.add(matcher.end());
+    public static String assemble(String prompt, List<InputImage> references) {
+        var text = new StringBuilder("第一张图片是待绘制的纯黑画布，仅用于指定画幅。请完整绘制提示词描述的画面，黑色不代表目标背景或风格。\n");
+        for (int i = 0; i < references.size(); i++) {
+            var reference = references.get(i);
+            text.append("第").append(i + 2).append("张图片（").append(reference.assetId()).append("）参考用途：")
+                    .append(reference.scope()).append("。\n");
         }
-        if (!names.equals(SECTIONS) || starts.getFirst() != 0)
-            throw new IllegalArgumentException("绘图提示词必须按顺序完整提供八个中文段落");
-        for (int i = 0; i < names.size(); i++) {
-            int end = i + 1 < names.size() ? starts.get(i + 1) : prompt.length();
-            if (prompt.substring(ends.get(i), end).isBlank())
-                throw new IllegalArgumentException("绘图段落不能为空：" + names.get(i));
-        }
-        String summary = prompt.substring(ends.getLast()).strip();
-        if (IMAGE.matcher(summary).find() || Pattern.compile("\\bimg\\d+\\b").matcher(summary).find())
-            throw new IllegalArgumentException("画面摘要不能引用图片编号");
-        return summary;
-    }
-
-    public static void validateReferences(String prompt, List<Reference> references) {
-        var matcher = IMAGE.matcher(prompt);
-        var used = new HashSet<Integer>();
-        while (matcher.find()) {
-            int number = Integer.parseInt(matcher.group(1));
-            if (number < 1 || number > references.size())
-                throw new IllegalArgumentException("绘图编号超出实际参考图范围");
-            used.add(number);
-        }
-        if (used.size() != references.size())
-            throw new IllegalArgumentException("每张实际参考图都必须在提示词中明确说明用途");
-        summary(prompt);
+        return text.append("\n").append(prompt).toString();
     }
 }

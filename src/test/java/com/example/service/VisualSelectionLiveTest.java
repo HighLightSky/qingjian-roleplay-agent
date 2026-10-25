@@ -72,7 +72,7 @@ class VisualSelectionLiveTest {
             selected.addAll(ImageValidationService.requiredIds(context));
             var payloads = scenario.images().stream().filter(p -> selected.contains(p.assetId())).toList();
             var prepared = ChatDispatchService.withImages(context, plan, payloads);
-            var body = new PromptBuilder(llm, com.example.TestRequests.vision()).build(prepared);
+            var body = new PromptBuilder(llm, com.example.TestRequests.vision(), com.example.TestRequests.auxiliaryContexts()).build(prepared);
             assertEquals(selected.size(), body.getMessages().stream().filter(m -> m.getParts() != null)
                     .flatMap(m -> m.getParts().stream()).filter(p -> "image_url".equals(p.type())).count());
             assertTrue(body.isThinkingEnabled());

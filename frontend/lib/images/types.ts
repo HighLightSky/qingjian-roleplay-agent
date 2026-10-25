@@ -28,10 +28,8 @@ export type VisualSource =
       type: "scene_generation";
       generationId: string;
       planId: string;
-      target: Record<string, string>;
       messageId: string;
       seq: number;
-      sceneId: string;
       summary: string;
       rejected: boolean;
     };
