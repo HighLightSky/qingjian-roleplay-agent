@@ -1218,18 +1218,43 @@ test("图库按图片编号数值排序后分页，img10不会排在img2之前",
   ).toBeVisible();
 });
 
-test("retrying a failed reply keeps one saved user input", async ({ page }) => {
+test("重试已有选图过程的失败回复时移除旧过程，不触发渲染错误", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
   await createRole(page);
   let fail = true;
+  await page.route("**/api/chat/*/ack", (route) => route.fulfill({ json: {} }));
   await page.route("**/api/chat", async (route) => {
     if (fail) {
+      const response = await dispatchResponse(
+        route.request().postDataJSON(),
+      ).text();
+      const snapshot: DispatchSnapshot = JSON.parse(
+        response.split("data: ")[1].trim(),
+      );
+      const error = "测试正文生成失败";
       await route.fulfill({
-        status: 502,
-        json: { code: "MODEL_ERROR", message: "临时失败，可重试" },
+        contentType: "text/event-stream",
+        body: `event: snapshot\ndata: ${JSON.stringify({
+          ...snapshot,
+          segments: [],
+          stages: {
+            selection: snapshot.stages.selection,
+            body: { name: "body", status: "failed", error },
+          },
+          body: { ...snapshot.body, finishReason: "length" },
+          state: null,
+          error,
+        })}\n\n`,
       });
     } else await route.continue();
   });
   await send(page, "重试这条消息");
+  await expect(page.locator('[data-operation="selection"]')).toContainText(
+    "本轮无需历史图",
+  );
   await expect(
     page.getByRole("button", { name: "重试回复", exact: true }),
   ).toBeVisible();
@@ -1241,6 +1266,55 @@ test("retrying a failed reply keeps one saved user input", async ({ page }) => {
   await expect(page.locator('[data-role="user"]')).toHaveCount(1);
   await page.reload();
   await expect(page.locator('[data-role="user"]')).toHaveCount(1);
+  await expect(page.locator('[data-operation="selection"]')).toHaveCount(1);
+  await expect(page.locator('[data-operation="state_update"]')).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
+test("切换会话和角色后，过程记录随对应消息恢复", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await createRole(page);
+  await send(page, "第一段过程记录");
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('[data-operation="selection"]')).toHaveCount(1);
+  await expect(page.locator('[data-operation="state_update"]')).toHaveCount(1);
+
+  await nav(page);
+  await page
+    .getByRole("button", { name: "新建对话", exact: true })
+    .filter({ visible: true })
+    .click();
+  await expect(page.locator("[data-operation]")).toHaveCount(0);
+  await send(page, "第二段过程记录");
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeVisible();
+  await nav(page);
+  await page
+    .getByRole("button", { name: "第一段过程记录", exact: true })
+    .filter({ visible: true })
+    .click();
+  await expect(page.locator('[data-role="user"]')).toHaveText("第一段过程记录");
+  await expect(page.locator('[data-operation="selection"]')).toHaveCount(1);
+  await expect(page.locator('[data-operation="state_update"]')).toHaveCount(1);
+
+  await nav(page);
+  await page
+    .getByRole("button", { name: "切换角色", exact: true })
+    .filter({ visible: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .last()
+    .getByRole("button", { name: /^林溪/ })
+    .click();
+  await expect(page.locator('[data-role="user"]')).toHaveText("第二段过程记录");
+  await expect(page.locator('[data-operation="selection"]')).toHaveCount(1);
+  await expect(page.locator('[data-operation="state_update"]')).toHaveCount(1);
+  expect(errors).toEqual([]);
 });
 
 test("自动整理过程可展开，结果持久化且只有统一人工维护入口", async ({

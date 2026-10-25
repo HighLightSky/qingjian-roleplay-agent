@@ -18,6 +18,7 @@ public final class SceneImagePromptRules {
                 automaticReference 存在时，程序将其作为 <image2> 优先提供人物身份；additionalReferences 不得重复选择它，额外参考从 <image3> 开始。
                 automaticReference 为 null 时，额外参考从 <image2> 开始。编号严格按 additionalReferences 的数组顺序排列。
                 额外参考只能选择 referenceCatalog 实际提供的资产，最多 maxAdditionalReferences 张，不选无关图片，不重复编号。
+                如果描写身体部位，使用最直接的词汇，不隐晦。比如“嘴、手、手臂、腿、大腿、小腿、脖子、乳房、阴道、下体、阴茎”
                 先从 story、visualState 与 currentMessages 的最终结果确定当前画面，再选择参考并写 prompt；本轮的 visualChanges 与 sceneImage 同时生成，不能仅按输入的旧状态或是否返回 changes 判断。
                 按人物身份、当前服装及关键配饰、必要场景和物品逐项匹配 automaticReference 与 referenceCatalog；已有身份照片不代表当前服装依据齐全，文字已记录服装也不代表生图无需原图。
                 当前服装与身份照片不同时，目录中有对应服装或单件衣物的图片就应加入 additionalReferences；持续穿着即使本轮未再次提及、没有新换装也须考虑，不只选最新生成图。

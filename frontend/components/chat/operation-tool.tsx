@@ -19,7 +19,10 @@ import {
   StateTag,
   StoryValue,
 } from "./state-presentation";
-import type { ToolCallMessagePartComponent } from "@assistant-ui/react";
+import {
+  useAuiState,
+  type ToolCallMessagePartComponent,
+} from "@assistant-ui/react";
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui";
 import {
   ToolGroupRoot,
@@ -332,19 +335,19 @@ function UpdatedSummary({ result }: { result: StateResult }) {
   );
 }
 
-const AppOperation: ToolCallMessagePartComponent = (props) => {
-  const operation = useAppStore((state) =>
-    state.operations.find((o) => o.id === props.args.operationId),
+const AppOperation: ToolCallMessagePartComponent = () => {
+  // 运行时在 effect 中同步，旧过程卸载前必须读取同一消息快照中的操作。
+  const operation = useAuiState(
+    (state) => state.message.metadata.custom.operation as Operation,
   );
   const disabled = useAppStore(
     (state) =>
       state.readOnly ||
       !!state.activeSessionId ||
-      (operation?.kind === "selection" &&
+      (operation.kind === "selection" &&
         state.messages.filter((m) => m.role === "assistant").at(-1)?.id !==
           operation.anchorMessageId),
   );
-  if (!operation) throw new Error("过程投影缺少操作记录。");
   const latestState = useAppStore(
     (state) =>
       state.operations

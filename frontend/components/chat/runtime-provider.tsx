@@ -71,7 +71,9 @@ function convertMessage(message: RuntimeEntry): ThreadMessageLike {
               reason: message.status === "cancelled" ? "cancelled" : "other",
             }
           : { type: "running" },
-      metadata: { custom: { activity: true, segmented: true } },
+      metadata: {
+        custom: { activity: true, segmented: true, operation: message },
+      },
     };
     mapped.set(message, value);
     return value;
