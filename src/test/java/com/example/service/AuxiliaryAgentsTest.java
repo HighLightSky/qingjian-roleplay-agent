@@ -241,6 +241,43 @@ class AuxiliaryAgentsTest {
                 new Context("session", catalog, null, List.of(), List.of()), base.operationId());
     }
 
+    @Test void sceneCatalogKeepsSelectedOldClothingAndCurrentAttachmentsBeforeRecentImages() throws Exception {
+        var original = withCatalog(24);
+        var state = original.state();
+        var snapshot = new Snapshot(state.sessionId(), state.characterId(), state.sessionVersion(), state.memoryVersion(),
+                state.story(), state.storySources(), state.memories(), state.goals(),
+                new VisualState("白衬衫搭配深蓝外套", "长发", List.of(), List.of()), state.visualSources());
+        String purpose = "仅参考深蓝外套款式，不沿用背景";
+        var plan = new Plan("ready", List.of(new Selected("img1", purpose)), List.of(), "", "fingerprint", original.operationId());
+        var context = new ChatApiRequest(original.character(), snapshot, original.summary(), original.history(),
+                new InputDto("她坐下读书", List.of(ContentPartDto.text("她坐下读书"), new ContentPartDto("image", null, "img2"))),
+                original.interactionSettings(), new Context("session", original.visual().assetCatalog(), plan, List.of(), List.of()),
+                original.operationId());
+        String before = mapper.writeValueAsString(context);
+        var response = (ObjectNode) mapper.readTree(EMPTY);
+        response.withObject("sceneImage").putArray("additionalReferences").addObject()
+                .put("assetId", "img1").put("scope", purpose);
+        when(model.chat(any())).thenReturn(new ChatResponse(response.toString(), "stop", TokenUsage.unavailable()));
+
+        var result = stateService(32768).update(request(context, "她仍穿着白衬衫和深蓝外套，坐下阅读。"));
+
+        assertEquals("img1", result.scenePlan().referenceImages().getFirst().assetId());
+        var calls = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model).chat(calls.capture());
+        var data = material(calls.getValue());
+        var references = data.path("referenceCatalog");
+        assertTrue(references.size() < 24);
+        assertEquals("img2", references.get(0).path("assetId").asText());
+        assertEquals("img1", references.get(1).path("assetId").asText());
+        assertEquals(purpose, references.get(1).path("selectionPurpose").asText());
+        assertEquals("img24", references.get(2).path("assetId").asText());
+        assertTrue(data.path("incompleteSections").toString().contains("referenceCatalog"));
+        assertEquals("白衬衫搭配深蓝外套", data.path("visualState").path("outfit").asText());
+        assertTrue(calls.getValue().getResponseSchema().path("properties").path("sceneImage")
+                .path("properties").path("additionalReferences").toString().contains("img1"));
+        assertEquals(before, mapper.writeValueAsString(context));
+    }
+
     @ParameterizedTest
     @MethodSource("com.example.SelectionFixtures#cases")
     void selectionContextWorksForEveryHistoryAndPhotoCombination(SelectionFixtures.History history,

@@ -117,9 +117,9 @@ export const DEFAULT_INTERACTION_SETTINGS: Readonly<InteractionSettings> =
     narrativeMode: "scene",
   });
 export const REPLY_LENGTH_OPTIONS = [
-  { value: "short", label: "简短", description: "约 150—300 字" },
-  { value: "standard", label: "标准", description: "约 350—600 字" },
-  { value: "detailed", label: "详细", description: "约 700—1200 字" },
+  { value: "short", label: "简短", description: "约 300-600 字" },
+  { value: "standard", label: "标准", description: "约 600—1200 字" },
+  { value: "detailed", label: "详细", description: "约 2000—3000 字" },
 ] as const;
 export const NARRATIVE_MODE_OPTIONS = [
   {

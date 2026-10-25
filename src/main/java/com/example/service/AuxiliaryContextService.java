@@ -339,21 +339,36 @@ public class AuxiliaryContextService {
         if (photo.isPresent() && maxReferences == 0)
             throw new ContextTooLargeException("生图图片名额不足：黑画布与角色照片至少需要两张输入");
         data.putNull("automaticReference");
-        photo.ifPresent(a -> data.putObject("automaticReference").put("assetId", a.assetId())
-                .put("image", "<image2>").put("scope", "人物身份，动作与服装以提示词为准"));
+        if (photo.isPresent()) {
+            var reference = data.putObject("automaticReference").put("assetId", photo.get().assetId())
+                    .put("image", "<image2>").put("scope", "人物身份，动作与服装以提示词为准");
+            if (photo.get().observation() != null)
+                reference.set("observation", com.example.prompt.StateUpdateMaterial.observation(mapper, photo.get().observation()));
+            boundCatalogEntry(reference, request.operationId());
+        }
         data.put("maxAdditionalReferences", maxReferences - (photo.isPresent() ? 1 : 0));
         var catalog = data.putArray("referenceCatalog");
+        Map<String, String> selectedPurposes = new HashMap<>();
+        if (request.visual() != null && request.visual().plan() != null)
+            request.visual().plan().selectedHistoricalImages()
+                    .forEach(selected -> selectedPurposes.put(selected.assetId(), selected.purpose()));
+        Set<String> preferredIds = new HashSet<>(ImageValidationService.requiredIds(request));
+        preferredIds.addAll(selectedPurposes.keySet());
         var assets = new ArrayList<>(ImageValidationService.catalog(request));
-        assets.sort(Comparator.comparingInt((com.example.web.dto.VisualDtos.Asset asset) -> asset.sources().stream()
+        // 本轮已选的旧服装与新附件优先保留，避免被较新的无关图片挤出参考目录。
+        assets.sort(Comparator.comparing((com.example.web.dto.VisualDtos.Asset asset) -> !preferredIds.contains(asset.assetId()))
+                .thenComparing(Comparator.comparingInt((com.example.web.dto.VisualDtos.Asset asset) -> asset.sources().stream()
                 .mapToInt(source -> source instanceof com.example.web.dto.VisualDtos.GenerationSource g ? g.seq()
                         : source instanceof com.example.web.dto.VisualDtos.MessageSource m ? m.seq() : 0)
-                .max().orElseThrow()).reversed());
+                .max().orElseThrow()).reversed()));
         for (var asset : assets) {
             if (photo.isPresent() && asset.assetId().equals(photo.get().assetId())) continue;
             var row = mapper.createObjectNode().put("assetId", asset.assetId());
             row.set("sources", mapper.valueToTree(asset.sources()));
             if (asset.observation() != null)
                 row.set("observation", com.example.prompt.StateUpdateMaterial.observation(mapper, asset.observation()));
+            if (selectedPurposes.containsKey(asset.assetId()))
+                row.put("selectionPurpose", selectedPurposes.get(asset.assetId()));
             row.put("descriptionSource", "已有观察为有损记录，生成要求未经图像核实，不代表本轮已看过原图");
             boundCatalogEntry(row, request.operationId());
             catalog.add(row);

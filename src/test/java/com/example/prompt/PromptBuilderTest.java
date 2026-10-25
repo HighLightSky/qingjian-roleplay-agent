@@ -36,16 +36,18 @@ class PromptBuilderTest {
         var request = builder.build(new ChatApiRequest(new CharacterDto("林溪", "旅馆老板，也是我的旧友", "好奇，说话简短，生活在山城。", null, 1), com.example.TestRequests.state(List.of("用户叫阿远")), new com.example.web.dto.ContextDtos.HistorySummary("用户带来了一张地图。", 1, 1), List.of(new HistoryMessageDto("assistant", "[台词]让我看看。", "history", null, 1, "complete", 0)), new InputDto("我把地图递给她，让她看看", null), new InteractionSettingsDto(length, mode), null, "operation"));
         String system = request.getMessages().getFirst().getContent();
         String expectedRange = switch (length) {
-            case SHORT -> "150—300";
-            case STANDARD -> "350—600";
-            case DETAILED -> "700—1200";
+            case SHORT -> "500-800";
+            case STANDARD -> "800-1200";
+            case DETAILED -> "2000—3000";
         };
-        for (String range : List.of("150—300", "350—600", "700—1200")) {
+        for (String range : List.of("500-800", "800-1200", "2000—3000")) {
             assertEquals(range.equals(expectedRange), system.contains(range));
         }
         assertEquals(mode == NarrativeMode.SCENE, system.contains("场景推进："));
         assertEquals(mode == NarrativeMode.INTERACTIVE, system.contains("频繁互动："));
         assertTrue(system.contains("字数是参考范围"));
+        assertEquals(length == ReplyLength.DETAILED, system.contains("不因本轮输入简短就只写几段回应"));
+        assertEquals(length != ReplyLength.DETAILED, system.contains("信息少、简短确认或自然停顿时可以更短"));
         assertTrue(system.contains("不替用户添加台词、心理或重大行动"));
         assertTrue(system.contains("不要求每次结尾提问"));
         assertTrue(system.contains("[台词]"));

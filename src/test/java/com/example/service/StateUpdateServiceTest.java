@@ -645,6 +645,9 @@ class StateUpdateServiceTest {
         assertTrue(material.contains("地图上标出了码头"));
         assertTrue(material.contains("旧画面生成要求"));
         assertTrue(material.contains("automaticReference"));
+        var data = mapper.readTree(material.substring(material.indexOf('{')));
+        assertEquals("红色斗篷，耳饰未辨清", data.path("automaticReference").path("observation").path("summary").asText());
+        assertEquals("img2", data.path("automaticReference").path("assetId").asText());
         assertFalse(calls.getValue().getMessages().stream().filter(m -> m.getParts() != null)
                 .flatMap(m -> m.getParts().stream()).anyMatch(part -> "image_url".equals(part.type())));
         var schema = calls.getValue().getResponseSchema().path("properties").path("sceneImage");
