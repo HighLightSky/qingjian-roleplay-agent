@@ -329,6 +329,7 @@ test("手动整理重试重建缺图目录并去掉旧选图，不为缺图生�
     ...turn.assistant,
     segments: [{ kind: "dialogue", text: "已回复" }],
     status: "complete",
+    checkpointVersion: 1,
   });
   await db.delete("assets", "img1");
   let retried: any;
@@ -437,5 +438,5 @@ test("完整备份拒绝缺失原件，已恢复原件的冻结缺图记录仍�
   assert.throws(() => validateBackup(incomplete), /图片引用缺失/);
   await db.put("assets", images[1]);
   const complete = await takeSnapshot();
-  assert.equal(validateBackup(complete).formatVersion, 11);
+  assert.equal(validateBackup(complete).formatVersion, 12);
 });

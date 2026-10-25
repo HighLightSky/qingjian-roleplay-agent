@@ -37,8 +37,6 @@ public class ImageGenerationValidation {
             ImageCache.hash(reference.sha256());
             ImageCache.hash(reference.sourceSha256());
             StateValidation.nonblank(reference.scope());
-            StateValidation.collection(reference.roles(), "参考用途");
-            reference.roles().forEach(StateValidation::nonblank);
             if (reference.sourceGenerationId() != null)
                 StateValidation.id(reference.sourceGenerationId());
         }

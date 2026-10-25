@@ -50,7 +50,7 @@ async function setup(page: Page) {
   await expect
     .poll(() =>
       page.evaluate(async () => {
-        const request = indexedDB.open("roleplay-agent", 10);
+        const request = indexedDB.open("roleplay-agent", 11);
         const db = await new Promise<IDBDatabase>((resolve) => {
           request.onsuccess = () => resolve(request.result);
         });
@@ -68,9 +68,10 @@ async function setup(page: Page) {
       }),
     )
     .toBe(true);
+  await expect(page.getByTestId("scene-image-card")).toBeVisible();
   await page.evaluate(
     async ({ base64, hash }) => {
-      const request = indexedDB.open("roleplay-agent", 10);
+      const request = indexedDB.open("roleplay-agent", 11);
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
@@ -106,6 +107,7 @@ async function setup(page: Page) {
         ["assets", "settings", "sessions", "sceneImagePlans"],
         "readwrite",
       );
+      tx.objectStore("sceneImagePlans").clear();
       tx.objectStore("assets").put({
         id: "img1",
         creationOrigin: "uploaded",
@@ -136,7 +138,7 @@ async function setup(page: Page) {
         referenceImages: [
           {
             assetId: "img1",
-            roles: ["identity"],
+
             scope: "人物身份",
             sourceSha256: hash,
             sourceGenerationId: null,
@@ -267,7 +269,7 @@ test("身份和服装参考均可压缩，黑图由后端注入", async ({ page 
       ),
       (b) => b.toString(16).padStart(2, "0"),
     ).join("");
-    const request = indexedDB.open("roleplay-agent", 10);
+    const request = indexedDB.open("roleplay-agent", 11);
     const db = await new Promise<IDBDatabase>((resolve) => {
       request.onsuccess = () => resolve(request.result);
     });
@@ -301,7 +303,7 @@ test("身份和服装参考均可压缩，黑图由后端注入", async ({ page 
         ...plan.referenceImages,
         {
           assetId: "img2",
-          roles: ["outfit"],
+
           scope: "服装细节",
           sourceSha256: hash,
           sourceGenerationId: null,
@@ -451,7 +453,7 @@ test("无身份照片且参考建议报错时，仍允许仅用提示词生成�
   );
   await setup(page);
   await page.evaluate(async () => {
-    const opening = indexedDB.open("roleplay-agent", 10);
+    const opening = indexedDB.open("roleplay-agent", 11);
     const db = await new Promise<IDBDatabase>((resolve) => {
       opening.onsuccess = () => resolve(opening.result);
     });

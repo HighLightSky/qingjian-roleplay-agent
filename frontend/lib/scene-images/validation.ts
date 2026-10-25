@@ -17,21 +17,6 @@ function references(value: unknown, input: boolean) {
         throw new Error("参考原件哈希无效。");
     }
     if (ref.sourceGenerationId !== null) string(ref.sourceGenerationId, 200);
-    array(ref.roles, 6);
-    if (
-      ref.roles.some(
-        (role) =>
-          ![
-            "identity",
-            "continuity",
-            "outfit",
-            "environment",
-            "pose",
-            "prop",
-          ].includes(role as string),
-      )
-    )
-      throw new Error("参考图用途无效。");
     if (input && ref.sha256 !== null) {
       string(ref.sha256, 64);
       if (!/^[a-f0-9]{64}$/.test(ref.sha256))

@@ -112,6 +112,7 @@ export type Change<T> = {
   sourceMessageIds: string[];
 };
 export type StateResult = {
+  scenePlan: import("../scene-images/types").SceneImagePlan | null;
   operationId: string;
   sessionVersion: number;
   memoryVersion: number;

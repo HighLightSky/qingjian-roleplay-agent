@@ -63,7 +63,7 @@ public final class StateDtos {
     }
 
     public record UpdateRequest(String operationId, ChatApiRequest context, int fromExclusiveSeq, int throughSeq,
-            List<SourceMessage> messages) {
+            int assistantCheckpointVersion, List<SourceMessage> messages) {
         public UpdateRequest {
             messages = list(messages);
         }
@@ -77,7 +77,8 @@ public final class StateDtos {
     }
 
     public record ModelResult(List<VisualDtos.Observation> visualObservations, List<ProposedChange> storyChanges,
-            List<ProposedChange> memoryChanges, List<ProposedChange> goalChanges, List<ProposedChange> visualChanges) {
+            List<ProposedChange> memoryChanges, List<ProposedChange> goalChanges, List<ProposedChange> visualChanges,
+            SceneImageDtos.ModelScene sceneImage) {
         public ModelResult {
             visualObservations = list(visualObservations);
             storyChanges = list(storyChanges);
@@ -93,7 +94,7 @@ public final class StateDtos {
 
     public record Result(String operationId, int sessionVersion, int memoryVersion, int fromExclusiveSeq,
             int throughSeq, List<VisualDtos.Observation> visualObservations, List<Change> storyChanges,
-            List<Change> memoryChanges, List<Change> goalChanges, List<Change> visualChanges) {
+            List<Change> memoryChanges, List<Change> goalChanges, List<Change> visualChanges, SceneImageDtos.Plan scenePlan) {
     }
 
     private static <T> List<T> list(List<T> values) {

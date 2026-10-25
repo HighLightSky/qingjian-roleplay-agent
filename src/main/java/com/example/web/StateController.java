@@ -31,7 +31,7 @@ public class StateController {
                 request.context().visual().plan().selectedHistoricalImages().forEach(s -> ids.add(s.assetId()));
             var prepared = new UpdateRequest(request.operationId(),
                     ChatDispatchService.withImages(request.context(), request.context().visual() == null ? null : request.context().visual().plan(), pinned.payloads(ImageObservationPolicy.observationAssetIds(request.context(), ids))),
-                    request.fromExclusiveSeq(), request.throughSeq(), request.messages());
+                    request.fromExclusiveSeq(), request.throughSeq(), request.assistantCheckpointVersion(), request.messages());
             service.validateRequest(prepared);
             return service.update(prepared);
         }

@@ -22,19 +22,24 @@ public class StateUpdateService {
     private final ContextBudgetService budgets;
     private final ImageValidationService images;
     private final AuxiliaryContextService contexts;
+    private final SceneImagePlanService scenePlans;
+    private final com.example.config.VisionProperties vision;
 
     public StateUpdateService(LLMClient client, ObjectMapper mapper, StateUpdatePromptBuilder prompts,
-            ImageValidationService images, ContextBudgetService budgets, AuxiliaryContextService contexts) {
+            ImageValidationService images, ContextBudgetService budgets, AuxiliaryContextService contexts,
+            SceneImagePlanService scenePlans, com.example.config.VisionProperties vision) {
         this.client = client;
         this.mapper = mapper;
         this.prompts = prompts;
         this.budgets = budgets;
         this.images = images;
         this.contexts = contexts;
+        this.scenePlans = scenePlans;
+        this.vision = vision;
     }
 
     public Result update(UpdateRequest r) throws IOException, InterruptedException {
-        var material = new StateUpdateMaterial(r, mapper, contexts);
+        var material = new StateUpdateMaterial(r, mapper, contexts, vision.getMaxImages() - 1);
         List<Message> correction = List.of();
         for (int attempt = 0;; attempt++) {
             var correctionMessages = correction;
@@ -90,8 +95,27 @@ public class StateUpdateService {
             // 无原图时不存在视觉提取任务，缺省集合由模型结果构造器统一归一化。
             if (!visual.isArray() && (hasImages || !(visual.isMissingNode() || visual.isNull())))
                 throw new IOException("整理结果缺少数组：visualObservations");
+            JsonNode scene = node.path("sceneImage");
+            if (!scene.isObject() || !scene.path("prompt").isTextual() || scene.path("prompt").asText().isBlank()
+                    || !scene.path("additionalReferences").isArray())
+                throw new IOException("整理结果缺少有效的 sceneImage 提示词与参考数组");
+            for (var reference : scene.path("additionalReferences"))
+                if (!reference.path("assetId").isTextual() || !reference.path("scope").isTextual()
+                        || reference.path("scope").asText().isBlank())
+                    throw new IOException("画面参考必须包含资产编号与非空用途");
             ModelResult result = mapper.readerFor(ModelResult.class)
                     .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).readValue(node);
+            var shownReferences = new HashSet<String>();
+            material.data().path("referenceCatalog").forEach(row -> shownReferences.add(row.path("assetId").asText()));
+            var selectedReferences = new HashSet<String>();
+            for (var reference : result.sceneImage().additionalReferences()) {
+                if (!shownReferences.contains(reference.assetId()))
+                    throw new IOException("画面引用了未提供的参考图：" + reference.assetId());
+                if (!selectedReferences.add(reference.assetId()))
+                    throw new IOException("画面参考图重复：" + reference.assetId());
+            }
+            if (selectedReferences.size() > material.data().path("maxAdditionalReferences").asInt())
+                throw new IOException("画面额外参考图数量超限");
             List<Change> story = changes(result.storyChanges(), "story", r, material);
             List<Change> memories = changes(result.memoryChanges(), "memory", r, material);
             List<Change> goals = changes(result.goalChanges(), "goal", r, material);
@@ -104,7 +128,8 @@ public class StateUpdateService {
                                     .count() > ContextLimits.COLLECTION_ITEMS)
                 throw new IOException("整理结果使记忆或目标数量超限");
             return new Result(r.operationId(), state.sessionVersion(), state.memoryVersion(), r.fromExclusiveSeq(),
-                    r.throughSeq(), observations(result.visualObservations(), r), story, memories, goals, changes(result.visualChanges(), "visual", r, material));
+                    r.throughSeq(), observations(result.visualObservations(), r), story, memories, goals, changes(result.visualChanges(), "visual", r, material),
+                    scenePlans.resolvePlan(result.sceneImage(), r, material));
         } catch (IllegalArgumentException e) {
             throw new IOException("整理结果无效：" + e.getMessage(), e);
         }
@@ -115,7 +140,7 @@ public class StateUpdateService {
             throw new IllegalArgumentException("整理请求不能为空");
         StateValidation.id(r.operationId());
         if (!r.operationId().equals(r.context().operationId())
-                || r.fromExclusiveSeq() < 0
+                || r.assistantCheckpointVersion() < 1 || r.fromExclusiveSeq() < 0
                 || r.throughSeq() <= r.fromExclusiveSeq() || r.messages().isEmpty()
                 || r.messages().size() > ContextLimits.COLLECTION_ITEMS)
             throw new IllegalArgumentException("整理操作、消息区间或游标无效");

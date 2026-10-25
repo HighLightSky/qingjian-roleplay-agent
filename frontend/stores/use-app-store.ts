@@ -3,7 +3,6 @@ import {
   notifySceneImages,
   resumeSceneGenerations,
 } from "@/lib/scene-images/coordinator";
-import { validateScenePlan } from "@/lib/scene-images/validation";
 import { isActiveGeneration } from "@/lib/scene-images/types";
 
 import {
@@ -76,7 +75,6 @@ type AppState = {
   contextBudget: { sessionId: string; budget: ContextBudget } | null;
   ready: boolean;
   bootError: string;
-  imageDrafts: Record<string, { raw: string; error: string | null }>;
   readOnly: boolean;
   busy: boolean;
   error: string;
@@ -106,7 +104,6 @@ export const useAppStore = create<AppState>(() => ({
   contextBudget: null,
   ready: false,
   bootError: "",
-  imageDrafts: {},
   readOnly: false,
   busy: false,
   error: "",
@@ -810,21 +807,10 @@ async function consumeRun(
   if (!reply) throw new Error("后台任务对应的正文消息缺失。");
   let lastCheckpoint = 0;
   let lastStages = "";
-  let savedScenePlan = "";
   let bodySaved = reply.status === "complete";
   let task = await database.get("stateTasks", `state:${reply.id}`);
   const apply = async (snapshot: DispatchSnapshot) => {
     signal.throwIfAborted();
-    if (snapshot.imagePrompt || snapshot.imagePromptError)
-      set((state) => ({
-        imageDrafts: {
-          ...state.imageDrafts,
-          [run.assistantMessageId]: {
-            raw: snapshot.imagePrompt,
-            error: snapshot.imagePromptError,
-          },
-        },
-      }));
     const completed =
       snapshot.body?.finishReason === "stop" &&
       snapshot.segments.some((s) => s.text.trim());
@@ -879,21 +865,6 @@ async function consumeRun(
     ) {
       await write(() => db.checkpoint(reply!));
       lastCheckpoint = Date.now();
-    }
-    if (
-      completed &&
-      snapshot.scenePlan &&
-      savedScenePlan !== snapshot.scenePlan.id
-    ) {
-      validateScenePlan(snapshot.scenePlan);
-      if (
-        snapshot.scenePlan.sourceCheckpointVersion !== reply.checkpointVersion
-      )
-        throw new Error("画面计划来源检查点不一致。");
-      const scenePlan = snapshot.scenePlan;
-      await write(() => database.put("sceneImagePlans", scenePlan));
-      savedScenePlan = scenePlan.id;
-      notifySceneImages();
     }
     const stageKey = JSON.stringify(snapshot.stages);
     if (stageKey !== lastStages)

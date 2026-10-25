@@ -68,6 +68,16 @@ final class StateUpdateResponseSchema {
         properties.set("visualChanges", alternatives(visualAlternatives, material.path("editableVisualFields").size()));
         properties.set("memoryChanges", domainChanges(material, "memories", "memoryValue"));
         properties.set("goalChanges", domainChanges(material, "goals", "goalValue"));
+        var referenceIds = JSON.arrayNode();
+        material.path("referenceCatalog").forEach(row -> referenceIds.add(row.path("assetId").asText()));
+        var reference = JSON.objectNode();
+        reference.set("assetId", choice(referenceIds));
+        reference.set("scope", text().put("minLength", 1));
+        var scene = JSON.objectNode();
+        scene.set("prompt", text().put("minLength", 1));
+        scene.set("additionalReferences", array(object(reference),
+                Math.min(referenceIds.size(), material.path("maxAdditionalReferences").asInt())));
+        properties.set("sceneImage", object(scene));
         var schema = object(properties);
         schema.set("$defs", definitions);
         return schema;

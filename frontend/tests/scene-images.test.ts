@@ -108,7 +108,6 @@ async function fixture() {
     referenceImages: [
       {
         assetId: "img1",
-        roles: ["identity"],
         scope: "仅身份",
         sourceSha256: hash,
         sourceGenerationId: null,
@@ -254,7 +253,7 @@ test("v9 备份一次性转换为 v11；新图关系可完整恢复且不恢复�
     delete session.visualSources;
   }
   const converted = validateBackup(legacy);
-  assert.equal(converted.formatVersion, 11);
+  assert.equal(converted.formatVersion, 12);
   assert.equal(converted.data.assets[0].creationOrigin, "uploaded");
   assert.equal(converted.data.sessions[0].stateVersion, 0);
   await db.put("sceneGenerations", generation);
@@ -497,7 +496,7 @@ test("v10 备份保留真实提示词与原件尺寸，移除旧前幕和目标�
   delete oldGeneration.submission;
   oldGeneration.sceneId = "scene";
   const converted = validateBackup(backup);
-  assert.equal(converted.formatVersion, 11);
+  assert.equal(converted.formatVersion, 12);
   const result = converted.data.sceneGenerations[0];
   assert.equal(result.submission.effectivePrompt, plan.prompt);
   assert.equal(result.submission.width, 1);
@@ -505,7 +504,73 @@ test("v10 备份保留真实提示词与原件尺寸，移除旧前幕和目标�
   assert.equal(result.submission.referenceImages[0].sha256, null);
   assert.equal("sceneId" in result, false);
   assert.equal("target" in converted.data.sceneImagePlans[0], false);
-  assert.deepEqual(converted.data.sceneImagePlans[0].referenceImages[0].roles, [
+  assert.equal(
+    "roles" in converted.data.sceneImagePlans[0].referenceImages[0],
+    false,
+  );
+});
+
+test("手动取消参考后原样提交提示词，不校验或改写旧图片编号", async () => {
+  const { db, plan } = await fixture();
+  await db.put("sceneImagePlans", {
+    ...plan,
+    draft: {
+      prompt: "与<image2>相同的女孩坐在椅子上阅读。",
+      width: 256,
+      height: 512,
+      referenceAssetIds: [],
+    },
+  });
+  let request: any;
+  globalThis.fetch = async (path, init) => {
+    if (path === "/api/capabilities") return Response.json(caps);
+    if (path === "/api/images/missing") return Response.json({ missing: [] });
+    if (path === "/api/scene-images") {
+      request = JSON.parse(String(init!.body));
+      return Response.json({ runId: request.runId });
+    }
+    if (String(path).endsWith("/events"))
+      return Response.json({ message: "测试任务结束" }, { status: 404 });
+    throw new Error(`意外请求：${path}`);
+  };
+  await startSceneGeneration(plan.id, commit);
+  await followSceneGeneration(request.runId, commit);
+  assert.equal(request.prompt, "与<image2>相同的女孩坐在椅子上阅读。");
+  assert.deepEqual(request.referenceImages, []);
+});
+
+test("v11 备份转为 v12 后移除所有参考 roles 并保留真实文本和用户编辑", async () => {
+  const { db, plan, generation } = await fixture();
+  await db.put("sceneGenerations", { ...generation, status: "failed" });
+  const backup = await takeSnapshot();
+  const legacy: any = structuredClone(backup);
+  legacy.formatVersion = 11;
+  legacy.data.sceneImagePlans[0].referenceImages[0].roles = ["identity"];
+  legacy.data.sceneImagePlans[0].draft = {
+    prompt: "原样的<image2>文本",
+    width: 256,
+    height: 512,
+    referenceAssetIds: [],
+  };
+  legacy.data.sceneGenerations[0].submission.referenceImages[0].roles = [
     "identity",
-  ]);
+  ];
+  const migrated = validateBackup(legacy);
+  assert.equal(migrated.formatVersion, 12);
+  assert.equal(
+    "roles" in migrated.data.sceneImagePlans[0].referenceImages[0],
+    false,
+  );
+  assert.equal(
+    "roles" in migrated.data.sceneGenerations[0].submission.referenceImages[0],
+    false,
+  );
+  assert.equal(
+    migrated.data.sceneImagePlans[0].draft!.prompt,
+    "原样的<image2>文本",
+  );
+  assert.equal(
+    migrated.data.sceneGenerations[0].submission.effectivePrompt,
+    plan.prompt,
+  );
 });

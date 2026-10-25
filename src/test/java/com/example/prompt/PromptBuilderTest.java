@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -22,7 +23,7 @@ import com.example.web.dto.InteractionSettingsDto.NarrativeMode;
 import com.example.web.dto.InteractionSettingsDto.ReplyLength;
 
 class PromptBuilderTest {
-    private final PromptBuilder builder = new PromptBuilder(new LlmProperties("", "", "", 0.8, 8192, 120), com.example.TestRequests.vision(), com.example.TestRequests.auxiliaryContexts());
+    private final PromptBuilder builder = new PromptBuilder(new LlmProperties("", "", "", 0.8, 8192, 120), com.example.TestRequests.vision());
 
     static Stream<Arguments> combinations() {
         return Arrays.stream(ReplyLength.values()).flatMap(length ->
@@ -65,5 +66,15 @@ class PromptBuilderTest {
         assertEquals("我把地图递给她，让她看看", request.getMessages().getLast().getContent());
         assertEquals(8192, request.getMaxTokens());
         assertEquals(0.8, request.getTemperature());
+    }
+
+    @Test void bodyPromptDoesNotContainSceneGenerationInstructions() throws Exception {
+        var request = new ChatApiRequest(new CharacterDto("林溪", "旧友", "老板", null, 1),
+                com.example.TestRequests.state(java.util.List.of()), com.example.TestRequests.summary(),
+                java.util.List.of(), new InputDto("你好", null), new InteractionSettingsDto(ReplyLength.STANDARD, NarrativeMode.SCENE), null, "op");
+        var prompt = builder.build(request).getMessages().getFirst().getContent();
+        assertFalse(prompt.contains("生图"));
+        assertFalse(prompt.contains("画面计划"));
+        assertFalse(prompt.contains("referenceImages"));
     }
 }

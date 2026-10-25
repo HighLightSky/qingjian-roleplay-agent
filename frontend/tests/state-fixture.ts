@@ -6,10 +6,22 @@ export type UpdateBody = {
   context: ChatContext;
   fromExclusiveSeq: number;
   throughSeq: number;
+  assistantCheckpointVersion: number;
   messages: SourceMessage[];
 };
 export function emptyStateResult(body: UpdateBody): StateResult {
   return {
+    scenePlan: {
+      id: `scene:${body.operationId}`,
+      sessionId: body.context.state.sessionId,
+      assistantMessageId: body.messages.at(-1)!.id,
+      sourceSeq: body.throughSeq,
+      sourceCheckpointVersion: body.assistantCheckpointVersion,
+      profileVersion: body.context.character.profileVersion,
+      referenceImages: [],
+      prompt: "女孩坐在书桌旁的椅子上，双脚落地，低头阅读桌上的书。",
+      error: null,
+    },
     operationId: body.operationId,
     sessionVersion: body.context.state.sessionVersion,
     memoryVersion: body.context.state.memoryVersion,

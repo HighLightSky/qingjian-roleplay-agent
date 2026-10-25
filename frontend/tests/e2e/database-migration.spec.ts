@@ -7,8 +7,8 @@ const hash = createHash("sha256")
   .update(Buffer.from(png, "base64"))
   .digest("hex");
 
-for (const legacyVersion of [8, 9]) {
-  test(`原生 IndexedDB 的 v${legacyVersion} 库保留原件、正文与草稿后升级为 v10`, async ({
+for (const legacyVersion of [8, 9, 10]) {
+  test(`原生 IndexedDB 的 v${legacyVersion} 库保留原件、正文与草稿后升级为 v11`, async ({
     page,
     baseURL,
   }) => {
@@ -36,7 +36,7 @@ for (const legacyVersion of [8, 9]) {
           "compactionTasks",
           "operations",
           "goals",
-          ...(legacyVersion === 9
+          ...(legacyVersion >= 9
             ? ["sceneImagePlans", "sceneGenerations"]
             : []),
         ];
@@ -123,7 +123,7 @@ for (const legacyVersion of [8, 9]) {
           stateVersion: 7,
           nextMessageSeq: 3,
           summary: { text: "旧摘要", throughSeq: 0, version: 2 },
-          ...(legacyVersion === 9
+          ...(legacyVersion >= 9
             ? {
                 visualState: {
                   outfit: "旧蓝袍",
@@ -164,7 +164,7 @@ for (const legacyVersion of [8, 9]) {
         });
         tx.objectStore("assets").put({
           id: "img1",
-          ...(legacyVersion === 9 ? { creationOrigin: "uploaded" } : {}),
+          ...(legacyVersion >= 9 ? { creationOrigin: "uploaded" } : {}),
           sha256: hash,
           mimeType: "image/png",
           byteSize: bytes.length,
@@ -174,7 +174,7 @@ for (const legacyVersion of [8, 9]) {
           displayName: "旧照片.png",
           createdAt: stamp,
         });
-        if (legacyVersion === 9) {
+        if (legacyVersion >= 9) {
           tx.objectStore("sceneImagePlans").put({
             id: "p",
             sessionId: "s",
@@ -201,6 +201,26 @@ for (const legacyVersion of [8, 9]) {
             sourceSeq: 2,
             sourceCheckpointVersion: 4,
             sceneId: "scene",
+            ...(legacyVersion === 10
+              ? {
+                  submission: {
+                    prompt: "原始提交",
+                    effectivePrompt: "原始提交",
+                    width: 256,
+                    height: 512,
+                    referenceImages: [
+                      {
+                        assetId: "img1",
+                        roles: ["identity"],
+                        scope: "人物身份",
+                        sha256: hash,
+                        sourceSha256: hash,
+                        sourceGenerationId: null,
+                      },
+                    ],
+                  },
+                }
+              : {}),
             status: "succeeded",
             referenceStatus: "eligible",
             assetId: "img1",
@@ -241,7 +261,7 @@ for (const legacyVersion of [8, 9]) {
       "原来未发的草稿",
     );
     const migrated = await page.evaluate(async () => {
-      const request = indexedDB.open("roleplay-agent", 10);
+      const request = indexedDB.open("roleplay-agent", 11);
       const db = await new Promise<IDBDatabase>((resolve) => {
         request.onsuccess = () => resolve(request.result);
       });
@@ -277,13 +297,13 @@ for (const legacyVersion of [8, 9]) {
       db.close();
       return result;
     });
-    expect(migrated.version).toBe(10);
+    expect(migrated.version).toBe(11);
     expect(migrated.tables).toEqual(
       expect.arrayContaining(["sceneImagePlans", "sceneGenerations"]),
     );
     expect(migrated.stateVersion).toBe(7);
     expect(migrated.nextSeq).toBe(3);
-    expect(migrated.outfit).toBe(legacyVersion === 9 ? "旧蓝袍" : "");
+    expect(migrated.outfit).toBe(legacyVersion >= 9 ? "旧蓝袍" : "");
     expect(migrated.sources).toEqual({});
     expect(migrated.summary).toBe("旧摘要");
     expect(migrated.origin).toBe("uploaded");

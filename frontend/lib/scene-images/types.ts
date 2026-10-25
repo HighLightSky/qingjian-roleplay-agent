@@ -22,9 +22,6 @@ export type VisualSources = Partial<
 >;
 export type SceneReference = {
   assetId: string;
-  roles: (
-    "identity" | "continuity" | "outfit" | "environment" | "pose" | "prop"
-  )[];
   scope: string;
   sourceSha256: string | null;
   sourceGenerationId: string | null;

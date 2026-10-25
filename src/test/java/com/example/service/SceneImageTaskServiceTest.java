@@ -121,7 +121,7 @@ class SceneImageTaskServiceTest {
         String hash = ImageValidationService.sha256(png);
         return new GenerationRequest(UUID.randomUUID().toString(), new Source("plan", "session", "assistant", 2, 1),
                 "参考 img1 的人物，林溪穿白裙坐在木椅上微笑。", 256, 512,
-                List.of(new InputImage("img1", List.of("identity"), "人物身份", hash, hash, null)));
+                List.of(new InputImage("img1", "人物身份", hash, hash, null)));
     }
 
     TaskSnapshot terminal(String id) throws Exception {
@@ -145,7 +145,7 @@ class SceneImageTaskServiceTest {
         assertEquals("Bearer test-token", token);
         assertTrue(multipart.contains("name=\"images\""));
         assertTrue(multipart.contains("name=\"prompt\""));
-        assertTrue(multipart.contains("第2张图片（img1）参考用途"));
+        assertTrue(multipart.contains("<image2>用于人物身份"));
         assertTrue(multipart.contains("纯黑画布"));
         assertTrue(multipart.contains("林溪穿白裙"));
         String wire = new String(multipartBytes, StandardCharsets.ISO_8859_1);
@@ -293,7 +293,7 @@ class SceneImageTaskServiceTest {
         var input = request.referenceImages().getFirst();
         assertThrows(DispatchException.class,
                 () -> tasks.start(new GenerationRequest(request.runId(), request.source(), request.prompt(), 256, 512,
-                        List.of(new InputImage(input.assetId(), input.roles(), input.scope(), "f".repeat(64),
+                        List.of(new InputImage(input.assetId(), input.scope(), "f".repeat(64),
                                 input.sourceSha256(), null)))));
         assertEquals(0, edits.get());
     }
@@ -303,7 +303,7 @@ class SceneImageTaskServiceTest {
         var refs = new ArrayList<InputImage>();
         String hash = ImageValidationService.sha256(png);
         for (int i = 1; i <= TestRequests.vision().getMaxImages(); i++)
-            refs.add(new InputImage("img" + i, List.of(), "参考", hash, hash, null));
+            refs.add(new InputImage("img" + i, "参考", hash, hash, null));
         var request = request();
         assertThrows(IllegalArgumentException.class, () -> tasks
                 .start(new GenerationRequest(request.runId(), request.source(), request.prompt(), 256, 512, refs)));
@@ -327,7 +327,7 @@ class SceneImageTaskServiceTest {
         cache.putGenerationInput(hash, bytes.toByteArray(), 16777216, 4194304);
         var refs = new ArrayList<InputImage>();
         for (int i = 1; i <= 4; i++)
-            refs.add(new InputImage("img" + i, List.of("identity"), "人物", hash, hash, null));
+            refs.add(new InputImage("img" + i, "人物", hash, hash, null));
         var request = request();
         assertThrows(IllegalArgumentException.class,
                 () -> tasks.start(new GenerationRequest(request.runId(), request.source(), "画面", 256, 512, refs)));

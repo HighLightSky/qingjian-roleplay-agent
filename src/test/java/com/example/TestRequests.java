@@ -44,7 +44,7 @@ public final class TestRequests {
         } catch (Exception e) { throw new AssertionError(e); }
         var vision = vision();
         var llm = new com.example.config.LlmProperties("", "", "test-model", .8, 800, 120);
-        return new com.example.service.ContextBudgetService(counter, new com.example.prompt.PromptBuilder(llm, com.example.TestRequests.vision(), auxiliaryContexts()),
+        return new com.example.service.ContextBudgetService(counter, new com.example.prompt.PromptBuilder(llm, com.example.TestRequests.vision()),
                 contextProperties(), vision, new com.example.service.ContextValidation(),
                 new com.example.service.ImageValidationService(vision), mapper);
     }

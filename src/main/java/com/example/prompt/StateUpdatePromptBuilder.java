@@ -27,7 +27,7 @@ public class StateUpdatePromptBuilder {
             }
         }
         parts.add(Message.Part.text("本次返回模板：保留每项 assetId，按对应原图填写 summary 和细节列表，"
-                + "并按本轮实际变化填写三个 changes 数组：" + resultTemplate(r)));
+                + "填写五个数组与 sceneImage：" + resultTemplate(r)));
         String rules = """
                 missingAssets 中的原件缺失，已跳过，本次无法复核；已有观察仅为有损记录，不能为缺图生成新观察或声称本轮核实了细节。
                 你是剧情状态整理器。只提取实际发生且持续有用的信息，不创造事件，不输出分析过程。
@@ -51,7 +51,7 @@ public class StateUpdatePromptBuilder {
                 目标可以逐步形成，不编造完整通关路线；完成、放弃和重大变化必须有来源。
                 【返回协议】
                 只输出符合响应 schema 的完整 JSON 对象，不输出 Markdown 代码块、说明文字或顶层数组。
-                以用户材料末尾的本次返回模板为准，保留 visualObservations、storyChanges、memoryChanges、goalChanges、visualChanges 五个数组。
+                以用户材料末尾的本次返回模板为准，保留 visualObservations、storyChanges、memoryChanges、goalChanges、visualChanges 五个数组，并提供必需的 sceneImage 对象。
                 每个 change 结构：
                 {"action":"create或update","id":"新增时为空字符串，修改时为已有ID或剧情字段名",
                 "value":{},"reason":"中文依据","sourceMessageIds":["msg1"]}
@@ -106,7 +106,9 @@ public class StateUpdatePromptBuilder {
                 + "用户仅要求画图换装不等于剧情换装；生成提示词、生成摘要不是事实依据。新服装覆盖旧服装，不因换地点丢失服装，瞬间姿势不写入。"
                 + "visualSources 标为 manual 的字段必须有更新时间之后的新对话依据才可更新。";
         List<Message> messages = new ArrayList<>();
-        messages.add(new Message("system", rules));
+        var system = new StringBuilder(rules);
+        SceneImagePromptRules.appendTo(system);
+        messages.add(new Message("system", system.toString()));
         messages.add(new Message("user", parts));
         messages.addAll(correction);
         var request = new ChatRequest(messages, config.stateOutputTokens(), 0.0, true);
@@ -131,6 +133,7 @@ public class StateUpdatePromptBuilder {
         template.putArray("storyChanges");
         template.putArray("memoryChanges");
         template.putArray("goalChanges");
+        template.putObject("sceneImage").put("prompt", "").putArray("additionalReferences");
         return template.toString();
     }
 }

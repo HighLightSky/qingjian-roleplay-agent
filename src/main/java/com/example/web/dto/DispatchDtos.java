@@ -20,6 +20,6 @@ public final class DispatchDtos {
     public record Stage(String name, String status, String error, Plan plan) {}
     public record Snapshot(String runId, long revision, List<SegmentDelta> segments, Map<String, Stage> stages,
             ContextDtos.ContextBudget budget, Plan plan, ChatStreamResult body, Result state,
-            boolean terminal, String error, String imagePrompt, SceneImageDtos.Plan scenePlan, String imagePromptError) {}
+            boolean terminal, String error) {}
     public record Event(long revision, Object value) {}
 }

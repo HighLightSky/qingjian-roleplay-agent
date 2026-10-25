@@ -38,7 +38,7 @@ public class ChatService {
      * @throws InterruptedException 当前模型请求被中断
      */
     public ChatStreamResult chatStream(ChatApiRequest request, Consumer<SegmentDelta> onDelta,
-            Consumer<ContextBudget> onContext, Consumer<String> onImagePrompt)
+            Consumer<ContextBudget> onContext)
             throws IOException, InterruptedException {
         Objects.requireNonNull(onDelta, "onDelta 不能为空");
 
@@ -46,7 +46,7 @@ public class ChatService {
         budgets.requireSendable(prepared.budget());
         onContext.accept(prepared.budget());
         // 解析器有当前行的状态，因此每次请求都要新建，不能放在成员字段中共享。
-        SceneImageStreamParser parser = new SceneImageStreamParser(onDelta, onImagePrompt);
+        SegmentStreamParser parser = new SegmentStreamParser(onDelta);
 
         // parser::feed 作为回调函数传入
         ChatStreamResult result = llmClient.chatStream(prepared.request(), parser::feed);

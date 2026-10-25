@@ -37,14 +37,14 @@ const steps = [
     title: "整理本轮",
     owner: "StateUpdateService.update",
     detail:
-      "仅 stop 且非空的正文触发整理。整理器读本轮双方消息，提出剧情、记忆、目标与视觉观察变更。服务端还原短编号并校验来源、权限、证据和完整性。",
+      "仅 stop 且非空的正文触发整理。整理器读本轮双方消息，提出剧情、记忆、目标与视觉观察变更，同时生成简短画面提示词和参考建议。服务端还原短编号并校验来源、权限、证据和完整性。",
     event: "stage: state_update → state_result",
   },
   {
     title: "提交与确认",
     owner: "浏览器事务 → ChatDispatchService.acknowledge",
     detail:
-      "浏览器校验会话、记忆、来源等版本后原子提交，保存全部终态才发送 ACK。任务结束时释放模型与图片租约；ACK 删除后台结果。事务失败时保留句柄，可再次取回同一结果。",
+      "浏览器校验会话、记忆、来源等版本后，在同一事务提交状态变更和画面草稿，保存全部终态才发送 ACK。任务结束时释放模型与图片租约；ACK 删除后台结果。事务失败时保留句柄，可再次取回同一结果。",
     event: "done → POST /api/chat/{runId}/ack",
   },
 ] as const;

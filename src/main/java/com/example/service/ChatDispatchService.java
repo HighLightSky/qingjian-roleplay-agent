@@ -32,13 +32,12 @@ public class ChatDispatchService {
     private final ChatService chat;
     private final VisualSelectionService selection;
     private final StateUpdateService state;
-    private final SceneImagePlanService scenePlans;
     private final ScheduledThreadPoolExecutor scheduler = new ScheduledThreadPoolExecutor(1,
             Thread.ofPlatform().daemon().name("dispatch-cleanup").factory());
 
     public ChatDispatchService(DispatchProperties config, Clock clock, ObjectMapper mapper,
             ImageCache cache, ModelGate gate, ChatService chat, VisualSelectionService selection,
-            StateUpdateService state, SceneImagePlanService scenePlans) {
+            StateUpdateService state) {
         this.config = config;
 
         this.clock = clock;
@@ -48,7 +47,6 @@ public class ChatDispatchService {
         this.chat = chat;
         this.selection = selection;
         this.state = state;
-        this.scenePlans = scenePlans;
         scheduler.setRemoveOnCancelPolicy(true);
         scheduler.scheduleWithFixedDelay(this::cleanup, config.cleanupSeconds(), config.cleanupSeconds(),
                 TimeUnit.SECONDS);
@@ -188,8 +186,6 @@ public class ChatDispatchService {
         long revision, finishedAt;
         boolean terminal, cancelled;
         String error;
-        String imagePrompt = "", imagePromptError;
-        SceneImageDtos.Plan scenePlan;
         ContextDtos.ContextBudget budget;
         Plan plan;
         ChatStreamResult body;
@@ -204,7 +200,7 @@ public class ChatDispatchService {
 
         synchronized DispatchDtos.Snapshot snapshot() {
             return new DispatchDtos.Snapshot(id, revision, List.copyOf(segments), Map.copyOf(stages), budget, plan,
-                    body, result, terminal, error, imagePrompt, scenePlan, imagePromptError);
+                    body, result, terminal, error);
         }
 
         synchronized SseEmitter subscribe() {
@@ -267,22 +263,7 @@ public class ChatDispatchService {
                         budget = value;
                         emit("context", value);
                     }
-                }, delta -> {
-                    synchronized (this) {
-                        if (imagePrompt.length() + delta.length() > config.resultCacheBytes() / config.maxResults())
-                            throw new IllegalArgumentException("画面尾部超过任务结果上限");
-                        imagePrompt += delta;
-                        emit("image_prompt_delta", delta);
-                    }
                 });
-                if ("stop".equals(generated.finishReason())) {
-                    try {
-                        var resolved = scenePlans.resolvePlan(imagePrompt, prepared, request.assistant());
-                        synchronized (this) { scenePlan = resolved; emit("image_prompt_done", resolved); }
-                    } catch (Exception e) {
-                        synchronized (this) { imagePromptError = e.getMessage(); emit("image_prompt_error", imagePromptError); }
-                    }
-                }
                 synchronized (this) {
                     body = generated;
                     emit("body_done", generated);
@@ -313,7 +294,7 @@ public class ChatDispatchService {
                                 prepared.input(), prepared.interactionSettings(),
                                 withImages(prepared, selected, images.payloads(ImageObservationPolicy.observationAssetIds(prepared, required))).visual(),
                                 "state:" + request.assistant().id()),
-                        request.user().seq() - 1, request.assistant().seq(), List.of(
+                        request.user().seq() - 1, request.assistant().seq(), request.assistant().completedCheckpointVersion(), List.of(
                                 new SourceMessage(request.user().id(), request.user().seq(), "user", input, "complete",
                                         request.user().createdAt()),
                                 new SourceMessage(request.assistant().id(), request.assistant().seq(), "assistant",

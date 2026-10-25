@@ -80,9 +80,7 @@ const sse = (events: [string, unknown][]) =>
 function snapshot(runId: string, terminal: boolean): DispatchSnapshot {
   return {
     runId,
-    imagePrompt: "",
-    scenePlan: null,
-    imagePromptError: null,
+
     revision: 1,
     segments: [{ kind: "dialogue", text: "先说" }],
     stages: {},
@@ -112,9 +110,7 @@ test("断流后只恢复订阅，完整快照替换旧正文，不重复提交�
             "snapshot",
             {
               ...snapshot("run", true),
-              imagePrompt: "",
-              scenePlan: null,
-              imagePromptError: null,
+
               revision: 4,
               segments: [{ kind: "dialogue", text: "先说，然后继续" }],
             },
@@ -139,9 +135,7 @@ test("恢复边界重复序号不再次追加，拆分 UTF-8 正文完整保留"
   const initial = snapshot("run", false);
   const terminal = {
     ...snapshot("run", true),
-    imagePrompt: "",
-    scenePlan: null,
-    imagePromptError: null,
+
     revision: 3,
     segments: [{ kind: "dialogue", text: "先说你好🌱" }],
   };
@@ -391,6 +385,7 @@ test("新整理任务使旧任务不可重试，已提交结果重复取回不�
     const assistant = {
       ...value.assistant,
       status: "complete" as const,
+      checkpointVersion: 1,
       segments: [{ kind: "narration" as const, text: "回应" }],
     };
     const context = chatContext(
@@ -423,7 +418,17 @@ test("新整理任务使旧任务不可重试，已提交结果重复取回不�
     context: next.context,
     fromExclusiveSeq: next.value.user.seq - 1,
     throughSeq: next.value.assistant.seq,
-    messages: [],
+    assistantCheckpointVersion: 1,
+    messages: [
+      {
+        id: next.value.assistant.id,
+        seq: next.value.assistant.seq,
+        role: "assistant",
+        text: "回应",
+        status: "complete",
+        createdAt: next.value.assistant.createdAt,
+      },
+    ],
   });
   await acceptStateResult(
     next.task,

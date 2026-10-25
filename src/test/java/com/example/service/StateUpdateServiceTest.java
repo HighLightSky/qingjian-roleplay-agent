@@ -40,14 +40,14 @@ class StateUpdateServiceTest {
     StateUpdateServiceTest() {
         vision.setSupported(true);
         service = new StateUpdateService(model, mapper, new StateUpdatePromptBuilder(mapper, com.example.TestRequests.dispatch()),
-                new ImageValidationService(vision), com.example.TestRequests.budgets(), TestRequests.auxiliaryContexts());
+                new ImageValidationService(vision), com.example.TestRequests.budgets(), TestRequests.auxiliaryContexts(), new SceneImagePlanService(), vision);
     }
 
     private UpdateRequest request(Snapshot state, List<ContentPartDto> parts, List<Payload> payloads) {
         return new UpdateRequest("operation", new ChatApiRequest(new CharacterDto("林溪", "旧友", "老板", null, 1), state, com.example.TestRequests.summary(),
                 List.of(), new InputDto("我们到了旅馆", parts),
                 new InteractionSettingsDto(InteractionSettingsDto.ReplyLength.STANDARD, InteractionSettingsDto.NarrativeMode.SCENE),
-                payloads.isEmpty() ? null : new Context("session", List.of(), null, payloads, List.of()), "operation"), 0, 2,
+                payloads.isEmpty() ? null : new Context("session", List.of(), null, payloads, List.of()), "operation"), 0, 2, 1,
                 List.of(new SourceMessage("user", 1, "user", "我们到了旅馆", "complete", "2026-10-21T00:00:00Z"),
                         new SourceMessage("assistant", 2, "assistant", "她走入旅馆。", "complete", "2026-10-21T00:00:01Z")));
     }
@@ -71,8 +71,8 @@ class StateUpdateServiceTest {
         var missing = new MissingAsset("img1", List.of(source), null);
         var context = new ChatApiRequest(new CharacterDto("林溪", "", "", "img1", 1), c.state(), c.summary(),
                 c.history(), c.input(), c.interactionSettings(), new Context("session", List.of(), null, List.of(), List.of(missing)), c.operationId());
-        var request = new UpdateRequest(original.operationId(), context, original.fromExclusiveSeq(), original.throughSeq(), original.messages());
-        answer("{\"visualObservations\":[{\"assetId\":\"img1\",\"summary\":\"虚构外观\",\"visibleDetails\":[],\"extractedText\":[],\"uncertainDetails\":[]}],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}");
+        var request = new UpdateRequest(original.operationId(), context, original.fromExclusiveSeq(), original.throughSeq(), 1, original.messages());
+        answer("{\"visualObservations\":[{\"assetId\":\"img1\",\"summary\":\"虚构外观\",\"visibleDetails\":[],\"extractedText\":[],\"uncertainDetails\":[]}],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"sceneImage\":{\"prompt\":\"人物坐在椅子上阅读。\",\"additionalReferences\":[]},\"goalChanges\":[]}");
         assertTrue(assertThrows(IOException.class, () -> update(request)).getMessage().contains("未传入的原图"));
         verify(model, times(2)).chat(any());
     }
@@ -80,7 +80,7 @@ class StateUpdateServiceTest {
     private UpdateRequest request() { return request(TestRequests.state(List.of()), null, List.of()); }
     private void answer(String content) throws Exception { when(model.chat(any())).thenReturn(new ChatResponse(content, "stop", com.example.llm.model.TokenUsage.unavailable())); }
     private String output(String story, String memory, String goal) {
-        return "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":" + story + ",\"memoryChanges\":" + memory + ",\"goalChanges\":" + goal + "}";
+        return "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":" + story + ",\"memoryChanges\":" + memory + ",\"goalChanges\":" + goal + ",\"sceneImage\":{\"prompt\":\"人物坐在椅子上阅读。\",\"additionalReferences\":[]}}";
     }
     private String change(String id, String value) {
         return "{\"action\":\"" + (id.isEmpty() ? "create" : "update") + "\",\"id\":\"" + id
@@ -126,7 +126,7 @@ class StateUpdateServiceTest {
         var context = new ChatApiRequest(new CharacterDto("林溪", "旧友", "银发", "img2", 4), c.state(),
                 c.summary(), c.history(), c.input(), c.interactionSettings(),
                 new Context("session", List.of(photo), null, List.of(payload), List.of()), c.operationId());
-        return new UpdateRequest(base.operationId(), context, base.fromExclusiveSeq(), base.throughSeq(), base.messages());
+        return new UpdateRequest(base.operationId(), context, base.fromExclusiveSeq(), base.throughSeq(), 1, base.messages());
     }
 
     private String observations(String... assetIds) throws Exception {
@@ -291,7 +291,7 @@ class StateUpdateServiceTest {
         var emptyVisual = new ChatApiRequest(c.character(), c.state(), c.summary(), c.history(), c.input(),
                 c.interactionSettings(), new Context("session", List.of(), null, List.of(), List.of()), c.operationId());
         for (var request : List.of(base, new UpdateRequest(base.operationId(), emptyVisual, base.fromExclusiveSeq(),
-                base.throughSeq(), base.messages()))) {
+                base.throughSeq(), 1, base.messages()))) {
             clearInvocations(model);
             answer(response.toString());
             var result = update(request);
@@ -386,7 +386,7 @@ class StateUpdateServiceTest {
         var invalid = new Snapshot(state.sessionId(), state.characterId(), 0, 0, state.story(), Map.of(), List.of(foreign), List.of(), com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
         assertThrows(IllegalArgumentException.class, () -> update(request(invalid, null, List.of())));
         var r = request();
-        var broken = new UpdateRequest(r.operationId(), r.context(), 0, 2,
+        var broken = new UpdateRequest(r.operationId(), r.context(), 0, 2, 1,
                 List.of(new SourceMessage("assistant", 2, "assistant", "未完成", "cancelled", "2026-10-21T00:00:01Z")));
         assertThrows(IllegalArgumentException.class, () -> update(broken));
         verifyNoInteractions(model);
@@ -565,7 +565,7 @@ class StateUpdateServiceTest {
         answer(observations("img3", "img2"));
 
         var result = update(new UpdateRequest(base.operationId(), context, base.fromExclusiveSeq(),
-                base.throughSeq(), base.messages()));
+                base.throughSeq(), 1, base.messages()));
 
         assertEquals(List.of(new MessageSource("user", 1, c.input().text(), 2, 2)),
                 result.visualObservations().getFirst().sources());
@@ -593,4 +593,86 @@ class StateUpdateServiceTest {
         verify(model).chat(any());
     }
 
+
+    @Test void sceneDraftIsProducedWithoutDomainChangesAndKeepsTheSourceCheckpoint() throws Exception {
+        answer(output("[]", "[]", "[]"));
+        var base = request();
+        var result = update(new UpdateRequest(base.operationId(), base.context(), base.fromExclusiveSeq(),
+                base.throughSeq(), 7, base.messages()));
+        assertEquals("人物坐在椅子上阅读。", result.scenePlan().prompt());
+        assertEquals("assistant", result.scenePlan().assistantMessageId());
+        assertEquals(7, result.scenePlan().sourceCheckpointVersion());
+        assertTrue(result.storyChanges().isEmpty());
+        assertTrue(result.visualChanges().isEmpty());
+        assertTrue(result.scenePlan().referenceImages().isEmpty());
+        verify(model).chat(any());
+    }
+
+    private UpdateRequest sceneRequest() throws Exception {
+        var scenario = com.example.SelectionFixtures.scenario(com.example.SelectionFixtures.History.IMAGE,
+                com.example.SelectionFixtures.Photo.OBSERVED);
+        var c = scenario.context();
+        var generated = payload("img3");
+        var assets = new ArrayList<>(c.visual().assetCatalog());
+        assets.add(new Asset("img3", generated.sha256(), "image/png",
+                Base64.getDecoder().decode(generated.dataUrl().split(",")[1]).length, 3, 2,
+                List.of(new GenerationSource("generation", "old-plan", "old-assistant", 2, "旧画面生成要求", false)),
+                null, List.of(), generated.sha256()));
+        var payloads = new ArrayList<>(scenario.images());
+        payloads.add(generated);
+        var context = new ChatApiRequest(c.character(), c.state(), c.summary(), c.history(), c.input(),
+                c.interactionSettings(), new Context("session", assets, null, payloads, List.of()), c.operationId());
+        return new UpdateRequest(c.operationId(), context, 2, 4, 5, List.of(
+                new SourceMessage("user", 3, "user", c.input().textOf(), "complete", "2026-10-25T00:00:00Z"),
+                new SourceMessage("assistant", 4, "assistant", "她脱去外套，坐在书桌旁的椅子上阅读。", "complete", "2026-10-25T00:00:01Z")));
+    }
+
+    @Test void sceneUsesAutomaticPhotoThenSuggestedOrderWithoutObservingExistingImagesAgain() throws Exception {
+        var response = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(output("[]", "[]", "[]"));
+        var scene = response.withObject("sceneImage");
+        scene.put("prompt", "与<image2>相同的女孩，脱去外套，坐在书桌旁的椅子上阅读。参考<image3>的室内环境。");
+        var references = scene.putArray("additionalReferences");
+        references.addObject().put("assetId", "img3").put("scope", "室内环境");
+        references.addObject().put("assetId", "img1").put("scope", "地图道具");
+        answer(response.toString());
+        var result = update(sceneRequest());
+        assertEquals(List.of("img2", "img3", "img1"), result.scenePlan().referenceImages().stream().map(r -> r.assetId()).toList());
+        assertEquals("generation", result.scenePlan().referenceImages().get(1).sourceGenerationId());
+        assertTrue(result.visualObservations().isEmpty());
+        var calls = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model).chat(calls.capture());
+        String material = calls.getValue().getMessages().get(1).getParts().getFirst().text();
+        assertTrue(material.contains("地图上标出了码头"));
+        assertTrue(material.contains("旧画面生成要求"));
+        assertTrue(material.contains("automaticReference"));
+        assertFalse(calls.getValue().getMessages().stream().filter(m -> m.getParts() != null)
+                .flatMap(m -> m.getParts().stream()).anyMatch(part -> "image_url".equals(part.type())));
+        var schema = calls.getValue().getResponseSchema().path("properties").path("sceneImage");
+        assertEquals(2, schema.path("required").size());
+        assertFalse(schema.toString().contains("roles"));
+        assertFalse(schema.path("properties").path("additionalReferences").toString().contains("img2"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"missing", "duplicate", "automatic", "unknown", "blankScope", "oldRoles", "overLimit"})
+    void invalidSceneOutputIsCorrectedAsPartOfTheSameStateCall(String kind) throws Exception {
+        if ("overLimit".equals(kind)) vision.setMaxImages(2);
+        var valid = output("[]", "[]", "[]");
+        var invalid = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(valid);
+        if ("missing".equals(kind)) invalid.remove("sceneImage");
+        else {
+            var references = invalid.withObject("sceneImage").putArray("additionalReferences");
+            var reference = references.addObject().put("assetId", switch (kind) {
+                case "automatic" -> "img2";
+                case "unknown" -> "img99";
+                default -> "img1";
+            }).put("scope", "blankScope".equals(kind) ? " " : "环境");
+            if ("duplicate".equals(kind)) references.add(reference.deepCopy());
+            if ("oldRoles".equals(kind)) reference.putArray("roles").add("identity");
+        }
+        when(model.chat(any())).thenReturn(new ChatResponse(invalid.toString(), "stop", TokenUsage.unavailable()),
+                new ChatResponse(valid, "stop", TokenUsage.unavailable()));
+        assertNotNull(update(sceneRequest()).scenePlan());
+        verify(model, times(2)).chat(any());
+    }
 }

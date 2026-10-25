@@ -84,7 +84,6 @@ const labels = {
 export function SceneImageCard() {
   const messageId = useAuiState((s) => s.message.id);
   const readOnly = useAppStore((s) => s.readOnly);
-  const streaming = useAppStore((s) => s.imageDrafts[messageId]);
   const [plan, setPlan] = useState<SceneImagePlan>();
   const [draft, setDraft] = useState<SceneDraft>();
   const [caps, setCaps] = useState<Capabilities>();
@@ -141,7 +140,7 @@ export function SceneImageCard() {
   }, [messageId]);
   const latest = generations.at(-1);
   const active = generations.some((g) => isActiveGeneration(g.status));
-  if (!plan && !streaming) return null;
+  if (!plan) return null;
   const sizeValid = [widthText, heightText].every(
     (text) => Number.isSafeInteger(Number(text)) && Number(text) > 0,
   );
@@ -186,8 +185,7 @@ export function SceneImageCard() {
     >
       <details>
         <summary className="cursor-pointer">
-          剧情图 ·{" "}
-          {latest ? labels[latest.status] : plan ? "待生成" : "整理画面中"}
+          剧情图 · {latest ? labels[latest.status] : "待生成"}
         </summary>
         {draft ? (
           <div className="mt-3 grid gap-3">
@@ -295,20 +293,16 @@ export function SceneImageCard() {
               </ul>
             )}
           </div>
-        ) : (
-          <pre className="mt-2 whitespace-pre-wrap break-words text-xs">
-            {streaming?.raw}
-          </pre>
-        )}
+        ) : null}
       </details>
       {(error || latest?.error) && (
         <p role="alert" className="mt-2 text-destructive">
           {error || latest?.error}
         </p>
       )}
-      {(plan?.error || streaming?.error) && (
+      {plan?.error && (
         <p className="mt-2 text-xs text-muted-foreground">
-          {plan?.error || streaming?.error}。可调整提示词和参考后生成。
+          {plan.error}。可调整提示词和参考后生成。
         </p>
       )}
       <div className="mt-2 flex flex-wrap gap-3">

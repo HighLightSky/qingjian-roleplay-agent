@@ -1,4 +1,8 @@
-import { convertV10Backup, convertV9Backup } from "./scene-images/migration";
+import {
+  convertV10Backup,
+  convertV9Backup,
+  convertV11Backup,
+} from "./scene-images/migration";
 import {
   isActiveGeneration,
   type SceneImagePlan,
@@ -81,7 +85,7 @@ export type Snapshot = {
 };
 export type Backup = {
   format: "roleplay-agent-backup";
-  formatVersion: 11;
+  formatVersion: 12;
   exportedAt: string;
   data: Snapshot;
 };
@@ -102,7 +106,11 @@ export function validateBackup(value: unknown): Backup {
     value = convertV10Backup(value);
     object(value);
   }
-  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 11)
+  if (value.format === "roleplay-agent-backup" && value.formatVersion === 11) {
+    value = convertV11Backup(value);
+    object(value);
+  }
+  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 12)
     throw new Error("不支持此备份格式或版本，请选择本应用导出的文件。");
   date(value.exportedAt);
   object(value.data);
@@ -282,42 +290,7 @@ export function validateBackup(value: unknown): Backup {
       throw new Error("主题设置无效。");
     if (setting.key === "themeColor") parseThemeColor(setting.value);
   }
-  for (const plan of snapshot.sceneImagePlans) {
-    validateScenePlan(plan);
-    const source = snapshot.messages.find(
-      (m) => m.id === plan.assistantMessageId,
-    );
-    const session = sessions.get(plan.sessionId);
-    if (
-      !source ||
-      source.role !== "assistant" ||
-      source.sessionId !== plan.sessionId ||
-      source.seq !== plan.sourceSeq ||
-      !session ||
-      session.profileVersion !== plan.profileVersion
-    )
-      throw new Error("画面计划来源无效。");
-    for (const reference of plan.referenceImages) {
-      const asset = snapshot.assets.find((a) => a.id === reference.assetId);
-      if (
-        reference.sourceSha256 !== null &&
-        (!asset || asset.sha256 !== reference.sourceSha256)
-      )
-        throw new Error("画面参考原件缺失或哈希不一致。");
-      if (reference.sourceGenerationId) {
-        const sourceGeneration = snapshot.sceneGenerations.find(
-          (g) => g.id === reference.sourceGenerationId,
-        );
-        if (
-          !sourceGeneration ||
-          sourceGeneration.sessionId !== plan.sessionId ||
-          sourceGeneration.assetId !== reference.assetId ||
-          sourceGeneration.sourceSeq > plan.sourceSeq
-        )
-          throw new Error("画面参考图的生成来源无效。");
-      }
-    }
-  }
+  for (const plan of snapshot.sceneImagePlans) checkScenePlan(plan, snapshot);
   for (const generation of snapshot.sceneGenerations) {
     validateSceneGeneration(generation);
     const plan = snapshot.sceneImagePlans.find(
@@ -361,11 +334,48 @@ export function validateBackup(value: unknown): Backup {
   validateImages(snapshot);
   return {
     format: "roleplay-agent-backup",
-    formatVersion: 11,
+    formatVersion: 12,
     exportedAt: value.exportedAt as string,
     data: snapshot,
   };
 }
+function checkScenePlan(plan: SceneImagePlan, snapshot: Snapshot) {
+  validateScenePlan(plan);
+  const source = snapshot.messages.find(
+    (m) => m.id === plan.assistantMessageId,
+  );
+  const session = snapshot.sessions.find((s) => s.id === plan.sessionId);
+  if (
+    !source ||
+    source.role !== "assistant" ||
+    source.sessionId !== plan.sessionId ||
+    source.seq !== plan.sourceSeq ||
+    !session ||
+    session.profileVersion !== plan.profileVersion
+  )
+    throw new Error("画面计划来源无效。");
+  for (const reference of plan.referenceImages) {
+    const asset = snapshot.assets.find((a) => a.id === reference.assetId);
+    if (
+      reference.sourceSha256 !== null &&
+      (!asset || asset.sha256 !== reference.sourceSha256)
+    )
+      throw new Error("画面参考原件缺失或哈希不一致。");
+    if (reference.sourceGenerationId) {
+      const sourceGeneration = snapshot.sceneGenerations.find(
+        (g) => g.id === reference.sourceGenerationId,
+      );
+      if (
+        !sourceGeneration ||
+        sourceGeneration.sessionId !== plan.sessionId ||
+        sourceGeneration.assetId !== reference.assetId ||
+        sourceGeneration.sourceSeq > plan.sourceSeq
+      )
+        throw new Error("画面参考图的生成来源无效。");
+    }
+  }
+}
+
 function decodeBase64(value: string): Uint8Array {
   try {
     return Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
@@ -702,6 +712,21 @@ function validateImages(snapshot: Snapshot) {
           throw new Error("压缩操作包含范围外的消息引用。");
       } else if (op.kind === "state_update") {
         validateStateResult(op.result);
+        if (op.result.scenePlan !== null) {
+          const scenePlan = op.result.scenePlan;
+          checkScenePlan(scenePlan, snapshot);
+          if (
+            op.result.scenePlan.assistantMessageId !== op.anchorMessageId ||
+            op.result.scenePlan.sessionId !== op.sessionId ||
+            op.result.scenePlan.sourceSeq !== op.result.throughSeq ||
+            !op.sourceVersions?.some(
+              (source) =>
+                source.id === op.anchorMessageId &&
+                source.checkpointVersion === scenePlan.sourceCheckpointVersion,
+            )
+          )
+            throw new Error("整理画面草稿与操作来源不一致。");
+        }
         if (
           !Array.isArray(op.sourceVersions) ||
           op.sourceVersions.some((source) => {
@@ -952,7 +977,7 @@ export async function takeSnapshot(): Promise<Backup> {
   }
   const backup: Backup = {
     format: "roleplay-agent-backup",
-    formatVersion: 11,
+    formatVersion: 12,
     exportedAt: new Date().toISOString(),
     data: { ...data, assets: serialized },
   };

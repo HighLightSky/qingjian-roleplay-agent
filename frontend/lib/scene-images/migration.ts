@@ -192,3 +192,59 @@ export function convertV10Backup(value: Record<string, unknown>) {
     data: upgradeV9Data(data as Record<string, unknown[]>),
   };
 }
+
+/** v10 的参考用途归并为 scope，旧整理确实没有画面结果时显式保留 null。 */
+export function upgradeV10Record(
+  table: string,
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  const row = { ...value };
+  const references = (items: unknown) =>
+    (items as Record<string, unknown>[]).map(
+      ({ roles, ...reference }) => reference,
+    );
+  if (table === "sceneImagePlans")
+    row.referenceImages = references(row.referenceImages);
+  if (table === "sceneGenerations") {
+    const submission = row.submission as Record<string, unknown>;
+    row.submission = {
+      ...submission,
+      referenceImages: references(submission.referenceImages),
+    };
+    if (["pending", "running", "cancelling"].includes(row.status as string)) {
+      row.status = "unknown";
+      row.acknowledged = true;
+      row.error = "版本升级中断了旧任务，结果未知，请手动重新生成。";
+    }
+  }
+  if (table === "operations") {
+    if (row.kind === "state_update" && row.result)
+      row.result = { ...(row.result as object), scenePlan: null };
+    if (["pending", "running"].includes(row.status as string)) {
+      row.status = "cancelled";
+      row.error = "版本升级中断了旧请求，保留已保存内容，可手动重试。";
+    }
+  }
+  if (
+    table === "messages" &&
+    ["pending", "streaming"].includes(row.status as string)
+  ) {
+    row.status = "interrupted";
+    row.error = "版本升级中断了旧请求，保留已收到正文。";
+  }
+  return row;
+}
+
+export function convertV11Backup(value: Record<string, unknown>) {
+  const data = value.data;
+  if (!data || typeof data !== "object" || Array.isArray(data))
+    throw new Error("旧备份数据缺失。");
+  const converted: Record<string, unknown[]> = {};
+  for (const [table, rows] of Object.entries(data)) {
+    if (!Array.isArray(rows)) throw new Error(`旧备份的 ${table} 数据无效。`);
+    converted[table] = rows
+      .filter((row) => table !== "settings" || !row.key.startsWith("dispatch:"))
+      .map((row) => upgradeV10Record(table, row));
+  }
+  return { ...value, formatVersion: 12, data: converted };
+}

@@ -32,7 +32,7 @@ class AuxiliaryAgentsTest {
     private final LLMClient model = mock(LLMClient.class);
     private final LlamaTokenCounter counter = mock(LlamaTokenCounter.class);
     private final VisionProperties vision = com.example.TestRequests.vision();
-    private static final String EMPTY = "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}";
+    private static final String EMPTY = "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"sceneImage\":{\"prompt\":\"人物坐在椅子上阅读。\",\"additionalReferences\":[]},\"goalChanges\":[]}";
 
     @BeforeEach void setup() throws Exception {
         vision.setSupported(true);
@@ -55,7 +55,7 @@ class AuxiliaryAgentsTest {
 
     private StateUpdateService stateService(int limit) {
         return new StateUpdateService(model, mapper, new StateUpdatePromptBuilder(mapper, TestRequests.dispatch()),
-                new ImageValidationService(vision), TestRequests.budgets(), contexts(limit));
+                new ImageValidationService(vision), TestRequests.budgets(), contexts(limit), new SceneImagePlanService(), com.example.TestRequests.vision());
     }
 
     private ChatApiRequest context(int rounds, int textLength, Snapshot state) {
@@ -71,7 +71,7 @@ class AuxiliaryAgentsTest {
 
     private UpdateRequest request(ChatApiRequest context, String text) {
         int seq = context.history().size();
-        return new UpdateRequest(context.operationId(), context, seq, seq + 2, List.of(
+        return new UpdateRequest(context.operationId(), context, seq, seq + 2, 1, List.of(
                 new SourceMessage("current-user-uuid", seq + 1, "user", context.input().textOf(), "complete", "2026-10-22T01:00:00Z"),
                 new SourceMessage("current-assistant-uuid", seq + 2, "assistant", text, "complete", "2026-10-22T01:00:01Z")));
     }
@@ -198,14 +198,14 @@ class AuxiliaryAgentsTest {
         var input = request(context(0, 0, snapshot), "普通寒暄，没有改变关键物品。");
         when(model.chat(any())).thenReturn(new ChatResponse(EMPTY, "stop", TokenUsage.unavailable()));
         clearInvocations(model);
-        stateService(7000).update(input);
+        stateService(10000).update(input);
         var calls = ArgumentCaptor.forClass(ChatRequest.class);
         verify(model).chat(calls.capture());
         assertFalse(material(calls.getValue()).path("editableStoryFields").toString().contains("items"));
         String change = "{\"action\":\"update\",\"id\":\"items\",\"value\":[],\"reason\":\"未看到物品\",\"sourceMessageIds\":[\"msg2\"]}";
         when(model.chat(any())).thenReturn(new ChatResponse(EMPTY.replace("\"visualChanges\":[],\"storyChanges\":[]", "\"visualChanges\":[],\"storyChanges\":[" + change + "]"),
                 "stop", TokenUsage.unavailable()));
-        assertThrows(IOException.class, () -> stateService(7000).update(input));
+        assertThrows(IOException.class, () -> stateService(10000).update(input));
         assertEquals(1, snapshot.story().items().size());
     }
 
@@ -217,13 +217,13 @@ class AuxiliaryAgentsTest {
             goals.add(new Goal("ended-goal-" + i, "session", new GoalValue("旧目标" + i, "completed", "", "旧进展".repeat(30)),
                     1, "automatic", List.of(), "2026-10-21T00:00:00Z"));
         var snapshot = new Snapshot(memories.sessionId(), memories.characterId(), 0, 0, memories.story(), Map.of(), memories.memories(), goals, com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
-        stateService(7000).update(request(context(0, 0, snapshot), "本轮没有新的重要进展。"));
+        stateService(10000).update(request(context(0, 0, snapshot), "本轮没有新的重要进展。"));
         var calls = ArgumentCaptor.forClass(ChatRequest.class);
         verify(model).chat(calls.capture());
         var data = material(calls.getValue());
         assertTrue(data.path("goals").isEmpty());
         assertTrue(data.path("memories").size() < 500);
-        assertTrue(counter.countTextOnly(calls.getValue()).inputTokens() <= 7000);
+        assertTrue(counter.countTextOnly(calls.getValue()).inputTokens() <= 10000);
         verify(counter, atMost(32)).countTextOnly(any());
         assertEquals(500, snapshot.memories().size());
         assertEquals(500, snapshot.goals().size());
@@ -280,7 +280,7 @@ class AuxiliaryAgentsTest {
         actual.addAll(ImageValidationService.requiredIds(context));
         var payloads = scenario.images().stream().filter(p -> actual.contains(p.assetId())).toList();
         var prepared = ChatDispatchService.withImages(context, plan, payloads);
-        var body = new PromptBuilder(new LlmProperties("", "", "test", .8, 8192, 120), com.example.TestRequests.vision(), com.example.TestRequests.auxiliaryContexts()).build(prepared);
+        var body = new PromptBuilder(new LlmProperties("", "", "test", .8, 8192, 120), com.example.TestRequests.vision()).build(prepared);
         long originals = body.getMessages().stream().filter(m -> m.getParts() != null).flatMap(m -> m.getParts().stream())
                 .filter(p -> "image_url".equals(p.type())).count();
         assertEquals(actual.size(), originals);

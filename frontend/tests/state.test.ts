@@ -4,6 +4,7 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   database,
+  collectUnreferenced,
   TABLES,
   saveCharacter,
   createSession,
@@ -15,7 +16,11 @@ import {
 } from "../lib/db";
 import { DEFAULT_INTERACTION_SETTINGS } from "../lib/domain";
 import { chatContext, stateSnapshot } from "../lib/chat/context";
-import { saveCompletedStateTask, runStateTask } from "../lib/state/coordinator";
+import {
+  saveCompletedStateTask,
+  runStateTask,
+  acceptStateResult,
+} from "../lib/state/coordinator";
 import { projectMessages } from "../lib/state/projection";
 import { emptyStateResult, type UpdateBody } from "./state-fixture";
 import { takeSnapshot, restoreSnapshot, validateBackup } from "../lib/backup";
@@ -232,6 +237,7 @@ test("保存中途失败全部回滚，重试只保存已计算结果", async ()
     );
     const db = await database();
     assert.equal(await db.count("memories"), 0);
+    assert.equal(await db.count("sceneImagePlans"), 0);
     assert.equal(await db.count("goals"), 0);
     assert.equal((await db.get("operations", task.id))!.status, "computed");
     failing = false;
@@ -243,6 +249,8 @@ test("保存中途失败全部回滚，重试只保存已计算结果", async ()
     );
     assert.equal(model.calls.length, 1);
     assert.equal(await db.count("memories"), 1);
+    assert.equal(await db.count("sceneImagePlans"), 1);
+    assert.equal(model.calls[0].assistantCheckpointVersion, 1);
     assert.equal((await db.get("operations", task.id))!.status, "committed");
   } finally {
     IDBObjectStore.prototype.put = put;
@@ -369,6 +377,121 @@ test("整理提交明确换装到视觉状态，并保留消息证据与正常�
     assert.deepEqual(current.story, session.story);
     assert.equal(current.visualSources.outfit?.sourceMessageIds.length, 1);
   } finally {
+    model.restore();
+  }
+});
+
+test("正常整理结果与手动重试共用草稿事务，重复接收保留用户编辑", async () => {
+  const { task, session, assistant } = await setup();
+  const body: UpdateBody = {
+    operationId: task.id,
+    context: task.context,
+    fromExclusiveSeq: 0,
+    throughSeq: assistant.seq,
+    assistantCheckpointVersion: assistant.checkpointVersion,
+    messages: (await allMessages(session.id)).map((message) => ({
+      id: message.id,
+      seq: message.seq,
+      role: message.role,
+      text: message.text || "她走入旅馆。",
+      status: "complete",
+      createdAt: message.createdAt,
+    })),
+  };
+  const result = emptyStateResult(body);
+  await acceptStateResult(task, result, commit, changed);
+  const db = await database();
+  const plan = (await db.get("sceneImagePlans", result.scenePlan!.id))!;
+  await db.put("sceneImagePlans", {
+    ...plan,
+    draft: {
+      prompt: "用户手动改写。",
+      width: 256,
+      height: 512,
+      referenceAssetIds: [],
+    },
+  });
+  await acceptStateResult(task, result, commit, changed);
+  assert.equal(
+    (await db.get("sceneImagePlans", plan.id))!.draft!.prompt,
+    "用户手动改写。",
+  );
+  assert.equal(await db.count("sceneImagePlans"), 1);
+  assert.equal(
+    (await db.get("sessions", session.id))!.stateVersion,
+    session.stateVersion,
+  );
+  assert.equal(validateBackup(await takeSnapshot()).formatVersion, 12);
+});
+
+test("computed 画面草稿的独占原图参与计量、回收和备份，重提无需再次调用模型", async () => {
+  const { task } = await setup();
+  const db = await database();
+  const bytes = Uint8Array.from(
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP2kAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  );
+  const { sha256 } = await import("../lib/images/hash");
+  const hash = sha256(bytes);
+  await db.put("assets", {
+    id: "img7",
+    displayName: "参考.png",
+    creationOrigin: "uploaded",
+    sha256: hash,
+    mimeType: "image/png",
+    byteSize: bytes.length,
+    width: 1,
+    height: 1,
+    originalBlob: new Blob([bytes], { type: "image/png" }),
+    createdAt: new Date().toISOString(),
+  });
+  await db.put("settings", { key: IMAGE_SEQUENCE_KEY, value: "7" });
+  const model = withModel((body) => {
+    const result = emptyStateResult(body);
+    result.scenePlan!.referenceImages = [
+      {
+        assetId: "img7",
+        scope: "人物身份",
+        sourceSha256: hash,
+        sourceGenerationId: null,
+      },
+    ];
+    return result;
+  });
+  const put = IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put = function (...args: Parameters<typeof put>) {
+    if (this.name === "sceneImagePlans")
+      throw new DOMException("草稿提交失败", "QuotaExceededError");
+    return put.apply(this, args);
+  };
+  try {
+    await assert.rejects(
+      runStateTask(task, new AbortController().signal, commit, changed),
+      /草稿提交失败/,
+    );
+    assert.equal(await db.count("sceneImagePlans"), 0);
+    const tx = db.transaction(TABLES, "readwrite");
+    await collectUnreferenced(tx);
+    await tx.done;
+    assert.ok(await db.get("assets", "img7"));
+    const { localDataUsage } = await import("../lib/data-usage");
+    const usage = await localDataUsage();
+    assert.equal(usage.characters[0].imageCount, 1);
+    const backup = validateBackup(await takeSnapshot());
+    assert.equal(backup.data.assets.length, 1);
+    assert.equal(
+      (backup.data.operations[0].result as StateResult).scenePlan!
+        .referenceImages[0].assetId,
+      "img7",
+    );
+    IDBObjectStore.prototype.put = put;
+    await runStateTask(task, new AbortController().signal, commit, changed);
+    assert.equal(model.calls.length, 1);
+    assert.equal(await db.count("sceneImagePlans"), 1);
+  } finally {
+    IDBObjectStore.prototype.put = put;
     model.restore();
   }
 });

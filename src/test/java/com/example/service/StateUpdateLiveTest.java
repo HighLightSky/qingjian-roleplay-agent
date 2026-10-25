@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -54,7 +55,7 @@ class StateUpdateLiveTest {
                 state, TestRequests.summary(), List.of(), new InputDto(input, null),
                 new InteractionSettingsDto(InteractionSettingsDto.ReplyLength.STANDARD, InteractionSettingsDto.NarrativeMode.SCENE),
                 null, "operation");
-        var request = new UpdateRequest("operation", context, 0, 2, List.of(
+        var request = new UpdateRequest("operation", context, 0, 2, 1, List.of(
                 new SourceMessage("user", 1, "user", input, "complete", "2026-10-23T00:00:00Z"),
                 new SourceMessage("assistant", 2, "assistant", reply, "complete", "2026-10-23T00:00:01Z")));
         try (var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()) {
@@ -79,7 +80,7 @@ class StateUpdateLiveTest {
             var materials = new AuxiliaryContextService(mapper, counter, TestRequests.contextProperties(),
                     new AuxiliaryContextProperties(4, 8192, 8192, 32768, 32768, 2048, 2048));
             var service = new StateUpdateService(observed, mapper, new StateUpdatePromptBuilder(mapper, TestRequests.dispatch()),
-                    new ImageValidationService(com.example.TestRequests.vision()), TestRequests.budgets(), materials);
+                    new ImageValidationService(com.example.TestRequests.vision()), TestRequests.budgets(), materials, new SceneImagePlanService(), com.example.TestRequests.vision());
             new ContextValidation().validate(context);
             service.validateRequest(request);
 
@@ -104,5 +105,54 @@ class StateUpdateLiveTest {
             }
             System.out.println("整理真实回归通过：场景=" + scenario + "，调用次数=" + calls.size());
         }
+    }
+
+    @Test
+    void realScenePromptsFollowPoseOutfitAndReadingWithoutRewritingIdentity() throws Exception {
+        var mapper = new ObjectMapper();
+        var llm = new LlmProperties(System.getenv().getOrDefault("LLM_BASE_URL", "https://10.21.16.197/v1/chat/completions"),
+                System.getenv().getOrDefault("LLM_API_KEY", "llama"), System.getenv().getOrDefault("LLM_MODEL", "Qwen3.8-27B"),
+                .8, 8192, 120);
+        var serializer = new LlmRequestMapper(mapper, llm);
+        var scenario = com.example.SelectionFixtures.scenario(com.example.SelectionFixtures.History.NONE,
+                com.example.SelectionFixtures.Photo.OBSERVED);
+        var original = scenario.context();
+        var checks = Map.of(
+                "pose", "她穿着原来的红色斗篷，侧身站在窗边，右手扶住窗台，目视窗外，双脚落地。",
+                "outfit", "她已经脱下红色斗篷，穿着里面的白色衬衫，站在书桌旁，外套搭在椅背上。",
+                "reading", "她脱下红色斗篷并搭在椅背上，穿白色衬衫，坐在书桌旁的椅子上，双脚落地，左手扶住桌上的书，右手搭在书页边缘，低头阅读。");
+        var saved = mapper.createObjectNode();
+        try (var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()) {
+            var client = new OpenAiClient(http, mapper, llm.baseUrl(), llm.apiKey(), Duration.ofSeconds(120), serializer);
+            var counter = new LlamaTokenCounter(http, mapper, serializer, llm, TestRequests.contextProperties());
+            var contexts = new AuxiliaryContextService(mapper, counter, TestRequests.contextProperties(),
+                    new AuxiliaryContextProperties(4, 8192, 8192, 32768, 32768, 2048, 2048));
+            var service = new StateUpdateService(client, mapper, new StateUpdatePromptBuilder(mapper, TestRequests.dispatch()),
+                    new ImageValidationService(TestRequests.vision()), TestRequests.budgets(), contexts,
+                    new SceneImagePlanService(), TestRequests.vision());
+            for (var entry : checks.entrySet()) {
+                var context = new ChatApiRequest(original.character(), original.state(), original.summary(), List.of(),
+                        new InputDto("继续当前场景。", null), original.interactionSettings(), original.visual(), "scene-" + entry.getKey());
+                var request = new UpdateRequest(context.operationId(), context, 0, 2, 3, List.of(
+                        new SourceMessage("user", 1, "user", context.input().textOf(), "complete", "2026-10-25T00:00:00Z"),
+                        new SourceMessage("assistant", 2, "assistant", entry.getValue(), "complete", "2026-10-25T00:00:01Z")));
+                service.validateRequest(request);
+                var result = service.update(request);
+                String prompt = result.scenePlan().prompt();
+                assertTrue(prompt.contains("<image2>"), "身份应直接引用自动角色照片");
+                assertFalse(prompt.contains("img2"));
+                assertFalse(prompt.contains("\n"), "画面指令应为单段");
+                assertEquals("img2", result.scenePlan().referenceImages().getFirst().assetId());
+                assertEquals(3, result.scenePlan().sourceCheckpointVersion());
+                if (entry.getKey().equals("reading")) {
+                    assertTrue(prompt.contains("椅"));
+                    assertTrue(prompt.contains("书"));
+                }
+                saved.set(entry.getKey(), mapper.valueToTree(result));
+                System.out.println("画面真实回归通过：场景=" + entry.getKey() + "，提示词字数=" + prompt.codePointCount(0, prompt.length()));
+            }
+        }
+        java.nio.file.Files.writeString(java.nio.file.Path.of("target/scene-live-results.json"),
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(saved));
     }
 }

@@ -19,11 +19,12 @@ public final class StateUpdateMaterial {
     private final ObjectMapper mapper;
     private final UpdateRequest request;
 
-    public StateUpdateMaterial(UpdateRequest request, ObjectMapper mapper, AuxiliaryContextService contexts)
+    public StateUpdateMaterial(UpdateRequest request, ObjectMapper mapper, AuxiliaryContextService contexts, int maxReferences)
             throws IOException, InterruptedException {
         this.request = request;
         this.mapper = mapper;
         data = contexts.background(request.context(), "整理");
+        contexts.addSceneImageCatalog(data, request.context(), maxReferences);
         data.set("story", mapper.valueToTree(request.context().state().story()));
         data.set("visualState", mapper.valueToTree(request.context().state().visualState()));
         data.set("visualSources", mapper.valueToTree(request.context().state().visualSources()));

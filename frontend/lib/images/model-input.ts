@@ -35,14 +35,13 @@ async function encode(
   asset: ImageAsset,
   edge: number,
   quality: number,
-  coarse: boolean,
 ): Promise<ModelInput> {
-  const key = `${asset.sha256}:reference-v1:${edge}:${quality}:${coarse}`;
+  const key = `${asset.sha256}:reference-v1:${edge}:${quality}`;
   const existing = derivatives.get(key)?.deref();
   if (existing) return existing;
   for (const [cachedKey, cached] of derivatives)
     if (!cached.deref()) derivatives.delete(cachedKey);
-  const input = await prepareAuxiliaryReference(asset, edge, quality, coarse);
+  const input = await prepareAuxiliaryReference(asset, edge, quality);
   derivatives.set(key, new WeakRef(input));
   return input;
 }
@@ -51,32 +50,28 @@ export async function prepareAuxiliaryReference(
   asset: ImageAsset,
   edge: number,
   quality: number,
-  coarse: boolean,
 ): Promise<ModelInput> {
   if (Math.max(asset.width, asset.height) <= edge) return original(asset);
   let blob: Blob;
-  if (coarse && asset.thumbnailBlob && edge >= 256) blob = asset.thumbnailBlob;
-  else {
-    const image = await createImageBitmap(asset.originalBlob);
-    try {
-      const ratio = Math.min(1, edge / Math.max(image.width, image.height));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.floor(image.width * ratio));
-      canvas.height = Math.max(1, Math.floor(image.height * ratio));
-      const context = canvas.getContext("2d");
-      if (!context) throw new Error("无法准备图片画布。");
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      const mime = asset.mimeType === "image/png" ? "image/png" : "image/jpeg";
-      blob = await new Promise<Blob>((resolve, reject) =>
-        canvas.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error("参考图压缩失败。"))),
-          mime,
-          quality,
-        ),
-      );
-    } finally {
-      image.close();
-    }
+  const image = await createImageBitmap(asset.originalBlob);
+  try {
+    const ratio = Math.min(1, edge / Math.max(image.width, image.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.floor(image.width * ratio));
+    canvas.height = Math.max(1, Math.floor(image.height * ratio));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("无法准备图片画布。");
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const mime = asset.mimeType === "image/png" ? "image/png" : "image/jpeg";
+    blob = await new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error("参考图压缩失败。"))),
+        mime,
+        quality,
+      ),
+    );
+  } finally {
+    image.close();
   }
   const bytes = new Uint8Array(await fileBytes(blob));
   return {
@@ -122,18 +117,16 @@ export async function prepareGenerationInputs(
   if (references.length && edgeBudget < 1)
     throw new Error("没有足够的参考图像素预算。");
   for (let i = 0; i < references.length; i++) {
-    const ref = references[i];
     let input = await encode(
       assets[i],
       edgeBudget,
       limits.referenceJpegQuality,
-      ref.roles.length > 0 &&
-        ref.roles.every((role) => ["environment", "pose"].includes(role)),
     );
     while (input.byteSize > limits.maxImageBytes) {
       const edge = Math.floor(Math.max(input.width, input.height) * 0.7);
-      if (edge < 1) throw new Error(`参考图无法压缩到服务限制：${ref.assetId}`);
-      input = await encode(assets[i], edge, limits.referenceJpegQuality, false);
+      if (edge < 1)
+        throw new Error(`参考图无法压缩到服务限制：${references[i].assetId}`);
+      input = await encode(assets[i], edge, limits.referenceJpegQuality);
     }
     inputs.push(input);
   }
@@ -162,7 +155,6 @@ export async function prepareChatInput(asset: ImageAsset): Promise<ModelInput> {
       asset,
       edge,
       caps.imageGeneration.referenceJpegQuality,
-      false,
     );
     if (
       input.byteSize <= caps.maxImageBytes &&

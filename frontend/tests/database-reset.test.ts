@@ -175,7 +175,7 @@ test("旧于 v8 阻止升级；v8 升级失败回滚，重试完整保留原件�
   assert.equal(await rollback.count("characters"), 1);
   rollback.close();
   const current = await database();
-  assert.equal(current.version, 10);
+  assert.equal(current.version, 11);
   for (const table of legacyTables.filter((t) => t !== "settings"))
     assert.equal(await current.count(table), fixtures[table].length, table);
   assert.equal((await current.get("settings", IMAGE_SEQUENCE_KEY))!.value, "9");
@@ -199,13 +199,14 @@ test("旧于 v8 阻止升级；v8 升级失败回滚，重试完整保留原件�
     goalChanges: [],
     visualObservations: [],
     visualChanges: [],
+    scenePlan: null,
   });
   assert.equal((await current.get("messages", "a"))!.status, "error");
   assert.equal(
     (await current.get("messages", "a"))!.segments![0].text,
     "保留正文",
   );
-  const reopened = await openDB("roleplay-agent", 10);
+  const reopened = await openDB("roleplay-agent", 11);
   assert.equal(await reopened.count("characters"), 1);
   assert.equal(await reopened.count("sceneImagePlans"), 0);
   reopened.close();

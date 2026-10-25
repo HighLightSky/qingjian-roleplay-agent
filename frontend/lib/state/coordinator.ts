@@ -1,3 +1,5 @@
+import { validateScenePlan } from "../scene-images/validation";
+import { notifySceneImages } from "../scene-images/coordinator";
 import { database, allMessages, atomic } from "../db";
 import { now, plainText, errorText, type Message } from "../domain";
 import { stateSnapshot, type ChatContext } from "../chat/context";
@@ -182,7 +184,7 @@ export async function runStateTask(
           ...context.visual,
           ...(await buildCatalog(
             session.id,
-            messages.filter((m) => m.seq < user.seq),
+            messages.filter((m) => m.seq <= user.seq),
           )),
         };
         context.visual.imagePayloads = [];
@@ -231,6 +233,7 @@ export async function runStateTask(
             context,
             fromExclusiveSeq: pending[0].seq - 1,
             throughSeq: task.throughSeq,
+            assistantCheckpointVersion: assistant.checkpointVersion,
             messages: pending,
           },
           images: await warmImageCache(context, signal),
@@ -272,6 +275,7 @@ export async function runStateTask(
           "visualObservations",
           "operations",
           "stateTasks",
+          "sceneImagePlans",
         ],
         "readwrite",
       );
@@ -300,6 +304,23 @@ export async function runStateTask(
           ) {
             throw new StaleResult("整理消息来源已变化。");
           }
+        }
+        if (result!.scenePlan !== null) {
+          const plan = result!.scenePlan;
+          validateScenePlan(plan);
+          const source = await tx
+            .objectStore("messages")
+            .get(task.assistantMessageId);
+          if (
+            plan.sessionId !== task.sessionId ||
+            plan.assistantMessageId !== task.assistantMessageId ||
+            plan.sourceSeq !== task.throughSeq ||
+            plan.sourceCheckpointVersion !== source!.checkpointVersion ||
+            plan.profileVersion !== currentSession.profileVersion
+          )
+            throw new StaleResult("画面草稿来源检查点已变化。");
+          const stored = await tx.objectStore("sceneImagePlans").get(plan.id);
+          if (!stored) await tx.objectStore("sceneImagePlans").put(plan);
         }
         const updatedStory = { ...currentSession.story };
         const storySources = { ...currentSession.storySources };
@@ -411,6 +432,7 @@ export async function runStateTask(
         await tx.objectStore("stateTasks").delete(task.id);
       });
     });
+    notifySceneImages();
     await changed();
   } catch (error) {
     const computed =

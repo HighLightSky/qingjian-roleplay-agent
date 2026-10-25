@@ -44,7 +44,7 @@ class ChatControllerTest {
     @MockitoBean Clock clock;
     final AtomicLong time = new AtomicLong(1000);
     final List<String> ids = new ArrayList<>();
-    static final String EMPTY = "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}";
+    static final String EMPTY = "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"sceneImage\":{\"prompt\":\"人物坐在椅子上阅读。\",\"additionalReferences\":[]},\"goalChanges\":[]}";
     @BeforeEach void setup() throws Exception {
         when(clock.millis()).thenAnswer(i -> time.get());
         when(counter.countTextOnly(any())).thenReturn(new ContextDtos.TokenCount(100, "exact", "test", "fp"));
@@ -87,6 +87,8 @@ class ChatControllerTest {
         assertTrue(response.body().contains("event:delta"));
         assertTrue(response.body().contains("event:body_done"));
         assertTrue(response.body().contains("event:state_result"));
+        assertTrue(response.body().indexOf("event:body_done") < response.body().indexOf("event:state_result"));
+        assertFalse(response.body().contains("image_prompt"));
         assertTrue(response.body().contains("event:done"));
         verify(model).chatStream(any(), any()); verify(model).chat(any());
         assertTrue(resume(request.runId()).contains("你好"));
@@ -260,7 +262,7 @@ class ChatControllerTest {
         var calls = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(model).chat(calls.capture());
         assertTrue(calls.getValue().getMessages().stream().filter(m -> m.getParts() != null).flatMap(m -> m.getParts().stream()).noneMatch(part -> "image_url".equals(part.type())));
-        var update = new StateDtos.UpdateRequest(context.operationId(), context, 0, 2, List.of(
+        var update = new StateDtos.UpdateRequest(context.operationId(), context, 0, 2, 1, List.of(
                 new StateDtos.SourceMessage(request.user().id(), 1, "user", "再看这张图", "complete", request.user().createdAt()),
                 new StateDtos.SourceMessage(request.assistant().id(), 2, "assistant", "你好", "complete", request.assistant().createdAt())));
         var retry = post("/api/state/update", new Retry(update, request.images()));

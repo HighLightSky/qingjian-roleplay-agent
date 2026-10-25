@@ -4,7 +4,11 @@ import {
   type SceneImagePlan,
   type SceneGeneration,
 } from "./scene-images/types";
-import { upgradeV9Data, upgradeV8Record } from "./scene-images/migration";
+import {
+  upgradeV9Data,
+  upgradeV8Record,
+  upgradeV10Record,
+} from "./scene-images/migration";
 import { IMAGE_SEQUENCE_KEY } from "./images/ids";
 import {
   emptySummary,
@@ -13,6 +17,7 @@ import {
 } from "./context/types";
 import {
   EMPTY_STORY,
+  type StateResult,
   type StateTask,
   type Operation,
   type Goal,
@@ -99,32 +104,53 @@ let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
     let upgradeError: unknown;
-    connection = openDB<RoleplayDB>("roleplay-agent", 10, {
+    connection = openDB<RoleplayDB>("roleplay-agent", 11, {
       upgrade(db, oldVersion, _newVersion, tx) {
         void tx.done.catch((error: unknown) => {
           upgradeError ??= error;
         });
-        if (oldVersion !== 0 && oldVersion !== 8 && oldVersion !== 9) {
+        if (
+          oldVersion !== 0 &&
+          oldVersion !== 8 &&
+          oldVersion !== 9 &&
+          oldVersion !== 10
+        ) {
           upgradeError = new Error(
             "当前数据库版本不支持自动升级，原数据已保留，请使用旧版本导出备份。",
           );
           tx.abort();
           return;
         }
-        if (oldVersion === 9) {
-          void migrateV9ToV10(tx).catch((error) => {
-            upgradeError = error;
-            tx.abort();
-          });
-          return;
+        if (oldVersion === 0 || oldVersion === 8) {
+          for (const name of ["sceneImagePlans", "sceneGenerations"] as const) {
+            const store = db.createObjectStore(name, { keyPath: "id" });
+            store.createIndex("session", "sessionId");
+            store.createIndex("message", "assistantMessageId");
+          }
         }
-        for (const name of ["sceneImagePlans", "sceneGenerations"] as const) {
-          const store = db.createObjectStore(name, { keyPath: "id" });
-          store.createIndex("session", "sessionId");
-          store.createIndex("message", "assistantMessageId");
-        }
-        if (oldVersion === 8) {
-          void migrateV8ToV9(tx).catch((error) => {
+        if (oldVersion !== 0) {
+          void (async () => {
+            if (oldVersion === 8) await migrateV8ToV9(tx);
+            if (oldVersion === 9) await migrateV9ToV10(tx);
+            for (const table of TABLES) {
+              let cursor = await tx.objectStore(table).openCursor();
+              while (cursor) {
+                if (
+                  table === "settings" &&
+                  (cursor.value as Setting).key.startsWith("dispatch:")
+                )
+                  await cursor.delete();
+                else
+                  await cursor.update(
+                    upgradeV10Record(
+                      table,
+                      cursor.value as unknown as Record<string, unknown>,
+                    ) as never,
+                  );
+                cursor = await cursor.continue();
+              }
+            }
+          })().catch((error) => {
             upgradeError = error;
             tx.abort();
           });
@@ -536,6 +562,13 @@ export async function collectUnreferenced(
   for (const row of await tx.objectStore("sceneGenerations").getAll()) {
     if (row.assetId) used.add(row.assetId);
     row.submission.referenceImages.forEach((ref) => used.add(ref.assetId));
+  }
+  for (const operation of await tx.objectStore("operations").getAll()) {
+    if (operation.kind === "state_update" && operation.result) {
+      const plan = (operation.result as StateResult).scenePlan;
+      if (plan !== null)
+        plan.referenceImages.forEach((ref) => used.add(ref.assetId));
+    }
   }
   for (const asset of await tx.objectStore("assets").getAll())
     if (!used.has(asset.id)) await tx.objectStore("assets").delete(asset.id);

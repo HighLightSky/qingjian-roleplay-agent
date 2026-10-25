@@ -32,16 +32,12 @@ import com.example.service.ImageValidationService;
 @Component
 public class PromptBuilder {
 
-
     private final LlmProperties llmProperties;
     private final com.example.config.VisionProperties vision;
-    private final com.example.service.AuxiliaryContextService auxiliary;
 
-    public PromptBuilder(LlmProperties llmProperties, com.example.config.VisionProperties vision,
-            com.example.service.AuxiliaryContextService auxiliary) {
+    public PromptBuilder(LlmProperties llmProperties, com.example.config.VisionProperties vision) {
         this.llmProperties = llmProperties;
         this.vision = vision;
-        this.auxiliary = auxiliary;
     }
 
     /**
@@ -66,9 +62,6 @@ public class PromptBuilder {
         List<Message> messages = new ArrayList<>();
         List<Message.Part> references = new ArrayList<>();
         appendVisualContext(systemPrompt, messages, references, request, includeImages);
-        SceneImagePromptRules.appendTo(systemPrompt, request);
-        systemPrompt.append(auxiliary.sceneImageCatalog(request));
-        systemPrompt.append("最终生图参考图上限为 ").append(vision.getMaxImages() - 1).append(" 张，另有程序提供的一张黑色画布。\n");
         messages.addFirst(new Message("system", systemPrompt.toString()));
 
         return new ChatRequest(
@@ -101,7 +94,7 @@ public class PromptBuilder {
                 4. 不要求每次结尾提问，可以在自然停顿处结束，为用户留出介入空间。
                 5. 角色台词简短与整体场景详细可以同时成立；通过动作、反应和事件展开丰富内容。
                 6. 没有依据的信息保持不确定，不要编造已经确认的事实。
-                7. 输出本次角色回复及末尾的生图提示词，不解释创作过程，不自行开始下一轮对话。
+                7. 只输出本次角色回复，不解释创作过程，不自行开始下一轮对话。
                 """);
 
         appendReplyLengthRules(systemPrompt, settings.replyLength());
@@ -152,7 +145,7 @@ public class PromptBuilder {
     private void appendOutputFormatRules(StringBuilder prompt) {
         prompt.append("""
 
-                【正文输出格式：以下规则仅适用于角色正文，不适用于末尾画面计划与生图提示词】
+                【正文输出格式】
                 1. 每个正文段落独占一行，行首必须使用且只能使用以下一种类型标记：
                    [台词] 后接角色说出口的话。
                    [描写] 后接动作、神态、环境或角色心理活动。

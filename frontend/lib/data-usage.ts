@@ -195,7 +195,19 @@ export async function localDataUsage(): Promise<LocalDataUsage> {
         reference(ref.assetId, owner, row.sessionId),
       );
     });
-    for (const table of ["goals", "operations"] as const) {
+    await scan("operations", (row) => {
+      const owner = sessionOwner(row.sessionId);
+      owner.bytes += jsonBytes(row);
+      if (row.kind === "state_update" && row.result) {
+        const plan = (row.result as import("./state/types").StateResult)
+          .scenePlan;
+        if (plan !== null)
+          plan.referenceImages.forEach((ref) =>
+            reference(ref.assetId, owner, row.sessionId),
+          );
+      }
+    });
+    for (const table of ["goals"] as const) {
       await scan(table, (row) => {
         sessionOwner(row.sessionId).bytes += jsonBytes(row);
       });

@@ -9,6 +9,17 @@ const json = (response, data, status = 200) =>
     .end(JSON.stringify(data));
 async function stateResult(data) {
   const result = {
+    scenePlan: {
+      id: `scene:${data.operationId}`,
+      sessionId: data.context.state.sessionId,
+      assistantMessageId: data.messages.at(-1).id,
+      sourceSeq: data.throughSeq,
+      sourceCheckpointVersion: data.assistantCheckpointVersion,
+      profileVersion: data.context.character.profileVersion,
+      referenceImages: [],
+      prompt: "女孩坐在书桌旁的椅子上，双脚落地，低头阅读桌上的书。",
+      error: null,
+    },
     operationId: data.operationId,
     sessionVersion: data.context.state.sessionVersion,
     memoryVersion: data.context.state.memoryVersion,
@@ -264,6 +275,7 @@ async function generate(task, request) {
     context: prepared,
     fromExclusiveSeq: request.user.seq - 1,
     throughSeq: request.assistant.seq,
+    assistantCheckpointVersion: request.assistant.completedCheckpointVersion,
     messages: [
       { ...request.user, role: "user", text: body.input.text },
       { ...request.assistant, role: "assistant", text: "她回应了。" },
@@ -489,9 +501,6 @@ createServer(async (request, response) => {
       images: input.images,
       snapshot: {
         runId: input.runId,
-        imagePrompt: "",
-        scenePlan: null,
-        imagePromptError: null,
         revision: 0,
         segments: [],
         stages: {},

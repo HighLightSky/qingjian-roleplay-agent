@@ -1,3 +1,4 @@
+import { validateScenePlan } from "../scene-images/validation";
 import { assertImageId } from "../images/ids";
 import type { VisualSource } from "../images/types";
 import {
@@ -151,6 +152,7 @@ export function validateStateResult(
   value: unknown,
 ): asserts value is StateResult {
   object(value);
+  if (value.scenePlan !== null) validateScenePlan(value.scenePlan);
   text(value.operationId, 200);
   integer(value.sessionVersion);
   integer(value.memoryVersion);

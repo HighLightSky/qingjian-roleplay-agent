@@ -7,6 +7,7 @@ export function dispatchResponse(request: any, failure = false) {
     context,
     fromExclusiveSeq: request.user.seq - 1,
     throughSeq: request.assistant.seq,
+    assistantCheckpointVersion: request.assistant.completedCheckpointVersion,
     messages: [
       {
         ...request.user,
@@ -24,9 +25,7 @@ export function dispatchResponse(request: any, failure = false) {
   });
   const snapshot: DispatchSnapshot = {
     runId: request.runId,
-    imagePrompt: "",
-    scenePlan: null,
-    imagePromptError: null,
+
     revision: 1,
     segments: [{ kind: "narration", text: "她检查地图。" }],
     stages: {
