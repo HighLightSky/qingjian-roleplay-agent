@@ -72,7 +72,7 @@ class StateUpdateServiceTest {
         var context = new ChatApiRequest(new CharacterDto("林溪", "", "", "img1", 1), c.state(), c.summary(),
                 c.history(), c.input(), c.interactionSettings(), new Context("session", List.of(), null, List.of(), List.of(missing)), c.operationId());
         var request = new UpdateRequest(original.operationId(), context, original.fromExclusiveSeq(), original.throughSeq(), original.messages());
-        answer("{\"visualObservations\":[{\"assetId\":\"img1\",\"summary\":\"虚构外观\",\"visibleDetails\":[],\"extractedText\":[],\"uncertainDetails\":[]}],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}");
+        answer("{\"visualObservations\":[{\"assetId\":\"img1\",\"summary\":\"虚构外观\",\"visibleDetails\":[],\"extractedText\":[],\"uncertainDetails\":[]}],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}");
         assertTrue(assertThrows(IOException.class, () -> update(request)).getMessage().contains("未传入的原图"));
         verify(model, times(2)).chat(any());
     }
@@ -80,7 +80,7 @@ class StateUpdateServiceTest {
     private UpdateRequest request() { return request(TestRequests.state(List.of()), null, List.of()); }
     private void answer(String content) throws Exception { when(model.chat(any())).thenReturn(new ChatResponse(content, "stop", com.example.llm.model.TokenUsage.unavailable())); }
     private String output(String story, String memory, String goal) {
-        return "{\"visualObservations\":[],\"storyChanges\":" + story + ",\"memoryChanges\":" + memory + ",\"goalChanges\":" + goal + "}";
+        return "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":" + story + ",\"memoryChanges\":" + memory + ",\"goalChanges\":" + goal + "}";
     }
     private String change(String id, String value) {
         return "{\"action\":\"" + (id.isEmpty() ? "create" : "update") + "\",\"id\":\"" + id
@@ -94,6 +94,16 @@ class StateUpdateServiceTest {
     private String memoryValue(String scope) {
         return "{\"content\":\"用户喜欢被叫阿远\",\"scope\":\"" + scope
                 + "\",\"kind\":\"preference\",\"epistemicStatus\":\"established\",\"status\":\"active\"}";
+    }
+
+    @Test void explicitOutfitChangeUsesVisualStateWithMessageEvidence() throws Exception {
+        answer(output("[]", "[]", "[]").replace("\"visualChanges\":[]", "\"visualChanges\":[" + change("outfit", "\"红裙\"") + "]"));
+        var result = update(request());
+        assertEquals("outfit", result.visualChanges().getFirst().id());
+        assertEquals("红裙", result.visualChanges().getFirst().value().asText());
+        assertEquals("", result.visualChanges().getFirst().before().asText());
+        assertEquals(List.of("assistant"), result.visualChanges().getFirst().sourceMessageIds());
+        assertTrue(result.storyChanges().isEmpty());
     }
 
     private Payload payload(String assetId) throws Exception {
@@ -110,7 +120,7 @@ class StateUpdateServiceTest {
         var payload = payload("img2");
         var photo = new Asset("img2", payload.sha256(), "image/png",
                 Base64.getDecoder().decode(payload.dataUrl().split(",")[1]).length, 3, 2,
-                List.of(new CharacterPhotoSource("character", 4)), null, List.of());
+                List.of(new CharacterPhotoSource("character", 4)), null, List.of(), null);
         var base = request();
         var c = base.context();
         var context = new ChatApiRequest(new CharacterDto("林溪", "旧友", "银发", "img2", 4), c.state(),
@@ -163,7 +173,7 @@ class StateUpdateServiceTest {
         var state = TestRequests.state(List.of());
         var value = new GoalValue("寻找哥哥", "active", "询问掌柜", "为寻找哥哥来到旅馆，发现旧登记册。");
         var goal = new Goal("goal", "session", value, 1, "automatic", List.of(), "2026-10-20T00:00:00Z");
-        var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(), List.of(goal));
+        var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(), List.of(goal), com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
         String progress = "为寻找哥哥来到旅馆，发现旧登记册；掌柜确认哥哥昨天离店，留下前往码头的信息。";
         String goalJson = mapper.writeValueAsString(new GoalValue("寻找哥哥", "active", "核实码头消息", progress));
         answer(output("[" + change("characterState", "\"穿着灰色外套，神情平静，手腕受伤\"") + ","
@@ -191,7 +201,7 @@ class StateUpdateServiceTest {
         var state = TestRequests.state(List.of());
         var value = new GoalValue("寻找哥哥", "active", "询问掌柜", "已来到旅馆。");
         var goal = new Goal("goal", "session", value, 1, "automatic", List.of(), "2026-10-20T00:00:00Z");
-        var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(), List.of(goal));
+        var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(), List.of(goal), com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
         var valid = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(withProgressEvidence(
                 change("goal1", "{\"progressSummary\":\"已来到旅馆，并走入店内。\"}")));
         var invalid = valid.deepCopy();
@@ -373,7 +383,7 @@ class StateUpdateServiceTest {
         var state = TestRequests.state(List.of("事实"));
         var memory = state.memories().getFirst();
         var foreign = new Memory(memory.id(), memory.characterId(), "other-session", memory.value(), 1, "manual", "other-session", List.of(), "2000-01-01T00:00:00Z");
-        var invalid = new Snapshot(state.sessionId(), state.characterId(), 0, 0, state.story(), Map.of(), List.of(foreign), List.of());
+        var invalid = new Snapshot(state.sessionId(), state.characterId(), 0, 0, state.story(), Map.of(), List.of(foreign), List.of(), com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
         assertThrows(IllegalArgumentException.class, () -> update(request(invalid, null, List.of())));
         var r = request();
         var broken = new UpdateRequest(r.operationId(), r.context(), 0, 2,
@@ -387,7 +397,7 @@ class StateUpdateServiceTest {
         var old = state.memories().getFirst();
         var deleted = new Memory(old.id(), old.characterId(), old.sessionId(),
                 new MemoryValue(old.value().content(), "session", "preference", "established", "dismissed"), 2, "manual", "session", List.of("user"), "2027-01-01T00:00:00Z");
-        var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(deleted), List.of());
+        var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(deleted), List.of(), com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
         answer(output("[]", "[" + change("", memoryValue("session")) + "]", "[]"));
         assertThrows(IOException.class, () -> update(request(snapshot, null, List.of())));
         answer(output("[]", "[" + change("mem1", memoryValue("session")) + "]", "[]"));
@@ -399,13 +409,13 @@ class StateUpdateServiceTest {
         var old = state.memories().getFirst();
         var edited = new Memory(old.id(), old.characterId(), old.sessionId(), old.value(), 1, "manual", "session", List.of(), "2027-01-01T00:00:00Z");
         var snapshot = new Snapshot("session", "character", 0, 0, state.story(),
-                Map.of("location", new FieldSource("manual", "2027-01-01T00:00:00Z", List.of())), List.of(edited), List.of());
+                Map.of("location", new FieldSource("manual", "2027-01-01T00:00:00Z", List.of())), List.of(edited), List.of(), com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
         answer(output("[" + change("location", "\"旅馆\"") + "]", "[]", "[]"));
         var storyError = assertThrows(IOException.class, () -> update(request(snapshot, null, List.of())));
         assertTrue(storyError.getMessage().contains("人工修改"));
         answer(output("[]", "[" + change("mem1", memoryValue("session")) + "]", "[]"));
         assertThrows(IOException.class, () -> update(request(snapshot, null, List.of())));
-        var prior = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), state.memories(), List.of());
+        var prior = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), state.memories(), List.of(), com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
         assertEquals(1, update(request(prior, null, List.of())).memoryChanges().size());
     }
 
@@ -413,7 +423,7 @@ class StateUpdateServiceTest {
         var state = TestRequests.state(List.of());
         var value = new GoalValue("寻找哥哥", "active", "问掌柜", "已来到旅馆寻找哥哥。");
         var goal = new Goal("goal", "session", value, 1, "manual", List.of(), "2027-01-01T00:00:00Z");
-        var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(), List.of(goal));
+        var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(), List.of(goal), com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
         String update = change("goal1", "{\"status\":\"completed\",\"currentFocus\":\"\"}")
                 ;
         answer(output("[]", "[]", "[" + update + "]"));
@@ -426,7 +436,7 @@ class StateUpdateServiceTest {
         var deleted = new Memory(old.id(), old.characterId(), old.sessionId(),
                 new MemoryValue(old.value().content(), "session", "preference", "established", "dismissed"),
                 2, "manual", "session", List.of(), "2000-01-01T00:00:00Z");
-        var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(deleted), List.of());
+        var snapshot = new Snapshot("session", "character", 0, 0, state.story(), Map.of(), List.of(deleted), List.of(), com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
         answer(output("[]", "[" + change("", memoryValue("session")) + "]", "[]"));
         var result = update(request(snapshot, null, List.of()));
         assertNotEquals(deleted.id(), result.memoryChanges().getFirst().id());

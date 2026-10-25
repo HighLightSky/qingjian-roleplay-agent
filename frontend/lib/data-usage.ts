@@ -180,6 +180,18 @@ export async function localDataUsage(): Promise<LocalDataUsage> {
         reference(row.assetId, owner, row.sessionId);
       });
     }
+    await scan("sceneImagePlans", (row) => {
+      const owner = sessionOwner(row.sessionId);
+      owner.bytes += jsonBytes(row);
+      row.referenceImages.forEach((ref) =>
+        reference(ref.assetId, owner, row.sessionId),
+      );
+    });
+    await scan("sceneGenerations", (row) => {
+      const owner = sessionOwner(row.sessionId);
+      owner.bytes += jsonBytes(row);
+      if (row.assetId) reference(row.assetId, owner, row.sessionId);
+    });
     for (const table of ["goals", "operations"] as const) {
       await scan(table, (row) => {
         sessionOwner(row.sessionId).bytes += jsonBytes(row);

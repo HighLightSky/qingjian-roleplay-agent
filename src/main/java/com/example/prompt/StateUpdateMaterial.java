@@ -25,6 +25,8 @@ public final class StateUpdateMaterial {
         this.mapper = mapper;
         data = contexts.background(request.context(), "整理");
         data.set("story", mapper.valueToTree(request.context().state().story()));
+        data.set("visualState", mapper.valueToTree(request.context().state().visualState()));
+        data.set("visualSources", mapper.valueToTree(request.context().state().visualSources()));
         var edits = data.putObject("manualStoryEdits");
         request.context().state().storySources().forEach((field, source) -> {
             if ("manual".equals(source.origin())) edits.put(field, source.updatedAt());
@@ -94,6 +96,11 @@ public final class StateUpdateMaterial {
         JsonNode story = mapper.valueToTree(request.context().state().story());
         story.fieldNames().forEachRemaining(field -> {
             if (data.path("story").has(field) && data.path("story").path(field).equals(story.path(field))) fields.add(field);
+        });
+        var visualFields = data.putArray("editableVisualFields");
+        JsonNode visual = mapper.valueToTree(request.context().state().visualState());
+        visual.fieldNames().forEachRemaining(field -> {
+            if (data.path("visualState").has(field) && data.path("visualState").path(field).equals(visual.path(field))) visualFields.add(field);
         });
         for (JsonNode node : data.path("goals")) {
             var row = (ObjectNode) node;

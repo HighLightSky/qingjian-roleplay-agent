@@ -9,7 +9,7 @@ import com.example.web.dto.VisualDtos.Plan;
 public final class DispatchDtos {
     private DispatchDtos() {}
     public record ImageRef(String assetId, String sha256) {}
-    public record MessageMeta(String id, int seq, String createdAt) {}
+    public record MessageMeta(String id, int seq, String createdAt, int completedCheckpointVersion) {}
     public record Request(String runId, ChatApiRequest context, MessageMeta user, MessageMeta assistant,
             List<ImageRef> images) {
         public Request { images = images == null ? List.of() : List.copyOf(images); }
@@ -20,6 +20,6 @@ public final class DispatchDtos {
     public record Stage(String name, String status, String error, Plan plan) {}
     public record Snapshot(String runId, long revision, List<SegmentDelta> segments, Map<String, Stage> stages,
             ContextDtos.ContextBudget budget, Plan plan, ChatStreamResult body, Result state,
-            boolean terminal, String error) {}
+            boolean terminal, String error, String imagePrompt, SceneImageDtos.Plan scenePlan, String imagePromptError) {}
     public record Event(long revision, Object value) {}
 }

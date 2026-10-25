@@ -1,3 +1,13 @@
+import { convertV9Backup } from "./scene-images/migration";
+import {
+  isActiveGeneration,
+  type SceneImagePlan,
+  type SceneGeneration,
+} from "./scene-images/types";
+import {
+  validateScenePlan,
+  validateSceneGeneration,
+} from "./scene-images/validation";
 import {
   assertImageId,
   imageSequence,
@@ -53,6 +63,8 @@ type BackupAsset = Omit<ImageAsset, "originalBlob" | "thumbnailBlob"> & {
   base64: string;
 };
 export type Snapshot = {
+  sceneImagePlans: SceneImagePlan[];
+  sceneGenerations: SceneGeneration[];
   compactionTasks: CompactionTask[];
   assets: BackupAsset[];
   visualObservations: VisualObservation[];
@@ -69,7 +81,7 @@ export type Snapshot = {
 };
 export type Backup = {
   format: "roleplay-agent-backup";
-  formatVersion: 9;
+  formatVersion: 10;
   exportedAt: string;
   data: Snapshot;
 };
@@ -82,7 +94,11 @@ export function validateBackup(value: unknown): Backup {
   object(value);
   if (new Blob([JSON.stringify(value)]).size > 50 * 1024 * 1024)
     throw new Error("备份不能超过 50 MiB。");
-  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 9)
+  if (value.format === "roleplay-agent-backup" && value.formatVersion === 9) {
+    value = convertV9Backup(value);
+    object(value);
+  }
+  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 10)
     throw new Error("不支持此备份格式或版本，请选择本应用导出的文件。");
   date(value.exportedAt);
   object(value.data);
@@ -100,7 +116,8 @@ export function validateBackup(value: unknown): Backup {
       string(key, 200);
       if (!key || keys.has(key)) throw new Error("备份包含空 ID 或重复记录。");
       keys.add(key);
-      if (table !== "settings") date(row.updatedAt ?? row.createdAt);
+      if (table !== "settings" && table !== "sceneImagePlans")
+        date(row.updatedAt ?? row.createdAt);
     }
   }
   const snapshot = data as unknown as Snapshot;
@@ -226,6 +243,8 @@ export function validateBackup(value: unknown): Backup {
       sessionVersion: session.stateVersion,
       memoryVersion: character.memoryVersion,
       story: session.story,
+      visualState: session.visualState,
+      visualSources: session.visualSources,
       storySources: session.storySources,
       memories: snapshot.memories.filter(
         (m) =>
@@ -259,10 +278,80 @@ export function validateBackup(value: unknown): Backup {
       throw new Error("主题设置无效。");
     if (setting.key === "themeColor") parseThemeColor(setting.value);
   }
+  for (const plan of snapshot.sceneImagePlans) {
+    validateScenePlan(plan);
+    const source = snapshot.messages.find(
+      (m) => m.id === plan.assistantMessageId,
+    );
+    const session = sessions.get(plan.sessionId);
+    if (
+      !source ||
+      source.role !== "assistant" ||
+      source.sessionId !== plan.sessionId ||
+      source.seq !== plan.sourceSeq ||
+      !session ||
+      session.profileVersion !== plan.profileVersion
+    )
+      throw new Error("画面计划来源无效。");
+    if (plan.previousPlanId) {
+      const previous = snapshot.sceneImagePlans.find(
+        (p) => p.id === plan.previousPlanId,
+      );
+      if (
+        !previous ||
+        previous.id === plan.id ||
+        previous.sessionId !== plan.sessionId ||
+        previous.sourceSeq > plan.sourceSeq
+      )
+        throw new Error("画面计划的前序来源无效。");
+    }
+    for (const reference of plan.referenceImages) {
+      const asset = snapshot.assets.find((a) => a.id === reference.assetId);
+      if (!asset || asset.sha256 !== reference.sourceSha256)
+        throw new Error("画面参考原件缺失或哈希不一致。");
+      if (reference.sourceGenerationId) {
+        const sourceGeneration = snapshot.sceneGenerations.find(
+          (g) => g.id === reference.sourceGenerationId,
+        );
+        if (
+          !sourceGeneration ||
+          sourceGeneration.sessionId !== plan.sessionId ||
+          sourceGeneration.assetId !== reference.assetId ||
+          sourceGeneration.sourceSeq > plan.sourceSeq
+        )
+          throw new Error("画面参考图的生成来源无效。");
+      }
+    }
+  }
+  for (const generation of snapshot.sceneGenerations) {
+    validateSceneGeneration(generation);
+    const plan = snapshot.sceneImagePlans.find(
+      (p) => p.id === generation.planId,
+    );
+    if (
+      !plan ||
+      plan.sessionId !== generation.sessionId ||
+      plan.assistantMessageId !== generation.assistantMessageId ||
+      plan.sceneId !== generation.sceneId ||
+      plan.sourceSeq !== generation.sourceSeq ||
+      plan.sourceCheckpointVersion !== generation.sourceCheckpointVersion
+    )
+      throw new Error("生成记录的画面来源无效。");
+    if (
+      generation.assetId &&
+      !snapshot.assets.some((a) => a.id === generation.assetId)
+    )
+      throw new Error("生成图片原件缺失。");
+    generation.acknowledged = true;
+    if (isActiveGeneration(generation.status)) {
+      generation.status = "unknown";
+      generation.error = "备份不恢复远端运行任务，请手动重新生成。";
+    }
+  }
   validateImages(snapshot);
   return {
     format: "roleplay-agent-backup",
-    formatVersion: 9,
+    formatVersion: 10,
     exportedAt: value.exportedAt as string,
     data: snapshot,
   };
@@ -289,12 +378,15 @@ function validateImages(snapshot: Snapshot) {
     string(a.sha256, 64);
     string(a.mimeType, 100);
     string(a.displayName, 1000);
-    string(a.base64, 14_000_000);
+    if (!["uploaded", "generated"].includes(a.creationOrigin))
+      throw new Error("图片资产出处无效。");
+    string(a.base64);
     integer(a.byteSize, 1);
     integer(a.width, 1);
     integer(a.height, 1);
     if (
-      a.byteSize > DEFAULT_LIMITS.maxImageBytes ||
+      (a.creationOrigin === "uploaded" &&
+        a.byteSize > DEFAULT_LIMITS.maxImageBytes) ||
       a.width * a.height > DEFAULT_LIMITS.maxPixels ||
       hashes.has(a.sha256)
     )
@@ -401,6 +493,18 @@ function validateImages(snapshot: Snapshot) {
           assetId !== session.characterSnapshot.appearancePhotoAssetId
         )
           throw new Error("角色照片来源与会话快照不一致。");
+      } else if (source.type === "scene_generation") {
+        const generation = snapshot.sceneGenerations.find(
+          (g) => g.id === source.generationId,
+        );
+        if (
+          !generation ||
+          generation.sessionId !== sessionId ||
+          generation.assetId !== assetId ||
+          generation.assistantMessageId !== source.messageId ||
+          generation.sceneId !== source.sceneId
+        )
+          throw new Error("生成视觉来源无效。");
       } else {
         const message = messages.get(source.messageId);
         const ordered = snapshot.messages
@@ -604,6 +708,7 @@ function validateImages(snapshot: Snapshot) {
         )
           throw new Error("操作结果 ID 或处理区间无效。");
         for (const change of [
+          ...op.result.visualChanges,
           ...op.result.storyChanges,
           ...op.result.memoryChanges,
           ...op.result.goalChanges,
@@ -838,7 +943,7 @@ export async function takeSnapshot(): Promise<Backup> {
   }
   const backup: Backup = {
     format: "roleplay-agent-backup",
-    formatVersion: 9,
+    formatVersion: 10,
     exportedAt: new Date().toISOString(),
     data: { ...data, assets: serialized },
   };
@@ -847,6 +952,13 @@ export async function takeSnapshot(): Promise<Backup> {
   return backup;
 }
 export async function restoreSnapshot(backup: Backup) {
+  const currentDb = await database();
+  if (
+    (await currentDb.getAll("sceneGenerations")).some((g) =>
+      isActiveGeneration(g.status),
+    )
+  )
+    throw new Error("存在活跃生图，请先停止或等待完成再导入备份。");
   const validated = validateBackup(structuredClone(backup));
   const assets: ImageAsset[] = [];
   for (const asset of validated.data.assets) {
@@ -854,7 +966,13 @@ export async function restoreSnapshot(backup: Backup) {
     const originalBlob = new Blob([decodeBase64(base64) as BlobPart], {
       type: asset.mimeType,
     });
-    const info = await validateImageBlob(originalBlob);
+    const info = await validateImageBlob(originalBlob, {
+      ...DEFAULT_LIMITS,
+      maxImageBytes:
+        asset.creationOrigin === "generated"
+          ? asset.byteSize
+          : DEFAULT_LIMITS.maxImageBytes,
+    });
     assets.push({
       ...metadata,
       originalBlob,

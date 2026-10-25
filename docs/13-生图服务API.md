@@ -17,6 +17,7 @@ export IMAGE_SERVICE_API_TOKEN
 | `GET /health` | FastAPI 进程存活检查 | 否 |
 | `GET /ready` | ComfyUI、节点和模型文件就绪检查 | 是 |
 | `POST /api/image/edit` | 上传参考图片和提示词，等待生成 PNG | 是 |
+| `POST /api/image/edit/{task_id}/cancel` | 取消指定的排队或生成任务 | 是 |
 
 需要鉴权时发送请求头：
 
@@ -117,7 +118,7 @@ Cache-Control: no-store
 
 输出尺寸依据第一张图片，沿用工作流对齐到 32 倍数的规则，因此不保证与未对齐的原图逐像素同尺寸。一次请求只生成一张图，每次使用新的随机种子。
 
-这是等待生成完成的请求，不返回任务 ID 或下载 URL。当前没有公开的进度、任务查询或取消接口；客户端关闭连接后，服务端会尝试取消并清理对应任务。
+这是等待生成完成的请求，不返回下载 URL，也不提供进度或任务查询。需要主动取消时，调用方在提交前生成一个 UUID，通过可选请求头 `X-Task-ID` 传入；不传时保持原有行为。客户端关闭连接后，服务端仍会尝试取消并清理对应任务。
 
 ### Python 调用并区分两种返回结构
 
@@ -179,7 +180,41 @@ else:
 
 超过 10 张不代表请求大小可以无限增加。多图请求可能等待数分钟，建议客户端读取超时至少 1800 秒。连接中断或超时后，不要立即无条件重复提交；新请求会重新生成，结果也可能不同。
 
-## 5. 错误结构与处理
+## 5. 停止生成：POST /api/image/edit/{task_id}/cancel
+
+提交生成请求时携带调用方生成的 UUID，每次生成使用不同的值：
+
+```bash
+TASK_ID=$(python -c 'import uuid; print(uuid.uuid4())')
+echo "$TASK_ID"
+curl "$API_BASE_URL/api/image/edit" \
+  -H "Authorization: Bearer $IMAGE_SERVICE_API_TOKEN" \
+  -H "X-Task-ID: $TASK_ID" \
+  -F 'prompt=将背景修改为浅黄色，保留主体。' \
+  -F 'images=@./input/reference-1.png' \
+  --output response.body --write-out '%{http_code}\n'
+```
+
+生成请求等待期间，从另一条连接调用，使用相同的 Token 和 TASK_ID：
+
+```bash
+curl --fail-with-body -X POST "$API_BASE_URL/api/image/edit/$TASK_ID/cancel" \
+  -H "Authorization: Bearer $IMAGE_SERVICE_API_TOKEN"
+```
+
+取消请求返回 `HTTP 202`、`Cache-Control: no-store`：
+
+```json
+{"task_id":"2edc0f9a-ef81-4eae-87d7-677bd9c0ef91","status":"cancelling"}
+```
+
+`202` 表示已接受取消，不表示 GPU 已立即停止。排队任务直接移出队列；执行任务沿用后端的定向取消及清理流程，不影响其他任务。原生成请求在取消处理结束后返回 `409 TASK_CANCELLED` 的错误 JSON，不能把该响应当作 PNG。
+
+上传完成并入队后才可通过此接口取消；上传期间需要停止时，直接关闭原请求连接。任务不存在、上传尚未完成或任务已结束时返回 `404 TASK_NOT_FOUND`。UUID 无效返回 `400 INVALID_TASK_ID`；相同 UUID 的任务仍在排队、执行或清理时，重复提交返回 `409 TASK_ID_IN_USE`。此 ID 不提供结果恢复或幂等重试功能。
+
+通过 Nginx 调用时，需要同步加入 `deploy/nginx.conf` 中的取消路由；该路由不占用生成接口的连接配额，队列满时仍能取消。
+
+## 6. 错误结构与处理
 
 应用错误通常返回 `Content-Type: application/json` 和以下结构：
 
@@ -203,7 +238,10 @@ else:
 |---|---|---|
 | 400 | `INVALID_MULTIPART`、`INVALID_PROMPT` | 检查字段名、文件数量、UTF-8 和提示词内容 |
 | 401 | `UNAUTHORIZED` | 检查 Token 是否设置、是否与服务端一致 |
+| 404 | `TASK_NOT_FOUND` | 任务尚未入队、不存在或已结束 |
 | 408 | `UPLOAD_TIMEOUT` | 检查上传连接或减少本次数据量 |
+| 409 | `TASK_ID_IN_USE` | 每次生成使用不同的任务 UUID |
+| 409 | `TASK_CANCELLED` | 原生成任务已取消，无图片结果 |
 | 413 | `REQUEST_TOO_LARGE`、`PART_TOO_LARGE`、`IMAGE_TOO_LARGE`、`TOO_MANY_PIXELS`、`TOO_MANY_PARTS`、`HEADERS_TOO_LARGE` | 减少大小、像素数或字段数，或联系部署人员调整限制 |
 | 422 | `INVALID_IMAGE`、`WORKFLOW_REJECTED` | 前者检查图片能否解码；后者由部署人员检查工作流 |
 | 429 | `QUEUE_FULL`、`MEMORY_BUSY` | 降低并发，等待一段时间后再尝试 |

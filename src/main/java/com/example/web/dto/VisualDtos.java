@@ -12,9 +12,10 @@ public final class VisualDtos {
         @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
         @JsonSubTypes({
                 @JsonSubTypes.Type(value = MessageSource.class, name = "message"),
-                @JsonSubTypes.Type(value = CharacterPhotoSource.class, name = "character_photo")
+                @JsonSubTypes.Type(value = CharacterPhotoSource.class, name = "character_photo"),
+                @JsonSubTypes.Type(value = GenerationSource.class, name = "scene_generation")
         })
-        public sealed interface Source permits MessageSource, CharacterPhotoSource {
+        public sealed interface Source permits MessageSource, CharacterPhotoSource, GenerationSource {
         }
 
         /** 聊天上传顺序独立于角色照片，序号从 1 开始。 */
@@ -23,6 +24,10 @@ public final class VisualDtos {
         }
 
         public record CharacterPhotoSource(String characterId, int profileVersion) implements Source {
+        }
+
+        public record GenerationSource(String generationId, String planId, String messageId, int seq, String sceneId,
+                        String summary, boolean rejected, java.util.Map<String, String> target) implements Source {
         }
 
         /** 有损视觉观察，不等于原图全部细节；assetId 为 imgN，版本由服务端基于旧观察推进。 */
@@ -56,7 +61,8 @@ public final class VisualDtos {
 
         /** assetId 使用浏览器全局递增的 imgN。仅限当前会话的图片目录，包含元信息、观察和使用来源，不含字节。 */
         public record Asset(String assetId, String sha256, String mimeType, long byteSize, int width, int height,
-                        List<Source> sources, Observation observation, List<Usage> recentUses) implements ReferencedAsset {
+                        List<Source> sources, Observation observation, List<Usage> recentUses, String sourceSha256) implements ReferencedAsset {
+                public Asset { sourceSha256 = sourceSha256 == null ? sha256 : sourceSha256; }
         }
 
         /** 当前请求临时携带的原图，不在服务器持久化。 */

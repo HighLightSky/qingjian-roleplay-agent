@@ -83,6 +83,7 @@ async function asset(id = "img1"): Promise<ImageAsset> {
     width: 1,
     height: 1,
     displayName: "map.png",
+    creationOrigin: "uploaded",
     originalBlob: new Blob([png], { type: "image/png" }),
     createdAt: now(),
   };
@@ -200,7 +201,7 @@ test("v8 backup restores original bytes and rejects damaged originals before rep
   const a = await asset();
   await beginTurn(session.id, "", [{ type: "image", assetId: a.id }]);
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 9);
+  assert.equal(backup.formatVersion, 10);
   await restoreSnapshot(backup);
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
   const invalid = structuredClone(backup);

@@ -14,6 +14,7 @@ async function stateResult(data) {
     memoryVersion: data.context.state.memoryVersion,
     fromExclusiveSeq: data.fromExclusiveSeq,
     throughSeq: data.throughSeq,
+    visualChanges: [],
     storyChanges: [],
     memoryChanges: [],
     goalChanges: [],
@@ -245,7 +246,17 @@ async function generate(task, request) {
     visual: {
       ...body.visual,
       plan: task.snapshot.plan,
-      imagePayloads: [...ids].map((assetId) => ({ assetId })),
+      imagePayloads: [...ids]
+        .filter((assetId) => {
+          const asset = body.visual?.assetCatalog.find(
+            (a) => a.assetId === assetId,
+          );
+          return (
+            !asset?.observation &&
+            !asset?.sources.some((s) => s.type === "scene_generation")
+          );
+        })
+        .map((assetId) => ({ assetId })),
     },
   };
   task.snapshot.state = await stateResult({
@@ -461,6 +472,9 @@ createServer(async (request, response) => {
       images: input.images,
       snapshot: {
         runId: input.runId,
+        imagePrompt: "",
+        scenePlan: null,
+        imagePromptError: null,
         revision: 0,
         segments: [],
         stages: {},

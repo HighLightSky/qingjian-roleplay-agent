@@ -22,7 +22,7 @@ import com.example.web.dto.InteractionSettingsDto.NarrativeMode;
 import com.example.web.dto.InteractionSettingsDto.ReplyLength;
 
 class PromptBuilderTest {
-    private final PromptBuilder builder = new PromptBuilder(new LlmProperties("", "", "", 0.8, 8192, 120));
+    private final PromptBuilder builder = new PromptBuilder(new LlmProperties("", "", "", 0.8, 8192, 120), com.example.TestRequests.vision());
 
     static Stream<Arguments> combinations() {
         return Arrays.stream(ReplyLength.values()).flatMap(length ->

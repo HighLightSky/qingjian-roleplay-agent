@@ -158,7 +158,7 @@ test("达到70%自动压缩前30轮并保留最近10轮，原始历史不删除"
   await createRole(page);
   await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("roleplay-agent", 8);
+      const request = indexedDB.open("roleplay-agent", 9);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -238,7 +238,7 @@ test("达到70%自动压缩前30轮并保留最近10轮，原始历史不删除"
   );
   const count = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve) => {
-      const r = indexedDB.open("roleplay-agent", 8);
+      const r = indexedDB.open("roleplay-agent", 9);
       r.onsuccess = () => resolve(r.result);
     });
     try {
@@ -1179,7 +1179,7 @@ test("图库按图片编号数值排序后分页，img10不会排在img2之前",
       });
     }
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("roleplay-agent", 8);
+      const request = indexedDB.open("roleplay-agent", 9);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -1560,7 +1560,7 @@ test("角色照片草稿恢复、首次原图、后续选图与旧会话快照",
   await expect(page.locator('[data-operation="state_update"]')).toHaveCount(3);
   await expect(
     page.locator('[data-operation="state_update"]').last(),
-  ).toContainText("已记录 1 张图片");
+  ).toContainText("已检查，剧情、记忆和目标无变化");
   expect(chats.at(-1).visual.assetCatalog[0].assetId).toBe(
     first.character.appearancePhotoAssetId,
   );
@@ -1574,7 +1574,7 @@ test("角色照片草稿恢复、首次原图、后续选图与旧会话快照",
   await expect(page.locator('[data-operation="state_update"]')).toHaveCount(4);
   await expect(
     page.locator('[data-operation="state_update"]').last(),
-  ).toContainText("已记录 1 张图片");
+  ).toContainText("已检查，剧情、记忆和目标无变化");
   expect(chats.at(-1).character.appearancePhotoAssetId).toBe(
     first.character.appearancePhotoAssetId,
   );

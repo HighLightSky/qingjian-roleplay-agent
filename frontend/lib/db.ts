@@ -1,3 +1,10 @@
+import {
+  emptyVisualState,
+  isActiveGeneration,
+  type SceneImagePlan,
+  type SceneGeneration,
+} from "./scene-images/types";
+import { upgradeV8Record } from "./scene-images/migration";
 import { IMAGE_SEQUENCE_KEY } from "./images/ids";
 import {
   emptySummary,
@@ -35,6 +42,16 @@ import {
 } from "./domain";
 
 export interface RoleplayDB extends DBSchema {
+  sceneImagePlans: {
+    key: string;
+    value: SceneImagePlan;
+    indexes: { session: string; message: string };
+  };
+  sceneGenerations: {
+    key: string;
+    value: SceneGeneration;
+    indexes: { session: string; message: string };
+  };
   compactionTasks: {
     key: string;
     value: CompactionTask;
@@ -62,6 +79,8 @@ export interface RoleplayDB extends DBSchema {
   settings: { key: string; value: Setting };
 }
 export const TABLES = [
+  "sceneImagePlans",
+  "sceneGenerations",
   "compactionTasks",
   "characters",
   "sessions",
@@ -80,13 +99,30 @@ let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
     let upgradeError: unknown;
-    connection = openDB<RoleplayDB>("roleplay-agent", 8, {
+    connection = openDB<RoleplayDB>("roleplay-agent", 9, {
       upgrade(db, oldVersion, _newVersion, tx) {
         void tx.done.catch((error: unknown) => {
           upgradeError ??= error;
         });
-        for (const name of Array.from(db.objectStoreNames))
-          db.deleteObjectStore(name);
+        if (oldVersion !== 0 && oldVersion !== 8) {
+          upgradeError = new Error(
+            "当前数据库版本不支持自动升级，原数据已保留，请使用旧版本导出备份。",
+          );
+          tx.abort();
+          return;
+        }
+        for (const name of ["sceneImagePlans", "sceneGenerations"] as const) {
+          const store = db.createObjectStore(name, { keyPath: "id" });
+          store.createIndex("session", "sessionId");
+          store.createIndex("message", "assistantMessageId");
+        }
+        if (oldVersion === 8) {
+          void migrateV8ToV9(tx).catch((error) => {
+            upgradeError = error;
+            tx.abort();
+          });
+          return;
+        }
         db.createObjectStore("characters", { keyPath: "id" });
         db.createObjectStore("sessions", { keyPath: "id" }).createIndex(
           "character",
@@ -297,6 +333,8 @@ export async function createSession(characterId: string) {
     profileVersion: character.profileVersion,
     story: structuredClone(EMPTY_STORY),
     storySources: {},
+    visualState: emptyVisualState(),
+    visualSources: {},
     stateVersion: 0,
     summary: emptySummary(),
     nextMessageSeq: 1,
@@ -401,7 +439,21 @@ export async function checkpoint(message: Message) {
 export async function deleteSession(sessionId: string) {
   const db = await database();
   const tx = db.transaction(TABLES, "readwrite");
+  if (
+    (
+      await tx
+        .objectStore("sceneGenerations")
+        .index("session")
+        .getAll(sessionId)
+    ).some((g) => isActiveGeneration(g.status))
+  ) {
+    tx.abort();
+    await tx.done.catch(() => {});
+    throw new Error("该会话仍在生图，请先停止或等待完成。");
+  }
   for (const table of [
+    "sceneImagePlans",
+    "sceneGenerations",
     "visualObservations",
     "imageUsages",
     "stateTasks",
@@ -472,6 +524,10 @@ export async function collectUnreferenced(
     row.context.visual?.assetCatalog.forEach((a) => used.add(a.assetId));
     row.context.visual?.missingAssets?.forEach((a) => used.add(a.assetId));
   }
+  for (const row of await tx.objectStore("sceneImagePlans").getAll())
+    row.referenceImages.forEach((ref) => used.add(ref.assetId));
+  for (const row of await tx.objectStore("sceneGenerations").getAll())
+    if (row.assetId) used.add(row.assetId);
   for (const asset of await tx.objectStore("assets").getAll())
     if (!used.has(asset.id)) await tx.objectStore("assets").delete(asset.id);
 }
@@ -541,5 +597,38 @@ export async function atomic<T>(
     if (!tx.error) tx.abort();
     await tx.done.catch(() => {});
     throw error;
+  }
+}
+
+export async function migrateV8ToV9(
+  tx: import("idb").IDBPTransaction<
+    RoleplayDB,
+    Array<(typeof TABLES)[number]>,
+    "versionchange"
+  >,
+) {
+  for (const table of [
+    "assets",
+    "sessions",
+    "stateTasks",
+    "compactionTasks",
+    "operations",
+    "messages",
+  ] as const) {
+    let cursor = await tx.objectStore(table).openCursor();
+    while (cursor) {
+      await cursor.update(
+        upgradeV8Record(
+          table,
+          cursor.value as unknown as Record<string, unknown>,
+        ) as never,
+      );
+      cursor = await cursor.continue();
+    }
+  }
+  let cursor = await tx.objectStore("settings").openCursor();
+  while (cursor) {
+    if (cursor.value.key.startsWith("dispatch:")) await cursor.delete();
+    cursor = await cursor.continue();
   }
 }

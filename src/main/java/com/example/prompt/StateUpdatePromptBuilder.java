@@ -51,7 +51,7 @@ public class StateUpdatePromptBuilder {
                 目标可以逐步形成，不编造完整通关路线；完成、放弃和重大变化必须有来源。
                 【返回协议】
                 只输出符合响应 schema 的完整 JSON 对象，不输出 Markdown 代码块、说明文字或顶层数组。
-                以用户材料末尾的本次返回模板为准，保留 visualObservations、storyChanges、memoryChanges、goalChanges 四个数组。
+                以用户材料末尾的本次返回模板为准，保留 visualObservations、storyChanges、memoryChanges、goalChanges、visualChanges 五个数组。
                 每个 change 结构：
                 {"action":"create或update","id":"新增时为空字符串，修改时为已有ID或剧情字段名",
                 "value":{},"reason":"中文依据","sourceMessageIds":["msg1"]}
@@ -60,7 +60,7 @@ public class StateUpdatePromptBuilder {
                 【剧情：当前状态快照】
                 剧情字段仅 location、storyTime、characterState、userState（字符串）、presentCharacters、relationships、items、openThreads（字符串数组）。value 是对应字段的新值。
                 剧情只回答“现在是什么情况”，不承担历史回顾。location、storyTime 只写当前地点与故事时间，通常各不超过30字，不附行程和经过。
-                characterState 是当前扮演角色的状态，userState 是用户控制人物（“我”）的状态；各用一句话概括重要穿着、主要情绪与身体状态，通常不超过80字，不罗列配饰、局部姿态或瞬时表情。
+                characterState 是当前扮演角色的状态，userState 是用户控制人物（“我”）的状态；各用一句话概括主要情绪与身体状态，通常不超过80字；详细服装、发型与配饰只写 visualChanges，不维护两套服装结论。
                 只记录对话明确呈现的状态，不虚构未知穿着、伤病或用户内心；用户情绪仅据其明确表达。状态改变时更新当前情况，无新依据则保持原值。
                 presentCharacters 只列当前在场人物；relationships 只概括当前重要关系；items 只列影响后续行动的关键物品及必要的归属或状态；openThreads 只列仍待解决的重要问题。
                 列表每项只表达一个要点，通常不超过60字，合并同义或同一事项的重复项，不把子步骤拆成多项，不推断未提及的物品。
@@ -101,6 +101,10 @@ public class StateUpdatePromptBuilder {
                 视觉观察和记忆用简短事实表达；剧情和目标严格遵循上述宏观粒度，不因接口允许长文字而扩写。
                 列表只保留有实际价值的项；总材料由模型 token 预算约束，不静默丢弃重要信息。
                 """;
+        rules += "\n【持续视觉状态】visualChanges 只 update outfit、hairstyle（字符串）、accessories、appearanceChanges（字符串数组）。"
+                + "与剧情使用相同 change 结构和新消息来源。只记录剧情已经成立的穿着、发型、饰品、外观变化。"
+                + "用户仅要求画图换装不等于剧情换装；生成提示词、生成摘要不是事实依据。新服装覆盖旧服装，不因换地点丢失服装，瞬间姿势不写入。"
+                + "visualSources 标为 manual 的字段必须有更新时间之后的新对话依据才可更新。";
         List<Message> messages = new ArrayList<>();
         messages.add(new Message("system", rules));
         messages.add(new Message("user", parts));
@@ -112,6 +116,7 @@ public class StateUpdatePromptBuilder {
 
     private String resultTemplate(UpdateRequest r) {
         var template = mapper.createObjectNode();
+        template.putArray("visualChanges");
         var observations = template.putArray("visualObservations");
         if (r.context().visual() != null) {
             for (var payload : r.context().visual().imagePayloads()) {

@@ -44,7 +44,7 @@ class ChatControllerTest {
     @MockitoBean Clock clock;
     final AtomicLong time = new AtomicLong(1000);
     final List<String> ids = new ArrayList<>();
-    static final String EMPTY = "{\"visualObservations\":[],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}";
+    static final String EMPTY = "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"goalChanges\":[]}";
     @BeforeEach void setup() throws Exception {
         when(clock.millis()).thenAnswer(i -> time.get());
         when(counter.countTextOnly(any())).thenReturn(new ContextDtos.TokenCount(100, "exact", "test", "fp"));
@@ -64,8 +64,8 @@ class ChatControllerTest {
         var context = new ChatApiRequest(new CharacterDto("林溪", "", "", null, 1), TestRequests.state(List.of()),
                 TestRequests.summary(), List.of(), new InputDto(text, null),
                 new InteractionSettingsDto(InteractionSettingsDto.ReplyLength.STANDARD, InteractionSettingsDto.NarrativeMode.SCENE), null, id);
-        return new Request(id, context, new MessageMeta("user-" + id, 1, "2026-10-22T00:00:00Z"),
-                new MessageMeta("assistant-" + id, 2, "2026-10-22T00:00:01Z"), List.of());
+        return new Request(id, context, new MessageMeta("user-" + id, 1, "2026-10-22T00:00:00Z", 1),
+                new MessageMeta("assistant-" + id, 2, "2026-10-22T00:00:01Z", 1), List.of());
     }
     private HttpRequest postRequest(String path, Object value) throws Exception {
         return HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).timeout(Duration.ofSeconds(10))
@@ -239,6 +239,36 @@ class ChatControllerTest {
         String output = post("/api/chat", request("继续")).body();
         assertTrue(output.contains("超过窗口")); verify(model, never()).chatStream(any(), any());
     }
+    @Test void observedUploadRemainsInBodyButNormalAndManualStateDoNotObserveAgain() throws Exception {
+        byte[] png = Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP2kAAAAASUVORK5CYII=");
+        String hash = ImageValidationService.sha256(png);
+        try (var client = HttpClient.newHttpClient()) {
+            var upload = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/images/" + hash))
+                    .PUT(HttpRequest.BodyPublishers.ofByteArray(png)).build();
+            assertEquals(200, client.send(upload, HttpResponse.BodyHandlers.ofString()).statusCode());
+        }
+        var original = request("再看这张图");
+        var sources = List.<VisualDtos.Source>of(new VisualDtos.CharacterPhotoSource("character", 1));
+        var observation = new VisualDtos.Observation("img1", "人物照片", List.of(), List.of(), List.of(), sources, 4);
+        var asset = new VisualDtos.Asset("img1", hash, "image/png", png.length, 1, 1, sources, observation, List.of(), hash);
+        var context = new ChatApiRequest(new CharacterDto("林溪", "", "", "img1", 1), original.context().state(),
+                original.context().summary(), List.of(), new InputDto("再看这张图", List.of(new ContentPartDto("image", null, "img1"))),
+                original.context().interactionSettings(), new VisualDtos.Context("session", List.of(asset), null, List.of(), List.of()), original.context().operationId());
+        var request = new Request(original.runId(), context, original.user(), original.assistant(), List.of(new ImageRef("img1", hash)));
+        String response = post("/api/chat", request).body();
+        assertTrue(response.contains("state_result"), response);
+        var calls = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model).chat(calls.capture());
+        assertTrue(calls.getValue().getMessages().stream().filter(m -> m.getParts() != null).flatMap(m -> m.getParts().stream()).noneMatch(part -> "image_url".equals(part.type())));
+        var update = new StateDtos.UpdateRequest(context.operationId(), context, 0, 2, List.of(
+                new StateDtos.SourceMessage(request.user().id(), 1, "user", "再看这张图", "complete", request.user().createdAt()),
+                new StateDtos.SourceMessage(request.assistant().id(), 2, "assistant", "你好", "complete", request.assistant().createdAt())));
+        var retry = post("/api/state/update", new Retry(update, request.images()));
+        assertEquals(200, retry.statusCode(), retry.body());
+        assertEquals(0, mapper.readTree(retry.body()).path("visualObservations").size());
+        assertEquals(4, observation.version());
+    }
+
     @ParameterizedTest
     @ValueSource(ints = {10, 11})
     void configuredImageLimitReachesBodyAndStateAndRejectsExcess(int imageCount) throws Exception {
@@ -317,8 +347,8 @@ class ChatControllerTest {
         var input = new InputDto("看图", List.of(ContentPartDto.text("看图"), new ContentPartDto("image", null, "img1")));
         var imageRequest = new Request(base.runId(), new ChatApiRequest(context.character(), context.state(), context.summary(),
                 history, input, context.interactionSettings(), visual, context.operationId()),
-                new MessageMeta(base.user().id(), 3, base.user().createdAt()),
-                new MessageMeta(base.assistant().id(), 4, base.assistant().createdAt()), List.of(new ImageRef("img1", hash)));
+                new MessageMeta(base.user().id(), 3, base.user().createdAt(), 1),
+                new MessageMeta(base.assistant().id(), 4, base.assistant().createdAt(), 1), List.of(new ImageRef("img1", hash)));
         when(model.chat(any())).thenReturn(new ChatResponse(EMPTY.replace("\"visualObservations\":[]", "\"visualObservations\":[{\"assetId\":\"img1\",\"summary\":\"黑色图片\",\"visibleDetails\":[],\"extractedText\":[],\"uncertainDetails\":[]}]"), "stop", TokenUsage.unavailable()));
         String output = post("/api/chat", imageRequest).body();
         assertTrue(output.contains("event:state_result"), output);
@@ -351,8 +381,8 @@ class ChatControllerTest {
                 original.input(), original.interactionSettings(), original.visual(), base.runId());
         int seq = context.history().size();
         var request = new Request(base.runId(), context,
-                new MessageMeta(base.user().id(), seq + 1, base.user().createdAt()),
-                new MessageMeta(base.assistant().id(), seq + 2, base.assistant().createdAt()),
+                new MessageMeta(base.user().id(), seq + 1, base.user().createdAt(), 1),
+                new MessageMeta(base.assistant().id(), seq + 2, base.assistant().createdAt(), 1),
                 scenario.images().stream().map(image -> new ImageRef(image.assetId(), image.sha256())).toList());
         when(model.chat(any())).thenAnswer(invocation -> {
             ChatRequest call = invocation.getArgument(0);
@@ -407,8 +437,8 @@ class ChatControllerTest {
                 archived ? List.of() : original.history(), base.context().input(), original.interactionSettings(),
                 new VisualDtos.Context("session", List.of(), null, List.of(), missing), base.runId());
         var request = new Request(base.runId(), context,
-                new MessageMeta(base.user().id(), 3, base.user().createdAt()),
-                new MessageMeta(base.assistant().id(), 4, base.assistant().createdAt()), List.of());
+                new MessageMeta(base.user().id(), 3, base.user().createdAt(), 1),
+                new MessageMeta(base.assistant().id(), 4, base.assistant().createdAt(), 1), List.of());
         var response = post("/api/chat", request);
         assertEquals(200, response.statusCode(), response.body());
         assertTrue(response.body().contains("event:state_result"), response.body());
@@ -443,8 +473,8 @@ class ChatControllerTest {
                         kind.equals("overlap") ? List.of(asset) : List.of(), null, List.of(),
                         kind.equals("undeclared") ? List.of() : kind.equals("duplicate") ? List.of(missing, missing) : List.of(missing)), base.runId());
         var response = post("/api/chat", new Request(base.runId(), context,
-                new MessageMeta(base.user().id(), 3, base.user().createdAt()),
-                new MessageMeta(base.assistant().id(), 4, base.assistant().createdAt()), List.of()));
+                new MessageMeta(base.user().id(), 3, base.user().createdAt(), 1),
+                new MessageMeta(base.assistant().id(), 4, base.assistant().createdAt(), 1), List.of()));
         assertEquals(400, response.statusCode(), response.body());
         verifyNoInteractions(model);
     }

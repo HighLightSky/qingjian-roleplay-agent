@@ -82,7 +82,7 @@ public class StateUpdateService {
         try {
             JsonNode node = mapper.reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readTree(content);
             if (node == null || !node.isObject()) throw new IOException("整理结果必须是 JSON 对象");
-            for (String field : List.of("storyChanges", "memoryChanges", "goalChanges"))
+            for (String field : List.of("storyChanges", "memoryChanges", "goalChanges", "visualChanges"))
                 if (!node.path(field).isArray())
                     throw new IOException("整理结果缺少数组：" + field);
             boolean hasImages = r.context().visual() != null && !r.context().visual().imagePayloads().isEmpty();
@@ -104,7 +104,7 @@ public class StateUpdateService {
                                     .count() > ContextLimits.COLLECTION_ITEMS)
                 throw new IOException("整理结果使记忆或目标数量超限");
             return new Result(r.operationId(), state.sessionVersion(), state.memoryVersion(), r.fromExclusiveSeq(),
-                    r.throughSeq(), observations(result.visualObservations(), r), story, memories, goals);
+                    r.throughSeq(), observations(result.visualObservations(), r), story, memories, goals, changes(result.visualChanges(), "visual", r, material));
         } catch (IllegalArgumentException e) {
             throw new IOException("整理结果无效：" + e.getMessage(), e);
         }
@@ -162,7 +162,7 @@ public class StateUpdateService {
             String alias = proposal.id();
             List<String> restoredSources = new ArrayList<>();
             for (String source : proposal.sourceMessageIds()) restoredSources.add(material.resolve("message", source));
-            String restoredId = "update".equals(proposal.action()) && !"story".equals(kind)
+            String restoredId = "update".equals(proposal.action()) && !Set.of("story", "visual").contains(kind)
                     ? material.resolve(kind, alias) : alias;
             var p = new ProposedChange(proposal.action(), restoredId, proposal.value(), proposal.reason(),
                     restoredSources, proposal.progressEvidence());
@@ -177,7 +177,20 @@ public class StateUpdateService {
             JsonNode before;
             JsonNode value;
             int version;
-            if ("story".equals(kind)) {
+            if ("visual".equals(kind)) {
+                if (create || !StateValidation.VISUAL_FIELDS.contains(p.id())) throw new IOException("视觉字段或操作无效");
+                var full = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.valueToTree(s.visualState());
+                if (!material.data().path("visualState").path(p.id()).equals(full.path(p.id())))
+                    throw new IOException("视觉字段未完整提供，不能覆盖：" + p.id());
+                before = full.get(p.id());
+                full.set(p.id(), p.value());
+                var visual = mapper.treeToValue(full, VisualState.class);
+                StateValidation.visualState(visual);
+                value = mapper.valueToTree(visual).get(p.id());
+                var source = s.visualSources().get(p.id());
+                if (source != null && "manual".equals(source.origin())) requireNewEvidence(p, source.updatedAt(), r);
+                version = s.sessionVersion();
+            } else if ("story".equals(kind)) {
                 if (create || p.id() == null || !StateValidation.STORY_FIELDS.contains(p.id()))
                     throw new IOException("剧情字段或操作无效");
 

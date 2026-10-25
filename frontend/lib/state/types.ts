@@ -89,6 +89,8 @@ export type StateSnapshot = {
   memoryVersion: number;
   story: Story;
   storySources: StorySources;
+  visualState: import("../scene-images/types").VisualState;
+  visualSources: import("../scene-images/types").VisualSources;
   memories: Omit<Memory, "createdAt">[];
   goals: Omit<Goal, "createdAt">[];
 };
@@ -117,6 +119,7 @@ export type StateResult = {
   throughSeq: number;
   visualObservations: Observation[];
   storyChanges: Change<Story[keyof Story]>[];
+  visualChanges: Change<string | string[]>[];
   memoryChanges: Change<MemoryValue>[];
   goalChanges: Change<GoalValue>[];
 };

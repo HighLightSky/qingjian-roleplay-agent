@@ -112,9 +112,17 @@ public class ImageCache {
     }
 
     public void put(String sha256, byte[] bytes) {
+        putValidated(sha256, bytes, vision.getMaxImageBytes(), vision.getMaxPixels());
+    }
+
+    public void putGenerationInput(String sha256, byte[] bytes, long maxBytes, long maxPixels) {
+        putValidated(sha256, bytes, maxBytes, maxPixels);
+    }
+
+    private void putValidated(String sha256, byte[] bytes, long maxBytes, long maxPixels) {
         hash(sha256);
-        if (bytes.length == 0 || bytes.length > vision.getMaxImageBytes())
-            throw new IllegalArgumentException("图片体积超限：实际 " + bytes.length + " 字节，上限 " + vision.getMaxImageBytes());
+        if (bytes.length == 0 || bytes.length > maxBytes)
+            throw new IllegalArgumentException("图片体积超限：实际 " + bytes.length + " 字节，上限 " + maxBytes);
         if (!ImageValidationService.sha256(bytes).equals(sha256))
             throw new IllegalArgumentException("图片哈希与上传内容不一致");
         String mime;
@@ -133,7 +141,7 @@ public class ImageCache {
                 };
                 width = reader.getWidth(0);
                 height = reader.getHeight(0);
-                if (width < 1 || height < 1 || (long) width * height > vision.getMaxPixels())
+                if (width < 1 || height < 1 || (long) width * height > maxPixels)
                     throw new IllegalArgumentException("图片像素超过部署限制");
                 if (reader.getNumImages(true) != 1 || reader.read(0) == null)
                     throw new IllegalArgumentException("仅支持可解码的静态图片");
@@ -197,6 +205,13 @@ public class ImageCache {
             this.pinned = pinned;
         }
 
+        public List<com.example.image.QwenImageClient.Image> binaryImages(Collection<String> ids) {
+            return ids.stream().map(id -> {
+                Entry entry = Objects.requireNonNull(pinned.get(id), "缓存引用缺少图片：" + id);
+                return new com.example.image.QwenImageClient.Image(id, entry.mime, entry.width, entry.height, entry.bytes);
+            }).toList();
+        }
+
         public List<Payload> payloads(Collection<String> ids) {
             return ids.stream().map(id -> {
                 Entry entry = Objects.requireNonNull(pinned.get(id), "缓存引用缺少原图：" + id);
@@ -240,7 +255,7 @@ public class ImageCache {
         size -= entries.remove(key).bytes.length;
     }
 
-    private static void hash(String value) {
+    static void hash(String value) {
         if (value == null || !value.matches("[a-f0-9]{64}"))
             throw new IllegalArgumentException("图片 SHA-256 格式无效");
     }

@@ -34,9 +34,11 @@ public class PromptBuilder {
 
 
     private final LlmProperties llmProperties;
+    private final com.example.config.VisionProperties vision;
 
-    public PromptBuilder(LlmProperties llmProperties) {
+    public PromptBuilder(LlmProperties llmProperties, com.example.config.VisionProperties vision) {
         this.llmProperties = llmProperties;
+        this.vision = vision;
     }
 
     /**
@@ -60,6 +62,8 @@ public class PromptBuilder {
         List<Message> messages = new ArrayList<>();
         List<Message.Part> references = new ArrayList<>();
         appendVisualContext(systemPrompt, messages, references, request, includeImages);
+        SceneImagePromptRules.appendTo(systemPrompt, request);
+        systemPrompt.append("最终生图参考图上限为 ").append(vision.getMaxImages()).append(" 张，包含身份图。\n");
         messages.addFirst(new Message("system", systemPrompt.toString()));
 
         return new ChatRequest(

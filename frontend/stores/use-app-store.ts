@@ -1,4 +1,10 @@
 "use client";
+import {
+  notifySceneImages,
+  resumeSceneGenerations,
+} from "@/lib/scene-images/coordinator";
+import { validateScenePlan } from "@/lib/scene-images/validation";
+import { isActiveGeneration } from "@/lib/scene-images/types";
 
 import {
   beginEditDraft,
@@ -70,6 +76,7 @@ type AppState = {
   contextBudget: { sessionId: string; budget: ContextBudget } | null;
   ready: boolean;
   bootError: string;
+  imageDrafts: Record<string, { raw: string; error: string | null }>;
   readOnly: boolean;
   busy: boolean;
   error: string;
@@ -99,6 +106,7 @@ export const useAppStore = create<AppState>(() => ({
   contextBudget: null,
   ready: false,
   bootError: "",
+  imageDrafts: {},
   readOnly: false,
   busy: false,
   error: "",
@@ -217,6 +225,7 @@ export function initialize() {
           await selectCharacter(character.id, saved.get("sessionId"));
         set({ ready: true, bootError: "" });
         void resumeDispatch().catch(report);
+        if (!get().readOnly) void resumeSceneGenerations(write).catch(report);
       } catch (error) {
         set({ bootError: `无法打开本地数据：${errorText(error)}` });
         initPromise = undefined;
@@ -750,7 +759,12 @@ export async function sendMessage(
           seq: turn.user.seq,
           createdAt: turn.user.createdAt,
         },
-        assistant: { id: reply.id, seq: reply.seq, createdAt: reply.createdAt },
+        assistant: {
+          id: reply.id,
+          seq: reply.seq,
+          createdAt: reply.createdAt,
+          completedCheckpointVersion: reply.checkpointVersion + 1,
+        },
       });
     } catch (error) {
       if (!reply) preparationError = error;
@@ -796,10 +810,21 @@ async function consumeRun(
   if (!reply) throw new Error("后台任务对应的正文消息缺失。");
   let lastCheckpoint = 0;
   let lastStages = "";
+  let savedScenePlan = "";
   let bodySaved = reply.status === "complete";
   let task = await database.get("stateTasks", `state:${reply.id}`);
   const apply = async (snapshot: DispatchSnapshot) => {
     signal.throwIfAborted();
+    if (snapshot.imagePrompt || snapshot.imagePromptError)
+      set((state) => ({
+        imageDrafts: {
+          ...state.imageDrafts,
+          [run.assistantMessageId]: {
+            raw: snapshot.imagePrompt,
+            error: snapshot.imagePromptError,
+          },
+        },
+      }));
     const completed =
       snapshot.body?.finishReason === "stop" &&
       snapshot.segments.some((s) => s.text.trim());
@@ -854,6 +879,21 @@ async function consumeRun(
     ) {
       await write(() => db.checkpoint(reply!));
       lastCheckpoint = Date.now();
+    }
+    if (
+      completed &&
+      snapshot.scenePlan &&
+      savedScenePlan !== snapshot.scenePlan.id
+    ) {
+      validateScenePlan(snapshot.scenePlan);
+      if (
+        snapshot.scenePlan.sourceCheckpointVersion !== reply.checkpointVersion
+      )
+        throw new Error("画面计划来源检查点不一致。");
+      const scenePlan = snapshot.scenePlan;
+      await write(() => database.put("sceneImagePlans", scenePlan));
+      savedScenePlan = scenePlan.id;
+      notifySceneImages();
     }
     const stageKey = JSON.stringify(snapshot.stages);
     if (stageKey !== lastStages)
@@ -1109,6 +1149,15 @@ export async function clearData() {
   await write(async () => {
     const database = await db.database();
     const tx = database.transaction(db.TABLES, "readwrite");
+    if (
+      (await tx.objectStore("sceneGenerations").getAll()).some((g) =>
+        isActiveGeneration(g.status),
+      )
+    ) {
+      tx.abort();
+      await tx.done.catch(() => {});
+      throw new Error("仍有图片正在生成，请先停止或等待完成再清空数据。");
+    }
     for (const table of db.TABLES) await tx.objectStore(table).clear();
     await tx
       .objectStore("settings")

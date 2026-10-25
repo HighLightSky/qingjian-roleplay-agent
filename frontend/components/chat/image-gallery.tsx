@@ -31,7 +31,10 @@ function Tile({ asset, select }: { asset: Metadata; select: () => void }) {
         alt={asset.displayName}
         className="aspect-square w-full object-cover"
       />
-      <p className="truncate p-1 text-xs">{asset.displayName}</p>
+      <p className="truncate p-1 text-xs">
+        {asset.creationOrigin === "generated" ? "生成图" : "上传图"} ·{" "}
+        {asset.displayName}
+      </p>
     </button>
   );
 }
@@ -59,9 +62,19 @@ function Preview({ asset }: { asset: Metadata }) {
           ]);
         await tx.done;
         const names = new Map(sessions.map((s) => [s.id, s.title]));
-        const result = messages
-          .filter((m) => imageIds(m.parts).includes(asset.id))
-          .map((m) => `${names.get(m.sessionId) ?? "会话"} · 消息 ${m.seq}`);
+        const generated = await db.getAll("sceneGenerations");
+        const plans = await db.getAll("sceneImagePlans");
+        const result = generated
+          .filter((g) => g.assetId === asset.id)
+          .map(
+            (g) =>
+              `${names.get(g.sessionId)} · 回复 ${g.sourceSeq} · ${g.referenceStatus === "rejected" ? "已排除" : "生成要求，未核实"}\n${plans.find((p) => p.id === g.planId)!.summary}`,
+          );
+        result.push(
+          ...messages
+            .filter((m) => imageIds(m.parts).includes(asset.id))
+            .map((m) => `${names.get(m.sessionId) ?? "会话"} · 消息 ${m.seq}`),
+        );
         drafts
           .filter((d) => imageIds(d.parts).includes(asset.id))
           .forEach((d) =>

@@ -103,6 +103,7 @@ public class ContextCompactionService {
 
     private List<com.example.web.dto.VisualDtos.Asset> unobserved(ChatApiRequest context, int through) {
         return ImageValidationService.catalog(context).stream().filter(a -> a.observation() == null
+                && a.sources().stream().noneMatch(s -> s instanceof com.example.web.dto.VisualDtos.GenerationSource)
                 && a.sources().stream().anyMatch(s -> s instanceof MessageSource m && m.seq() <= through)).toList();
     }
 

@@ -19,6 +19,11 @@ public final class StateDtos {
         }
     }
 
+    public record VisualState(String outfit, String hairstyle, List<String> accessories, List<String> appearanceChanges) {
+        public VisualState { accessories = list(accessories); appearanceChanges = list(appearanceChanges); }
+        public static VisualState empty() { return new VisualState("", "", List.of(), List.of()); }
+    }
+
     public record MemoryValue(String content, String scope, String kind, String epistemicStatus, String status) {
     }
 
@@ -43,8 +48,11 @@ public final class StateDtos {
         public FieldSource { sourceMessageIds = list(sourceMessageIds); }
     }
     public record Snapshot(String sessionId, String characterId, int sessionVersion, int memoryVersion,
-            Story story, Map<String, FieldSource> storySources, List<Memory> memories, List<Goal> goals) {
+            Story story, Map<String, FieldSource> storySources, List<Memory> memories, List<Goal> goals,
+            VisualState visualState, Map<String, FieldSource> visualSources) {
         public Snapshot {
+            visualState = visualState == null ? VisualState.empty() : visualState;
+            visualSources = visualSources == null ? Map.of() : Map.copyOf(visualSources);
             storySources = storySources == null ? Map.of() : Map.copyOf(storySources);
             memories = list(memories);
             goals = list(goals);
@@ -69,12 +77,13 @@ public final class StateDtos {
     }
 
     public record ModelResult(List<VisualDtos.Observation> visualObservations, List<ProposedChange> storyChanges,
-            List<ProposedChange> memoryChanges, List<ProposedChange> goalChanges) {
+            List<ProposedChange> memoryChanges, List<ProposedChange> goalChanges, List<ProposedChange> visualChanges) {
         public ModelResult {
             visualObservations = list(visualObservations);
             storyChanges = list(storyChanges);
             memoryChanges = list(memoryChanges);
             goalChanges = list(goalChanges);
+            visualChanges = list(visualChanges);
         }
     }
 
@@ -84,7 +93,7 @@ public final class StateDtos {
 
     public record Result(String operationId, int sessionVersion, int memoryVersion, int fromExclusiveSeq,
             int throughSeq, List<VisualDtos.Observation> visualObservations, List<Change> storyChanges,
-            List<Change> memoryChanges, List<Change> goalChanges) {
+            List<Change> memoryChanges, List<Change> goalChanges, List<Change> visualChanges) {
     }
 
     private static <T> List<T> list(List<T> values) {

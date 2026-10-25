@@ -64,7 +64,7 @@ class ChatServiceTest {
             return new ChatStreamResult("stop", TokenUsage.unavailable());
         }).when(llmClient).chatStream(any(), any());
 
-        assertEquals("stop", service.chatStream(validRequest(), deltas::add, budget -> {}).finishReason());
+        assertEquals("stop", service.chatStream(validRequest(), deltas::add, budget -> {}, imagePrompt -> {}).finishReason());
         assertEquals(List.of(
                 new SegmentDelta("dialogue", "“你好。”"),
                 new SegmentDelta("dialogue", "\n"),
@@ -122,7 +122,7 @@ class ChatServiceTest {
         doAnswer(invocation -> new ChatStreamResult("length", TokenUsage.unavailable())).when(llmClient).chatStream(any(), any());
         ChatApiRequest valid = validRequest();
         ChatApiRequest request = new ChatApiRequest(valid.character(), com.example.TestRequests.state(Collections.nCopies(50, "记忆")), com.example.TestRequests.summary(), List.of(), new InputDto("字".repeat(2000), null), SETTINGS, null, "operation");
-        assertEquals("length", service.chatStream(request, delta -> {}, budget -> {}).finishReason());
+        assertEquals("length", service.chatStream(request, delta -> {}, budget -> {}, imagePrompt -> {}).finishReason());
     }
 
     @Test
@@ -136,7 +136,7 @@ class ChatServiceTest {
 
         List<SegmentDelta> deltas = new ArrayList<>();
         assertSame(failure, assertThrows(IOException.class,
-                () -> service.chatStream(validRequest(), deltas::add, budget -> {})));
+                () -> service.chatStream(validRequest(), deltas::add, budget -> {}, imagePrompt -> {})));
         assertEquals(List.of(), deltas);
     }
 
@@ -145,7 +145,7 @@ class ChatServiceTest {
         InterruptedException interruption = new InterruptedException("请求中断");
         doAnswer(invocation -> { throw interruption; }).when(llmClient).chatStream(any(), any());
         assertSame(interruption, assertThrows(InterruptedException.class,
-                () -> service.chatStream(validRequest(), delta -> {}, budget -> {})));
+                () -> service.chatStream(validRequest(), delta -> {}, budget -> {}, imagePrompt -> {})));
 
         doAnswer(invocation -> {
             Consumer<String> onText = invocation.getArgument(1);
@@ -154,13 +154,13 @@ class ChatServiceTest {
         }).when(llmClient).chatStream(any(), any());
         RuntimeException callbackFailure = new RuntimeException("前端连接已断开");
         assertSame(callbackFailure, assertThrows(RuntimeException.class,
-                () -> service.chatStream(validRequest(), delta -> { throw callbackFailure; }, budget -> {})));
+                () -> service.chatStream(validRequest(), delta -> { throw callbackFailure; }, budget -> {}, imagePrompt -> {})));
     }
 
     @Test
     void rejectsMissingFinishReasonInsteadOfReportingSuccess() throws Exception {
         doAnswer(invocation -> new ChatStreamResult(null, TokenUsage.unavailable())).when(llmClient).chatStream(any(), any());
-        assertThrows(IOException.class, () -> service.chatStream(validRequest(), delta -> {}, budget -> {}));
+        assertThrows(IOException.class, () -> service.chatStream(validRequest(), delta -> {}, budget -> {}, imagePrompt -> {}));
     }
 
     @Test
@@ -177,8 +177,8 @@ class ChatServiceTest {
 
         List<SegmentDelta> first = new ArrayList<>();
         List<SegmentDelta> second = new ArrayList<>();
-        service.chatStream(validRequest(), first::add, budget -> {});
-        service.chatStream(validRequest(), second::add, budget -> {});
+        service.chatStream(validRequest(), first::add, budget -> {}, imagePrompt -> {});
+        service.chatStream(validRequest(), second::add, budget -> {}, imagePrompt -> {});
         assertEquals(List.of(new SegmentDelta("dialogue", "第一轮")), first);
         assertEquals(List.of(new SegmentDelta("narration", "第二轮")), second);
     }

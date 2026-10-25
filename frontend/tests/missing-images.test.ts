@@ -75,6 +75,7 @@ async function setup() {
       width: 1,
       height: 1,
       byteSize: bytes.length,
+      creationOrigin: "uploaded",
       originalBlob: new Blob([bytes], { type: "image/png" }),
       displayName: `${i}.png`,
       createdAt: now(),
@@ -242,6 +243,7 @@ function setupRestoredImage(): ImageAsset {
     width: 1,
     height: 1,
     byteSize: bytes.length,
+    creationOrigin: "uploaded",
     originalBlob: new Blob([bytes], { type: "image/png" }),
     displayName: "2.png",
     createdAt: now(),
@@ -435,5 +437,5 @@ test("完整备份拒绝缺失原件，已恢复原件的冻结缺图记录仍�
   assert.throws(() => validateBackup(incomplete), /图片引用缺失/);
   await db.put("assets", images[1]);
   const complete = await takeSnapshot();
-  assert.equal(validateBackup(complete).formatVersion, 9);
+  assert.equal(validateBackup(complete).formatVersion, 10);
 });

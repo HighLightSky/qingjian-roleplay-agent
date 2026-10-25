@@ -39,7 +39,7 @@ class StateUpdateLiveTest {
         var old = new GoalValue("寻找失踪的哥哥", "active", "向旅馆掌柜询问线索", "已来到旅馆，尚未获得哥哥去向的确切线索。");
         var state = new Snapshot(base.sessionId(), base.characterId(), 1, 0, base.story(), Map.of(), List.of(),
                 scenario == Scenario.CREATE ? List.of() : List.of(new Goal("goal", "session", old, 1,
-                        "automatic", List.of(), "2026-10-22T00:00:00Z")));
+                        "automatic", List.of(), "2026-10-22T00:00:00Z")), com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
         String input = switch (scenario) {
             case CREATE -> "我想和你一起寻找失踪的哥哥，这是我们今后共同的长期目标。";
             case FOCUS -> "寻找哥哥的目标继续，但先不要询问掌柜，当前只关注如何取得查看旅馆登记册的许可。还没拿到许可，也没有新线索。";

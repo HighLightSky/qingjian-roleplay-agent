@@ -51,3 +51,23 @@ roleplay:
     cleanup-seconds: 60
     selection-output-tokens: 4096
     state-output-tokens: 8192
+
+  image-generation:
+    base-url: ${IMAGE_SERVICE_BASE_URL:https://10.21.16.104}
+    api-token: ${IMAGE_SERVICE_API_TOKEN:comfyUI-qwen-image-21-edit-api-20261024-token}
+    timeout-seconds: 1800
+    cancel-timeout-seconds: 10
+    task-timeout-seconds: 1900
+    result-retention-seconds: 7200
+    max-results: 4
+    result-cache-bytes: 272629760
+    max-image-bytes: 16777216
+    max-pixels: 4194304
+    max-edge: 8192
+    max-total-pixels: 16777216
+    max-request-bytes: 134217728
+    max-prompt-characters: 16384
+    max-output-bytes: 67108864
+    max-output-pixels: 20000000
+    reference-max-edge: 1024
+    reference-jpeg-quality: 0.85

@@ -19,6 +19,11 @@ public final class TestRequests {
         return properties;
     }
 
+    public static com.example.config.ImageGenerationProperties generation(String baseUrl) {
+        return new com.example.config.ImageGenerationProperties(baseUrl, "test-token", 5, 1, 6, 7200, 2, 140000000,
+                16777216, 4194304, 8192, 16777216, 134217728, 16384, 67108864, 20000000, 1024, .85);
+    }
+
     public static com.example.config.DispatchProperties dispatch() {
         return new com.example.config.DispatchProperties(536870912, 1800, 7200, 600, 7200, 32, 67108864, 60, 4096, 8192);
     }
@@ -39,7 +44,7 @@ public final class TestRequests {
         } catch (Exception e) { throw new AssertionError(e); }
         var vision = vision();
         var llm = new com.example.config.LlmProperties("", "", "test-model", .8, 800, 120);
-        return new com.example.service.ContextBudgetService(counter, new com.example.prompt.PromptBuilder(llm),
+        return new com.example.service.ContextBudgetService(counter, new com.example.prompt.PromptBuilder(llm, com.example.TestRequests.vision()),
                 contextProperties(), vision, new com.example.service.ContextValidation(),
                 new com.example.service.ImageValidationService(vision), mapper);
     }
@@ -64,6 +69,6 @@ public final class TestRequests {
                     1, "manual", "session", List.of(), "2000-01-01T00:00:00Z"));
         }
         return new Snapshot("session", "character", 0, 0,
-                new Story("", "", "", "", List.of(), List.of(), List.of(), List.of()), Map.of(), memories, List.of());
+                new Story("", "", "", "", List.of(), List.of(), List.of(), List.of()), Map.of(), memories, List.of(), com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
     }
 }

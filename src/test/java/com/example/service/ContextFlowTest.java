@@ -66,7 +66,7 @@ class ContextFlowTest {
                 "test", "test-model", .8, 1000, 5);
         var requests = new LlmRequestMapper(mapper, llm);
         counter = new LlamaTokenCounter(http, mapper, requests, llm, properties);
-        var prompts = new PromptBuilder(llm);
+        var prompts = new PromptBuilder(llm, com.example.TestRequests.vision());
         var vision = com.example.TestRequests.vision();
         vision.setSupported(true);
         var images = new ImageValidationService(vision);
@@ -148,7 +148,7 @@ class ContextFlowTest {
         assertTrue(calls > 1);
         assertEquals(60, current.summary().throughSeq());
         assertEquals(original.history().subList(60, 80), current.history());
-        var assembled = new PromptBuilder(new LlmProperties("", "", "test", .8, 1000, 5)).build(current);
+        var assembled = new PromptBuilder(new LlmProperties("", "", "test", .8, 1000, 5), com.example.TestRequests.vision()).build(current);
         assertTrue(assembled.getMessages().getFirst().getContent().contains(current.summary().text()));
         assertEquals(22, assembled.getMessages().size());
         verify(model, times(calls)).chat(argThat(call -> {
@@ -213,7 +213,7 @@ class ContextFlowTest {
         var first = base.history().getFirst();
         var source = new VisualDtos.MessageSource(first.id(), first.seq(), first.text(), 1, 1);
         var observation = new VisualDtos.Observation("img1", "地图红点", List.of(), List.of(), List.of(), List.of(source), 1);
-        var asset = new VisualDtos.Asset("img1", "0".repeat(64), "image/png", 100, 1, 1, List.of(source), observation, List.of());
+        var asset = new VisualDtos.Asset("img1", "0".repeat(64), "image/png", 100, 1, 1, List.of(source), observation, List.of(), null);
         var history = new ArrayList<>(base.history());
         history.set(0, new HistoryMessageDto(first.role(), first.text(), first.id(),
                 List.of(ContentPartDto.text(first.text()), new ContentPartDto("image", null, "img1")),

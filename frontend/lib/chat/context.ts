@@ -42,6 +42,8 @@ export function stateSnapshot(
     memoryVersion: character.memoryVersion,
     story: session.story,
     storySources: session.storySources,
+    visualState: session.visualState,
+    visualSources: session.visualSources,
     memories: memories
       .filter(
         (m) =>

@@ -15,6 +15,7 @@ export function emptyStateResult(body: UpdateBody): StateResult {
     memoryVersion: body.context.state.memoryVersion,
     fromExclusiveSeq: body.fromExclusiveSeq,
     throughSeq: body.throughSeq,
+    visualChanges: [],
     storyChanges: [],
     memoryChanges: [],
     goalChanges: [],

@@ -39,6 +39,7 @@ public class AuxiliaryContextService {
 
     public ObjectNode background(ChatApiRequest request, String stage) throws IOException, InterruptedException {
         ObjectNode data = mapper.createObjectNode();
+        data.set("visualState", mapper.valueToTree(request.state().visualState()));
         var missing = data.putArray("missingAssets");
         for (var asset : ImageValidationService.missingAssets(request)) {
             var row = missing.addObject().put("assetId", asset.assetId())
@@ -225,6 +226,13 @@ public class AuxiliaryContextService {
             story.remove(largest);
             if (data.path("manualStoryEdits") instanceof ObjectNode edits) edits.remove(largest);
             mark(data, "story");
+            return true;
+        }
+        if (data.path("visualState") instanceof ObjectNode visual && !visual.isEmpty()) {
+            var names = new java.util.ArrayList<String>();
+            visual.fieldNames().forEachRemaining(names::add);
+            visual.remove(names.getLast());
+            mark(data, "visualState");
             return true;
         }
         if (data.path("catalog") instanceof ArrayNode catalog && !catalog.isEmpty()) {

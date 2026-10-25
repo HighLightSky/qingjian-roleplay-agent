@@ -1,3 +1,4 @@
+import { prepareChatInput } from "./model-input";
 import { database } from "../db";
 import { plainText, type Message } from "../domain";
 import type { ChatContext } from "../chat/context";
@@ -26,16 +27,23 @@ export async function buildCatalog(
   messages: Message[],
 ): Promise<{ assetCatalog: CatalogAsset[]; missingAssets: MissingAsset[] }> {
   const db = await database();
-  const [observations, usages, session] = await Promise.all([
-    db.getAllFromIndex("visualObservations", "session", sessionId),
-    db.getAllFromIndex("imageUsages", "session", sessionId),
-    db.get("sessions", sessionId),
-  ]);
+  const [observations, usages, session, generations, plans] = await Promise.all(
+    [
+      db.getAllFromIndex("visualObservations", "session", sessionId),
+      db.getAllFromIndex("imageUsages", "session", sessionId),
+      db.get("sessions", sessionId),
+      db.getAllFromIndex("sceneGenerations", "session", sessionId),
+      db.getAllFromIndex("sceneImagePlans", "session", sessionId),
+    ],
+  );
   const catalog = new Map<string, CatalogAsset | MissingAsset>();
   if (!session) throw new Error("图片目录的会话不存在。");
   async function entry(assetId: string) {
     if (!catalog.has(assetId)) {
-      const asset = await db.get("assets", assetId);
+      const storedAsset = await db.get("assets", assetId);
+      const asset = storedAsset
+        ? await prepareChatInput(storedAsset)
+        : undefined;
       const observation = observations.find((o) => o.assetId === assetId);
       catalog.set(assetId, {
         assetId,
@@ -54,6 +62,7 @@ export async function buildCatalog(
         ...(asset
           ? {
               sha256: asset.sha256,
+              sourceSha256: asset.sourceSha256,
               mimeType: asset.mimeType,
               byteSize: asset.byteSize,
               width: asset.width,
@@ -93,6 +102,37 @@ export async function buildCatalog(
       });
     }
   }
+  const messageIds = new Set(messages.map((m) => m.id));
+  for (const generation of generations.sort(
+    (a, b) =>
+      a.sourceSeq - b.sourceSeq || a.createdAt.localeCompare(b.createdAt),
+  )) {
+    if (
+      generation.status !== "succeeded" ||
+      generation.referenceStatus !== "eligible" ||
+      !messageIds.has(generation.assistantMessageId)
+    )
+      continue;
+    const plan = plans.find((p) => p.id === generation.planId);
+    if (!plan || !generation.assetId)
+      throw new Error("成功生成记录缺少计划或图片引用。");
+    const message = messages.find(
+      (m) => m.id === generation.assistantMessageId,
+    )!;
+    if (message.checkpointVersion !== generation.sourceCheckpointVersion)
+      continue;
+    (await entry(generation.assetId)).sources.push({
+      type: "scene_generation",
+      generationId: generation.id,
+      planId: plan.id,
+      target: plan.target,
+      messageId: generation.assistantMessageId,
+      seq: generation.sourceSeq,
+      sceneId: generation.sceneId,
+      summary: plan.summary,
+      rejected: false,
+    });
+  }
   const assetCatalog: CatalogAsset[] = [];
   const missingAssets: MissingAsset[] = [];
   for (const asset of catalog.values()) {
@@ -114,7 +154,7 @@ export async function warmImageCache(
   const assets = await Promise.all(
     [...ids].map(async (assetId) => ({
       assetId,
-      asset: await getOriginal(assetId),
+      asset: await prepareChatInput(await getOriginal(assetId)),
     })),
   );
   const { missing } = await apiJson<{ missing: string[] }>(
@@ -126,7 +166,7 @@ export async function warmImageCache(
     const asset = assets.find((a) => a.asset.sha256 === hash)!.asset;
     const response = await fetch(`/api/images/${hash}`, {
       method: "PUT",
-      body: asset.originalBlob,
+      body: asset.blob,
       signal,
     });
     if (!response.ok) {

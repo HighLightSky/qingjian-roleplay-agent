@@ -8,6 +8,8 @@ public final class StateValidation {
     public static final Set<String> STORY_FIELDS = Set.of("location", "storyTime", "characterState", "userState",
             "presentCharacters", "relationships", "items", "openThreads");
 
+    public static final Set<String> VISUAL_FIELDS = Set.of("outfit", "hairstyle", "accessories", "appearanceChanges");
+
     private StateValidation() {
     }
 
@@ -17,6 +19,13 @@ public final class StateValidation {
         id(s.sessionId());
         id(s.characterId());
         story(s.story());
+        visualState(s.visualState());
+        for (var entry : s.visualSources().entrySet()) {
+            if (!VISUAL_FIELDS.contains(entry.getKey())) throw new IllegalArgumentException("视觉来源字段无效");
+            origin(entry.getValue().origin());
+            date(entry.getValue().updatedAt());
+            sources(entry.getValue().sourceMessageIds());
+        }
         for (var entry : s.storySources().entrySet()) {
             if (!STORY_FIELDS.contains(entry.getKey()))
                 throw new IllegalArgumentException("剧情来源字段无效");
@@ -50,6 +59,13 @@ public final class StateValidation {
             date(g.updatedAt());
             sources(g.sourceMessageIds());
         }
+    }
+
+    public static void visualState(VisualState state) {
+        text(state.outfit());
+        text(state.hairstyle());
+        strings(state.accessories());
+        strings(state.appearanceChanges());
     }
 
     public static void story(Story s) {

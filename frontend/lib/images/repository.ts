@@ -140,6 +140,7 @@ async function getOrCreateImageAsset(
   if (existing) return existing;
   const asset: ImageAsset = {
     id: await allocateImageId(tx),
+    creationOrigin: "uploaded",
     ...info,
     mimeType: file.type,
     byteSize: file.size,

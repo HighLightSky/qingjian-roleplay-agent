@@ -313,6 +313,18 @@ export async function runStateTask(
             },
           });
         }
+        const visualState = { ...currentSession.visualState };
+        const visualSources = { ...currentSession.visualSources };
+        for (const change of result!.visualChanges) {
+          Object.assign(visualState, { [change.id]: change.value });
+          Object.assign(visualSources, {
+            [change.id]: {
+              origin: "automatic",
+              updatedAt: now(),
+              sourceMessageIds: change.sourceMessageIds,
+            },
+          });
+        }
         for (const change of result!.memoryChanges) {
           const previous = await tx.objectStore("memories").get(change.id);
           if ((previous?.version ?? 0) !== change.expectedVersion)
@@ -371,7 +383,8 @@ export async function runStateTask(
           });
         }
         const domainChanged =
-          result!.storyChanges.length +
+          result!.visualChanges.length +
+            result!.storyChanges.length +
             result!.memoryChanges.length +
             result!.goalChanges.length >
           0;
@@ -379,6 +392,8 @@ export async function runStateTask(
           ...currentSession,
           story: updatedStory,
           storySources,
+          visualState,
+          visualSources,
           stateVersion: currentSession.stateVersion + (domainChanged ? 1 : 0),
           ...(domainChanged ? { updatedAt: now() } : {}),
         });

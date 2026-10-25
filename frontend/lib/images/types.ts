@@ -3,6 +3,7 @@ export type ContentPart =
 /** id 为浏览器数据库内全局递增的 imgN，与聊天上传顺序无关。 */
 export type ImageAsset = {
   id: string;
+  creationOrigin: "uploaded" | "generated";
   sha256: string;
   mimeType: string;
   byteSize: number;
@@ -22,7 +23,18 @@ export type VisualSource =
       imageIndex: number;
       uploadIndex: number;
     }
-  | { type: "character_photo"; characterId: string; profileVersion: number };
+  | { type: "character_photo"; characterId: string; profileVersion: number }
+  | {
+      type: "scene_generation";
+      generationId: string;
+      planId: string;
+      target: Record<string, string>;
+      messageId: string;
+      seq: number;
+      sceneId: string;
+      summary: string;
+      rejected: boolean;
+    };
 export const messageSourceIds = (sources: VisualSource[]) =>
   sources.filter((s) => s.type === "message").map((s) => s.messageId);
 export const photoSources = (sources: VisualSource[]) =>
@@ -51,6 +63,7 @@ export type ImageUsage = {
   createdAt: string;
 };
 export type CatalogAsset = {
+  sourceSha256?: string;
   assetId: string;
   sha256: string;
   mimeType: string;
@@ -83,6 +96,7 @@ export type VisualContext = {
   imagePayloads: ImagePayload[];
 };
 export type Capabilities = {
+  imageGeneration: import("../scene-images/types").GenerationCapabilities;
   contextWindowTokens: number;
   outputReserveTokens: number;
   safetyTokens: number;

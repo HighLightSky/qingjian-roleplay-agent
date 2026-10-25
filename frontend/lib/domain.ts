@@ -57,6 +57,8 @@ export type Session = {
   profileVersion: number;
   story: Story;
   storySources: StorySources;
+  visualState: import("./scene-images/types").VisualState;
+  visualSources: import("./scene-images/types").VisualSources;
   stateVersion: number;
   nextMessageSeq: number;
   createdAt: string;

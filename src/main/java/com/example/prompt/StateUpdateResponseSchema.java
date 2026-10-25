@@ -57,6 +57,15 @@ final class StateUpdateResponseSchema {
         var properties = JSON.objectNode();
         properties.set("visualObservations", observations(material));
         properties.set("storyChanges", storyChanges(material));
+        var visualAlternatives = JSON.arrayNode();
+        for (boolean list : List.of(false, true)) {
+            var ids = JSON.arrayNode();
+            for (JsonNode field : material.path("editableVisualFields")) {
+                if (material.path("visualState").path(field.asText()).isArray() == list) ids.add(field.asText());
+            }
+            if (!ids.isEmpty()) visualAlternatives.add(change("update", choice(ids), list ? array(text().put("minLength", 1), ContextLimits.COLLECTION_ITEMS) : text(), false));
+        }
+        properties.set("visualChanges", alternatives(visualAlternatives, material.path("editableVisualFields").size()));
         properties.set("memoryChanges", domainChanges(material, "memories", "memoryValue"));
         properties.set("goalChanges", domainChanges(material, "goals", "goalValue"));
         var schema = object(properties);

@@ -64,7 +64,7 @@ public class ImageValidationService {
         Set<String> required = new HashSet<>(requiredIds(request));
         return catalog(request).stream().filter(a -> !required.contains(a.assetId()))
                 .filter(a -> a.observation() != null || a.sources().stream()
-                .anyMatch(s -> s instanceof MessageSource)).toList();
+                .anyMatch(s -> s instanceof MessageSource || s instanceof GenerationSource g && !g.rejected())).toList();
     }
 
     /** 校验来源与快照一致；无状态接口不认证浏览器数据库所有权。 */
@@ -85,7 +85,8 @@ public class ImageValidationService {
                 throw new IllegalArgumentException("图片目录或来源无效");
             StateValidation.collection(a.sources(), "图片来源");
             if (a instanceof Asset available) {
-                if (available.sha256() == null || !available.sha256().matches("[a-f0-9]{64}"))
+                if (available.sha256() == null || !available.sha256().matches("[a-f0-9]{64}")
+                        || !available.sourceSha256().matches("[a-f0-9]{64}"))
                     throw new IllegalArgumentException("图片哈希无效");
                 validateMetadata(available.mimeType(), available.byteSize(), available.width(), available.height());
             }
@@ -101,6 +102,21 @@ public class ImageValidationService {
                         throw new IllegalArgumentException("图片消息来源无效");
                     StateValidation.text(m.text());
                     if (firstSeq == 0) firstSeq = m.seq();
+                } else if (source instanceof GenerationSource generated) {
+                    StateValidation.id(generated.generationId());
+                    StateValidation.id(generated.planId());
+                    if (generated.target() == null) throw new IllegalArgumentException("生成图片缺少画面目标");
+                    StateValidation.collection(generated.target().entrySet(), "画面目标");
+                    generated.target().values().forEach(StateValidation::text);
+                    StateValidation.id(generated.messageId());
+                    StateValidation.id(generated.sceneId());
+                    StateValidation.nonblank(generated.summary());
+                    if (generated.seq() < 1 || generated.rejected()) throw new IllegalArgumentException("生成图片来源无效或已排除");
+                    for (var message : r.history()) {
+                        if ((message.id().equals(generated.messageId()) || message.seq() == generated.seq())
+                                && (!message.id().equals(generated.messageId()) || message.seq() != generated.seq()
+                                    || !"assistant".equals(message.role()))) throw new IllegalArgumentException("生成图片来源与历史不一致");
+                    }
                 } else if (source instanceof CharacterPhotoSource photo) {
                     photoSources++;
                     hasPhoto = true;

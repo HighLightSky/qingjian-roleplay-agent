@@ -66,7 +66,7 @@ public final class SelectionFixtures {
 
     private static Asset asset(Payload payload, List<Source> sources, Observation observation) {
         return new Asset(payload.assetId(), payload.sha256(), "image/png", Base64.getDecoder()
-                .decode(payload.dataUrl().substring(payload.dataUrl().indexOf(',') + 1)).length, 32, 32, sources, observation, List.of());
+                .decode(payload.dataUrl().substring(payload.dataUrl().indexOf(',') + 1)).length, 32, 32, sources, observation, List.of(), null);
     }
 
     private static Payload image(String id, Color color) throws Exception {

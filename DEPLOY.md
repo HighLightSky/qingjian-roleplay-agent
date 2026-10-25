@@ -74,3 +74,11 @@ ss -ltn | grep -E ':(443|3000|8080)\b' || echo "已全部关闭"
 ```
 
 如果配置是直接放到 `/etc/nginx/conf.d/roleplay.conf`，第 1 步改为 `sudo rm /etc/nginx/conf.d/roleplay.conf` 后再 reload。服务在 tmux 会话中运行时，也可以直接在该会话按 `Ctrl-C`。
+
+## 剧情图服务
+
+后端设置 `IMAGE_SERVICE_BASE_URL`（默认内网 HTTPS 地址）和 `IMAGE_SERVICE_API_TOKEN`。Token 只配置在后端；未配置时聊天正常，生图按钮会提示未启用。使用自签证书时，将服务证书导入 JVM 信任库并配置 `JAVA_TOOL_OPTIONS`，不能关闭 TLS 校验。
+
+远端代理必须放行 `/api/image/edit/{task_id}/cancel`，且该路由不占用生成连接配额。应用停止按钮使用另一条连接发送取消，原生成连接继续等待 `409 TASK_CANCELLED`；收到 `202` 时仍显示取消中。
+
+浏览器关闭不停止后台生成，任务结果默认保留两小时。后端重启不保留在途任务与临时结果。升级前先在旧版“完整备份 → 导出全部”保存浏览器数据，按 `docs/15-剧情图开发与数据迁移计划.md` 同步发布前后端。不要用旧前端打开升级后的 v9 库。

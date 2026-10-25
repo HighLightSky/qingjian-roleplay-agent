@@ -12,6 +12,9 @@ export type DispatchStage = {
   plan?: ImagePlan | null;
 };
 export type DispatchSnapshot = {
+  imagePrompt: string;
+  scenePlan: import("../scene-images/types").SceneImagePlan | null;
+  imagePromptError: string | null;
   runId: string;
   revision: number;
   segments: Segment[];
@@ -116,6 +119,11 @@ export async function followDispatch(
           if (value.name === "selection" && value.plan)
             snapshot.plan = value.plan;
         }
+        if (event.name === "image_prompt_delta")
+          snapshot.imagePrompt = (snapshot.imagePrompt ?? "") + value;
+        if (event.name === "image_prompt_done") snapshot.scenePlan = value;
+        if (event.name === "image_prompt_error")
+          snapshot.imagePromptError = value;
         if (event.name === "body_done") snapshot.body = value;
         if (event.name === "state_result") snapshot.state = value;
         if (event.name === "done")

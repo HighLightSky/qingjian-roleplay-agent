@@ -1,4 +1,5 @@
 "use client";
+import { SceneImageCard } from "@/components/chat/scene-image-card";
 import { MessageEditComposer } from "@/components/chat/message-edit";
 import { MessageCopyAction } from "@/components/chat/message-copy";
 import { failedTurn } from "@/lib/chat/edit";
@@ -701,6 +702,7 @@ const AssistantMessage: FC = () => {
         <MessageError />
       </div>
 
+      <SceneImageCard />
       {showFooter && (
         <div
           data-slot="aui_assistant-message-footer"

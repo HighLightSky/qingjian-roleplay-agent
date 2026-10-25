@@ -34,6 +34,7 @@ function asset(index: number): ImageAsset {
     height: 1,
     displayName: `照片${index}.png`,
     byteSize: originalBlob.size,
+    creationOrigin: "uploaded",
     originalBlob,
     thumbnailBlob: new Blob([`缩略图${index}`]),
     createdAt: now(),

@@ -128,6 +128,9 @@ public class VisualSelectionService {
         var sources = row.putArray("sources");
         for (Source source : asset.sources()) {
             if (source instanceof CharacterPhotoSource) sources.addObject().put("type", "character_photo");
+            else if (source instanceof GenerationSource generated)
+                sources.addObject().put("type", "scene_generation").put("seq", generated.seq())
+                        .put("summary", generated.summary()).put("descriptionSource", "生成要求，未核实");
             else if (source instanceof MessageSource message)
                 sources.addObject().put("type", "message").put("seq", message.seq()).put("text", message.text())
                         .put("imageIndex", message.imageIndex()).put("uploadIndex", message.uploadIndex());

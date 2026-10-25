@@ -343,3 +343,32 @@ test("整轮发送登记任务失败时不会单独补写完整正文终态", as
     IDBObjectStore.prototype.put = put;
   }
 });
+
+test("整理提交明确换装到视觉状态，并保留消息证据与正常剧情状态", async () => {
+  const { session, task } = await setup();
+  const model = withModel((body) => ({
+    ...emptyStateResult(body),
+    visualChanges: [
+      {
+        action: "update",
+        id: "outfit",
+        expectedVersion: body.context.state.sessionVersion,
+        before: "",
+        value: "红裙",
+        reason: "正文明确完成换装",
+        sourceMessageIds: [body.messages.at(-1)!.id],
+      },
+    ],
+  }));
+  try {
+    await runStateTask(task, new AbortController().signal, commit, changed);
+    const current = (await (await database()).get("sessions", session.id))!;
+    assert.equal(current.visualState.outfit, "红裙");
+    assert.equal(current.visualSources.outfit?.origin, "automatic");
+    assert.equal(current.stateVersion, session.stateVersion + 1);
+    assert.deepEqual(current.story, session.story);
+    assert.equal(current.visualSources.outfit?.sourceMessageIds.length, 1);
+  } finally {
+    model.restore();
+  }
+});

@@ -28,15 +28,16 @@ public class CompactionPromptBuilder {
         int through = batch.getLast().seq();
         var assets = context.visual() == null ? List.of() : context.visual().assetCatalog().stream()
                 .filter(a -> a.sources().stream().anyMatch(s -> s instanceof CharacterPhotoSource ||
-                        s instanceof MessageSource m && m.seq() <= through)).toList();
+                        s instanceof MessageSource m && m.seq() <= through || s instanceof com.example.web.dto.VisualDtos.GenerationSource g && g.seq() <= through)).toList();
         material.set("visualObservations", mapper.valueToTree(assets));
         material.set("missingAssets", mapper.valueToTree(com.example.service.ImageValidationService.missingAssets(context).stream()
                 .filter(a -> a.sources().stream().anyMatch(s -> s instanceof CharacterPhotoSource ||
-                        s instanceof MessageSource m && m.seq() <= through)).toList()));
+                        s instanceof MessageSource m && m.seq() <= through || s instanceof com.example.web.dto.VisualDtos.GenerationSource g && g.seq() <= through)).toList()));
         String rules = """
                 你是角色对话历史摘要器。仅压缩已提供的旧摘要和消息，不生成新剧情。
                 合并保留重要人物、事件因果、关系变化、承诺、用户选择、未解决线索和不确定性。
                 不将计划、推测或未完成回复补写为已经发生的事实。保持早期仍有用的信息，不只总结最后一轮。
+                scene_generation 描述来自生成要求，未核实，不需要补做看图、不虚构 observation 或版本，不能作为剧情事件依据。
                 图片观察是有损记录，完整保留每个视觉记录的 assetId（如 img1、img10，不能改写编号）和 observation.version，不能声称看过未提供的原图。
                 实际附带的原图可以直接观察，保留其 assetId、消息来源及不确定性；没有 observation 的图片不能虚构观察版本。
                 missingAssets 中的原件缺失，已跳过，本次无法复核，已有观察仅为有损记录，不能编造图片内容。

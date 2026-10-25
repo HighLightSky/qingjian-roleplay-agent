@@ -90,6 +90,19 @@ export function validateSnapshot(
   integer(value.sessionVersion);
   integer(value.memoryVersion);
   validateStory(value.story);
+  object(value.visualState);
+  string(value.visualState.outfit);
+  string(value.visualState.hairstyle);
+  strings(value.visualState.accessories);
+  strings(value.visualState.appearanceChanges);
+  object(value.visualSources);
+  for (const [key, source] of Object.entries(value.visualSources)) {
+    choice(key, ["outfit", "hairstyle", "accessories", "appearanceChanges"]);
+    object(source);
+    choice(source.origin, ["manual", "automatic"]);
+    date(source.updatedAt);
+    sourceIds(source.sourceMessageIds);
+  }
   object(value.storySources);
   for (const [key, source] of Object.entries(value.storySources)) {
     choice(key, Object.keys(STORY_LABELS));
@@ -149,6 +162,7 @@ export function validateStateResult(
     ["storyChanges", Object.keys(STORY_LABELS).length],
     ["memoryChanges", 10000],
     ["goalChanges", 10000],
+    ["visualChanges", 4],
   ] as const) {
     const changes = value[field];
     array(changes, max);
@@ -171,25 +185,39 @@ export function validateStateResult(
       if (
         c.action === "update" &&
         (c.before === null ||
-          (field !== "storyChanges" && c.expectedVersion === 0))
+          (!["storyChanges", "visualChanges"].includes(field) &&
+            c.expectedVersion === 0))
       )
         throw new Error("修改领域项的版本或原值无效。");
       const check = (v: unknown) => {
         if (field === "memoryChanges") validateMemoryValue(v);
         else if (field === "goalChanges") validateGoalValue(v);
         else {
-          choice(c.id, Object.keys(STORY_LABELS));
-          if (STORY_TEXT_FIELDS.includes(c.id as string)) string(v);
+          choice(
+            c.id,
+            field === "visualChanges"
+              ? ["outfit", "hairstyle", "accessories", "appearanceChanges"]
+              : Object.keys(STORY_LABELS),
+          );
+          if (
+            [...STORY_TEXT_FIELDS, "outfit", "hairstyle"].includes(
+              c.id as string,
+            )
+          )
+            string(v);
           else strings(v);
         }
       };
       check(c.value);
       if (c.before !== null) check(c.before);
-      if (field === "storyChanges" && c.action !== "update")
+      if (
+        ["storyChanges", "visualChanges"].includes(field) &&
+        c.action !== "update"
+      )
         throw new Error("剧情只能更新已有字段。");
     }
   }
-  array(value.visualObservations, 4);
+  array(value.visualObservations, 10000);
   for (const o of value.visualObservations) {
     object(o);
     assertImageId(o.assetId);
@@ -220,11 +248,24 @@ export function validateVisualSources(
       string(source.characterId, 200);
       if (!source.characterId) throw new Error("角色照片来源 ID 不能为空。");
       integer(source.profileVersion, 1);
+    } else if (source.type === "scene_generation") {
+      string(source.generationId, 200);
+      string(source.planId, 200);
+      object(source.target);
+      Object.values(source.target).forEach((v) => string(v));
+      string(source.messageId, 200);
+      string(source.sceneId, 200);
+      integer(source.seq, 1);
+      string(source.summary);
+      if (typeof source.rejected !== "boolean")
+        throw new Error("生成来源有效性缺失。");
     } else throw new Error("视觉来源类型无效。");
     const key =
       source.type === "message"
         ? `message:${source.messageId}:${source.imageIndex}`
-        : "character_photo";
+        : source.type === "scene_generation"
+          ? `generation:${source.generationId}`
+          : "character_photo";
     if (keys.has(key)) throw new Error("视觉来源重复。");
     keys.add(key);
   }

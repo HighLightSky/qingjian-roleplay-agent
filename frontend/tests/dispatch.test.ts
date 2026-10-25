@@ -80,6 +80,9 @@ const sse = (events: [string, unknown][]) =>
 function snapshot(runId: string, terminal: boolean): DispatchSnapshot {
   return {
     runId,
+    imagePrompt: "",
+    scenePlan: null,
+    imagePromptError: null,
     revision: 1,
     segments: [{ kind: "dialogue", text: "先说" }],
     stages: {},
@@ -109,6 +112,9 @@ test("断流后只恢复订阅，完整快照替换旧正文，不重复提交�
             "snapshot",
             {
               ...snapshot("run", true),
+              imagePrompt: "",
+              scenePlan: null,
+              imagePromptError: null,
               revision: 4,
               segments: [{ kind: "dialogue", text: "先说，然后继续" }],
             },
@@ -133,6 +139,9 @@ test("恢复边界重复序号不再次追加，拆分 UTF-8 正文完整保留"
   const initial = snapshot("run", false);
   const terminal = {
     ...snapshot("run", true),
+    imagePrompt: "",
+    scenePlan: null,
+    imagePromptError: null,
     revision: 3,
     segments: [{ kind: "dialogue", text: "先说你好🌱" }],
   };

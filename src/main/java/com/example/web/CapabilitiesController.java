@@ -14,11 +14,13 @@ public class CapabilitiesController {
     private final VisionProperties properties;
     private final ContextProperties context;
     private final LlmProperties llm;
+    private final com.example.config.ImageGenerationProperties generation;
 
-    public CapabilitiesController(VisionProperties properties, ContextProperties context, LlmProperties llm) {
+    public CapabilitiesController(VisionProperties properties, ContextProperties context, LlmProperties llm, com.example.config.ImageGenerationProperties generation) {
         this.properties = properties;
         this.context = context;
         this.llm = llm;
+        this.generation = generation;
     }
 
     @GetMapping("/api/capabilities")
@@ -34,6 +36,13 @@ public class CapabilitiesController {
         result.put("compactionTargetRatio", context.compactionTargetRatio());
         result.put("retainedTurns", context.retainedTurns());
         result.put("compactionMaxBatches", context.compactionMaxBatches());
+        result.put("imageGeneration", Map.ofEntries(
+                Map.entry("enabled", !generation.apiToken().isBlank()),
+                Map.entry("maxImageBytes", generation.maxImageBytes()), Map.entry("maxPixels", generation.maxPixels()),
+                Map.entry("maxEdge", generation.maxEdge()), Map.entry("maxTotalPixels", generation.maxTotalPixels()),
+                Map.entry("maxRequestBytes", generation.maxRequestBytes()), Map.entry("maxPromptCharacters", generation.maxPromptCharacters()),
+                Map.entry("maxOutputBytes", generation.maxOutputBytes()), Map.entry("maxOutputPixels", generation.maxOutputPixels()),
+                Map.entry("referenceMaxEdge", generation.referenceMaxEdge()), Map.entry("referenceJpegQuality", generation.referenceJpegQuality())));
         return result;
     }
 }
