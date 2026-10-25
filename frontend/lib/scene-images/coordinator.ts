@@ -1,5 +1,5 @@
 import { database, atomic } from "../db";
-import { now } from "../domain";
+import { id, now } from "../domain";
 import type { Commit, ImageAsset } from "../images/types";
 import { allocateImageId } from "../images/ids";
 import { capabilities, validateImageBlob } from "../images/repository";
@@ -113,7 +113,7 @@ export async function startSceneGeneration(planId: string, commit: Commit) {
   }
   const previous = generations.filter((g) => g.planId === plan.id).at(-1);
   const generation: SceneGeneration = {
-    id: crypto.randomUUID(),
+    id: id(),
     sessionId: plan.sessionId,
     planId: plan.id,
     assistantMessageId: plan.assistantMessageId,
