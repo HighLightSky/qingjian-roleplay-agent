@@ -15,6 +15,7 @@
 /.next/
 /.next-e2e/
 /.next-style-e2e/
+/.next-reasoning-build/
 /out/
 
 # production

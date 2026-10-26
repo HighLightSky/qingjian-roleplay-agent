@@ -31,7 +31,7 @@ public class CapabilitiesController {
                 "maxImageBytes", properties.getMaxImageBytes(), "maxPixels", properties.getMaxPixels(),
                 "maxRequestBytes", ImageValidationService.MAX_REQUEST_BYTES));
         result.put("contextWindowTokens", context.contextWindowTokens());
-        result.put("outputReserveTokens", llm.maxTokens());
+        result.put("outputReserveTokens", llm.generationMaxTokens());
         result.put("safetyTokens", context.safetyTokens());
         result.put("compactionTriggerRatio", context.compactionTriggerRatio());
         result.put("compactionTargetRatio", context.compactionTargetRatio());

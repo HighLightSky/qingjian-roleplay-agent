@@ -65,7 +65,22 @@ export type Session = {
   updatedAt: string;
 };
 export type Segment = { kind: "dialogue" | "narration"; text: string };
+export type ReasoningTrace = {
+  text: string;
+  status: "streaming" | "complete" | "cancelled" | "error";
+  startedAt: number;
+  endedAt: number | null;
+};
+export function finishReasoning(
+  reasoning: ReasoningTrace | undefined,
+  status: "cancelled" | "error",
+): ReasoningTrace | undefined {
+  return reasoning?.status === "streaming"
+    ? { ...reasoning, status, endedAt: Date.now() }
+    : reasoning;
+}
 export type Message = {
+  reasoning?: ReasoningTrace;
   usage?: TokenUsage;
   id: string;
   sessionId: string;

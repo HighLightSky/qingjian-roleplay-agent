@@ -13,6 +13,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import com.example.config.DispatchProperties;
 import com.example.config.LlmProperties;
 import com.example.llm.model.ChatStreamResult;
+import com.example.llm.model.StreamDelta;
 import com.example.web.dto.*;
 import com.example.web.dto.DispatchDtos.*;
 import com.example.web.dto.StateDtos.*;
@@ -100,8 +101,6 @@ public class ChatDispatchService {
                 task.finish();
             }
         });
-        task.deadline = scheduler.schedule(() -> task.cancel("后台生成超时：超过全流程时间限制"),
-                config.taskTimeoutSeconds(), TimeUnit.SECONDS);
         task.worker.start();
         return emitter;
     }
@@ -192,7 +191,8 @@ public class ChatDispatchService {
         Result result;
         volatile Thread worker;
         volatile UpstreamCancellation cancellation;
-        ScheduledFuture<?> deadline;
+        DispatchDtos.ReasoningTrace reasoning;
+        boolean bodyStarted;
 
         Task(String id) {
             this.id = id;
@@ -200,7 +200,7 @@ public class ChatDispatchService {
 
         synchronized DispatchDtos.Snapshot snapshot() {
             return new DispatchDtos.Snapshot(id, revision, List.copyOf(segments), Map.copyOf(stages), budget, plan,
-                    body, result, terminal, error);
+                    body, result, reasoning, terminal, error);
         }
 
         synchronized SseEmitter subscribe() {
@@ -248,13 +248,10 @@ public class ChatDispatchService {
                     synchronized (this) {
                         segments.add(delta);
                         try {
-                            if (mapper.writeValueAsBytes(snapshot()).length > config.resultCacheBytes()
-                                    / config.maxResults()) {
-                                segments.removeLast();
-                                throw new IllegalArgumentException("单个任务结果超过缓存资源上限");
-                            }
-                        } catch (IOException e) {
-                            throw new IllegalStateException("生成结果无法序列化", e);
+                            requireResultCapacity();
+                        } catch (RuntimeException e) {
+                            segments.removeLast();
+                            throw e;
                         }
                         emit("delta", delta);
                     }
@@ -263,8 +260,9 @@ public class ChatDispatchService {
                         budget = value;
                         emit("context", value);
                     }
-                });
+                }, this::modelDelta);
                 synchronized (this) {
+                    finishReasoning("stop".equals(generated.finishReason()) ? "complete" : "error");
                     body = generated;
                     emit("body_done", generated);
                 }
@@ -313,12 +311,50 @@ public class ChatDispatchService {
             } catch (Exception e) {
                 synchronized (this) {
                     error = cancelled ? error : e.toString();
+                    finishReasoning(cancelled ? "cancelled" : "error");
                     stage(phase, cancelled ? "cancelled" : "failed", error);
                     if (!cancelled)
                         log.error("后台生成失败：任务={}，阶段={}，异常类型={}", id, phase, e.getClass().getName());
                 }
                 if (e instanceof InterruptedException)
                     Thread.currentThread().interrupt();
+            }
+        }
+
+        private synchronized void modelDelta(StreamDelta delta) {
+            checkCancelled();
+            if (!delta.reasoningContent().isEmpty()) {
+                if (bodyStarted) throw new IllegalArgumentException("模型在正文开始后继续返回思考，输出顺序无效");
+                var previous = reasoning;
+                long startedAt = previous == null ? clock.millis() : previous.startedAt();
+                String text = (previous == null ? "" : previous.text()) + delta.reasoningContent();
+                reasoning = new DispatchDtos.ReasoningTrace(text, "streaming", startedAt, null);
+                try {
+                    requireResultCapacity();
+                } catch (RuntimeException e) {
+                    reasoning = previous;
+                    throw e;
+                }
+                emit("reasoning", new DispatchDtos.ReasoningEvent(delta.reasoningContent(), "streaming", startedAt, null));
+            }
+            if (!delta.content().isEmpty()) {
+                bodyStarted = true;
+                finishReasoning("complete");
+            }
+        }
+
+        private void finishReasoning(String status) {
+            if (reasoning == null || !"streaming".equals(reasoning.status())) return;
+            reasoning = new DispatchDtos.ReasoningTrace(reasoning.text(), status, reasoning.startedAt(), clock.millis());
+            emit("reasoning", new DispatchDtos.ReasoningEvent("", status, reasoning.startedAt(), reasoning.endedAt()));
+        }
+
+        private void requireResultCapacity() {
+            try {
+                if (mapper.writeValueAsBytes(snapshot()).length > config.resultCacheBytes() / config.maxResults())
+                    throw new IllegalArgumentException("单个任务结果超过缓存资源上限");
+            } catch (IOException e) {
+                throw new IllegalStateException("生成结果无法序列化", e);
             }
         }
 
@@ -369,13 +405,10 @@ public class ChatDispatchService {
         synchronized void finish() {
             terminal = true;
             finishedAt = clock.millis();
-            if (deadline != null)
-                deadline.cancel(false);
             emit("done", snapshot());
             subscribers.clear();
             cancellation = null;
             worker = null;
-            deadline = null;
         }
     }
 

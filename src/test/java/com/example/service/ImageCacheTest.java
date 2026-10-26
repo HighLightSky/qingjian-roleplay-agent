@@ -36,8 +36,7 @@ class ImageCacheTest {
         var config = TestRequests.dispatch();
         byte[] bytes = image(10), other = image(11);
         String hash = ImageValidationService.sha256(bytes);
-        var small = new DispatchProperties(Math.max(bytes.length, other.length), config.imageIdleSeconds(), config.imageLifetimeSeconds(),
-                config.taskTimeoutSeconds(), config.resultRetentionSeconds(), config.maxResults(),
+        var small = new DispatchProperties(Math.max(bytes.length, other.length), config.imageIdleSeconds(), config.imageLifetimeSeconds(), 300, config.resultRetentionSeconds(), config.maxResults(),
                 config.resultCacheBytes(), config.cleanupSeconds(), config.selectionOutputTokens(), config.stateOutputTokens());
         var cache = new ImageCache(small, com.example.TestRequests.vision(), new MutableClock());
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
@@ -116,7 +115,7 @@ class ImageCacheTest {
     @Test void lruEvictsOnlyUnpinnedImagesAndFullPinnedCacheRejectsAdmission() throws Exception {
         var clock = new MutableClock(); byte[] one = image(1), two = image(2);
         var defaults = TestRequests.dispatch();
-        var small = new DispatchProperties(Math.max(one.length, two.length), 1800, 7200, 600, 7200, 32, 67108864, 60, 4096, 8192);
+        var small = new DispatchProperties(Math.max(one.length, two.length), 1800, 7200, 300, 7200, 32, 67108864, 60, 4096, 8192);
         var cache = new ImageCache(small, com.example.TestRequests.vision(), clock);
         String a = ImageValidationService.sha256(one), b = ImageValidationService.sha256(two);
         cache.put(a, one);

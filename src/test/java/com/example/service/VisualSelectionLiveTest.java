@@ -16,6 +16,7 @@ import com.example.TestRequests;
 import com.example.config.*;
 import com.example.llm.*;
 import com.example.llm.model.*;
+import com.example.llm.model.StreamDelta;
 import com.example.prompt.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -28,7 +29,7 @@ class VisualSelectionLiveTest {
             SelectionFixtures.Photo photo) throws Exception {
         var mapper = new ObjectMapper();
         var llm = new LlmProperties(System.getenv().getOrDefault("LLM_BASE_URL", "https://10.21.16.197/v1/chat/completions"),
-                System.getenv().getOrDefault("LLM_API_KEY", "llama"), System.getenv().getOrDefault("LLM_MODEL", "Qwen3.8-27B"), .8, 8192, 45);
+                System.getenv().getOrDefault("LLM_API_KEY", "llama"), System.getenv().getOrDefault("LLM_MODEL", "Qwen3.8-27B"), .8, 8192, 45, 60, 2048, 32);
         var requests = new LlmRequestMapper(mapper, llm);
         var scenario = SelectionFixtures.scenario(history, photo);
         var context = scenario.context();
@@ -41,7 +42,7 @@ class VisualSelectionLiveTest {
             var counter = new LlamaTokenCounter(http, mapper, requests, llm, TestRequests.contextProperties());
             var materials = new AuxiliaryContextService(mapper, counter, TestRequests.contextProperties(),
                     new AuxiliaryContextProperties(4, 8192, 8192, 32768, 32768, 2048, 2048));
-            var real = new OpenAiClient(http, mapper, llm.baseUrl(), llm.apiKey(), Duration.ofSeconds(45), requests);
+            var real = new OpenAiClient(http, mapper, llm.baseUrl(), llm.apiKey(), Duration.ofSeconds(45), Duration.ofSeconds(5), requests);
             var calls = new ArrayList<ChatRequest>();
             var usage = new ArrayList<TokenUsage>();
             LLMClient observed = new LLMClient() {
@@ -56,7 +57,7 @@ class VisualSelectionLiveTest {
                     usage.add(response.getUsage());
                     return response;
                 }
-                @Override public ChatStreamResult chatStream(ChatRequest request, Consumer<String> delta)
+                @Override public ChatStreamResult chatStream(ChatRequest request, Consumer<StreamDelta> delta)
                         throws java.io.IOException, InterruptedException {
                     return real.chatStream(request, delta);
                 }

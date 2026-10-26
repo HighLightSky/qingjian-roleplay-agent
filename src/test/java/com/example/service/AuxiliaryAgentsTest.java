@@ -43,7 +43,7 @@ class AuxiliaryAgentsTest {
     }
 
     private TokenCount count(ChatRequest request) throws Exception {
-        var serializer = new LlmRequestMapper(mapper, new LlmProperties("", "", "test", .8, 8192, 120));
+        var serializer = new LlmRequestMapper(mapper, new LlmProperties("", "", "test", .8, 8192, 120, 60, 2048, 32));
         String text = serializer.messages(request).toString();
         return new TokenCount(text.codePointCount(0, text.length()), "exact", "test", "fingerprint");
     }
@@ -133,6 +133,7 @@ class AuxiliaryAgentsTest {
         stateService(32768).update(request(context(4, 5, withGoal("早期因果")), "新的关注点是码头。"));
         var calls = ArgumentCaptor.forClass(ChatRequest.class);
         verify(model, times(2)).chat(calls.capture());
+        assertTrue(calls.getAllValues().stream().allMatch(call -> java.time.Duration.ofSeconds(300).equals(call.getTimeout())));
         assertEquals(material(calls.getAllValues().getFirst()).path("goals"), material(calls.getAllValues().getLast()).path("goals"));
         assertTrue(calls.getAllValues().getLast().getMessages().getLast().getContent().contains("类型错误"));
         when(model.chat(any())).thenReturn(new ChatResponse(invalid.replace("mem1", "goal99"), "stop", TokenUsage.unavailable()));
@@ -317,7 +318,7 @@ class AuxiliaryAgentsTest {
         actual.addAll(ImageValidationService.requiredIds(context));
         var payloads = scenario.images().stream().filter(p -> actual.contains(p.assetId())).toList();
         var prepared = ChatDispatchService.withImages(context, plan, payloads);
-        var body = new PromptBuilder(new LlmProperties("", "", "test", .8, 8192, 120), com.example.TestRequests.vision()).build(prepared);
+        var body = new PromptBuilder(new LlmProperties("", "", "test", .8, 8192, 120, 60, 2048, 32), com.example.TestRequests.vision()).build(prepared);
         long originals = body.getMessages().stream().filter(m -> m.getParts() != null).flatMap(m -> m.getParts().stream())
                 .filter(p -> "image_url".equals(p.type())).count();
         assertEquals(actual.size(), originals);

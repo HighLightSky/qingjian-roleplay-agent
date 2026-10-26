@@ -23,7 +23,7 @@ import com.example.web.dto.InteractionSettingsDto.NarrativeMode;
 import com.example.web.dto.InteractionSettingsDto.ReplyLength;
 
 class PromptBuilderTest {
-    private final PromptBuilder builder = new PromptBuilder(new LlmProperties("", "", "", 0.8, 8192, 120), com.example.TestRequests.vision());
+    private final PromptBuilder builder = new PromptBuilder(new LlmProperties("", "", "", 0.8, 8192, 120, 60, 2048, 32), com.example.TestRequests.vision());
 
     static Stream<Arguments> combinations() {
         return Arrays.stream(ReplyLength.values()).flatMap(length ->
@@ -66,7 +66,7 @@ class PromptBuilderTest {
         assertTrue(system.contains("用户带来了一张地图。"));
         assertEquals(List.of("system", "assistant", "user"), request.getMessages().stream().map(m -> m.getRole()).toList());
         assertEquals("我把地图递给她，让她看看", request.getMessages().getLast().getContent());
-        assertEquals(8192, request.getMaxTokens());
+        assertEquals(10272, request.getMaxTokens());
         assertEquals(0.8, request.getTemperature());
     }
 

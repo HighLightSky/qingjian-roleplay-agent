@@ -1,4 +1,4 @@
-import type { Segment } from "../domain";
+import type { Segment, ReasoningTrace } from "../domain";
 import type { ChatContext } from "./context";
 import type { ContextBudget, TokenUsage } from "../context/types";
 import type { ImagePlan } from "../images/types";
@@ -15,6 +15,7 @@ export type DispatchSnapshot = {
   runId: string;
   revision: number;
   segments: Segment[];
+  reasoning?: ReasoningTrace | null;
   stages: Record<string, DispatchStage>;
   budget: ContextBudget | null;
   plan: ImagePlan | null;
@@ -110,6 +111,13 @@ export async function followDispatch(
         const value = wire.value;
         if (event.name === "delta")
           snapshot.segments = append(snapshot.segments, value);
+        if (event.name === "reasoning")
+          snapshot.reasoning = {
+            text: (snapshot.reasoning?.text ?? "") + value.delta,
+            status: value.status,
+            startedAt: value.startedAt,
+            endedAt: value.endedAt,
+          };
         if (event.name === "context") snapshot.budget = value;
         if (event.name === "stage") {
           snapshot.stages = { ...snapshot.stages, [value.name]: value };

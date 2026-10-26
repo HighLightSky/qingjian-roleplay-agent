@@ -71,6 +71,7 @@ public class LlamaTokenCounter {
     private ChatRequest textRequest(ChatRequest original, List<Message> messages) {
         var request = new ChatRequest(messages, original.getMaxTokens(), original.getTemperature(), original.isThinkingEnabled());
         request.setResponseSchema(original.getResponseSchema());
+        request.setReasoningBudgetTokens(original.getReasoningBudgetTokens());
         return request;
     }
 

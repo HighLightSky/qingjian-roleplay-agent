@@ -63,7 +63,7 @@ class ContextFlowTest {
         server.start();
         http = HttpClient.newHttpClient();
         var llm = new LlmProperties("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/chat/completions",
-                "test", "test-model", .8, 1000, 5);
+                "test", "test-model", .8, 1000, 5, 60, 2048, 32);
         var requests = new LlmRequestMapper(mapper, llm);
         counter = new LlamaTokenCounter(http, mapper, requests, llm, properties);
         var prompts = new PromptBuilder(llm, com.example.TestRequests.vision());
@@ -105,7 +105,7 @@ class ContextFlowTest {
         var bytes = new ByteArrayOutputStream();
         ImageIO.write(new BufferedImage(32, 32, BufferedImage.TYPE_INT_RGB), "png", bytes);
         String image = "data:image/png;base64," + Base64.getEncoder().encodeToString(bytes.toByteArray());
-        var llm = new LlmProperties("", "", "test", .8, 1000, 5);
+        var llm = new LlmProperties("", "", "test", .8, 1000, 5, 60, 2048, 32);
         var requests = new LlmRequestMapper(mapper, llm);
         for (boolean thinking : List.of(false, true)) {
             var request = new ChatRequest(List.of(new Message("user", List.of(Message.Part.text("地图"), Message.Part.image(image)))),
@@ -148,7 +148,7 @@ class ContextFlowTest {
         assertTrue(calls > 1);
         assertEquals(60, current.summary().throughSeq());
         assertEquals(original.history().subList(60, 80), current.history());
-        var assembled = new PromptBuilder(new LlmProperties("", "", "test", .8, 1000, 5), com.example.TestRequests.vision()).build(current);
+        var assembled = new PromptBuilder(new LlmProperties("", "", "test", .8, 1000, 5, 60, 2048, 32), com.example.TestRequests.vision()).build(current);
         assertTrue(assembled.getMessages().getFirst().getContent().contains(current.summary().text()));
         assertEquals(22, assembled.getMessages().size());
         verify(model, times(calls)).chat(argThat(call -> {
@@ -190,6 +190,7 @@ class ContextFlowTest {
         var context = new ChatApiRequest(base.character(), base.state(), base.summary(), history, base.input(),
                 base.interactionSettings(), new VisualDtos.Context("session", List.of(), null, List.of(), List.of(missing)), base.operationId());
         var preview = budgets.inspect(new BudgetRequest(context, "preview", List.of()));
+        assertEquals(3080, preview.outputReserveTokens());
         assertEquals("exact", preview.accuracy());
         assertFalse(lastTemplate.contains("image_url"));
         var plan = new VisualDtos.Plan("ready", List.of(new VisualDtos.Selected("img1", "核对")), List.of(), "", "fp", "op");

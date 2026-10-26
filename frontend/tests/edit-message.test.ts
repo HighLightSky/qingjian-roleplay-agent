@@ -48,7 +48,17 @@ async function setup() {
   const turn = await beginTurn(session.id, "原消息");
   await (
     await database()
-  ).put("messages", { ...turn.assistant, status: "error", error: "模型失败" });
+  ).put("messages", {
+    ...turn.assistant,
+    status: "error",
+    error: "模型失败",
+    reasoning: {
+      text: "旧的思考",
+      status: "error",
+      startedAt: 1000,
+      endedAt: 2000,
+    },
+  });
   await (
     await database()
   ).put("drafts", {
@@ -106,6 +116,7 @@ test("重发事务只替换最近失败轮，清除旧尝试并保留历史压�
   assert.equal(result.user.checkpointVersion, user.checkpointVersion + 1);
   assert.equal(result.assistant.status, "pending");
   assert.deepEqual(result.assistant.segments, []);
+  assert.equal(result.assistant.reasoning, undefined);
   assert.equal((await allMessages(session.id)).length, 2);
   assert.equal((await db.get("drafts", session.id))!.text, "下一轮草稿");
   assert.equal(

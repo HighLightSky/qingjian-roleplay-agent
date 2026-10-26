@@ -64,8 +64,10 @@ public class PromptBuilder {
         appendVisualContext(systemPrompt, messages, references, request, includeImages);
         messages.addFirst(new Message("system", systemPrompt.toString()));
 
-        return new ChatRequest(
-                messages, llmProperties.maxTokens(), llmProperties.temperature(), true);
+        var modelRequest = new ChatRequest(
+                messages, llmProperties.generationMaxTokens(), llmProperties.temperature(), true);
+        modelRequest.setReasoningBudgetTokens(llmProperties.reasoningBudgetTokens());
+        return modelRequest;
     }
 
     /**

@@ -34,6 +34,7 @@ import { imageIds } from "./images/types";
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import {
   id,
+  finishReasoning,
   now,
   profileOf,
   parseCharacterProfile,
@@ -264,6 +265,7 @@ export async function recoverInterrupted() {
       await tx.objectStore("messages").put({
         ...message,
         status: "interrupted",
+        reasoning: finishReasoning(message.reasoning, "error"),
         error: "上次生成中断，已保留保存的内容。",
         updatedAt: now(),
       });

@@ -31,7 +31,7 @@ public class LlmConfig {
             ObjectMapper objectMapper,
             LlmProperties properties,
             LlmRequestMapper requests, ContextProperties context, DispatchProperties dispatch) {
-        if (properties.maxTokens() < 1 || properties.maxTokens() + (long) context.safetyTokens() >= context.contextWindowTokens())
+        if (properties.generationMaxTokens() + (long) context.safetyTokens() >= context.contextWindowTokens())
             throw new IllegalArgumentException("正文输出预留必须小于配置的上下文窗口");
 
         if (Math.max(dispatch.selectionOutputTokens(), dispatch.stateOutputTokens()) + (long) context.safetyTokens()
@@ -42,6 +42,7 @@ public class LlmConfig {
                 objectMapper,
                 properties.baseUrl(),
                 properties.apiKey(),
-                Duration.ofSeconds(properties.timeoutSeconds()), requests);
+                Duration.ofSeconds(properties.timeoutSeconds()),
+                Duration.ofSeconds(properties.firstTokenTimeoutSeconds()), requests);
     }
 }

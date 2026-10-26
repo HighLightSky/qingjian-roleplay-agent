@@ -18,6 +18,7 @@ import com.example.TestRequests;
 import com.example.config.*;
 import com.example.llm.*;
 import com.example.llm.model.*;
+import com.example.llm.model.StreamDelta;
 import com.example.prompt.StateUpdatePromptBuilder;
 import com.example.web.dto.*;
 import com.example.web.dto.StateDtos.*;
@@ -34,7 +35,7 @@ class StateUpdateLiveTest {
         var mapper = new ObjectMapper();
         var llm = new LlmProperties(System.getenv().getOrDefault("LLM_BASE_URL", "https://10.21.16.197/v1/chat/completions"),
                 System.getenv().getOrDefault("LLM_API_KEY", "llama"), System.getenv().getOrDefault("LLM_MODEL", "Qwen3.8-27B"),
-                .8, 8192, 120);
+                .8, 8192, 120, 60, 2048, 32);
         var serializer = new LlmRequestMapper(mapper, llm);
         var base = TestRequests.state(List.of());
         var old = new GoalValue("寻找失踪的哥哥", "active", "向旅馆掌柜询问线索", "已来到旅馆，尚未获得哥哥去向的确切线索。");
@@ -59,7 +60,7 @@ class StateUpdateLiveTest {
                 new SourceMessage("user", 1, "user", input, "complete", "2026-10-23T00:00:00Z"),
                 new SourceMessage("assistant", 2, "assistant", reply, "complete", "2026-10-23T00:00:01Z")));
         try (var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()) {
-            var real = new OpenAiClient(http, mapper, llm.baseUrl(), llm.apiKey(), Duration.ofSeconds(120), serializer);
+            var real = new OpenAiClient(http, mapper, llm.baseUrl(), llm.apiKey(), Duration.ofSeconds(120), Duration.ofSeconds(5), serializer);
             var calls = new ArrayList<ChatRequest>();
             LLMClient observed = new LLMClient() {
                 @Override public ChatResponse chat(ChatRequest call) throws java.io.IOException, InterruptedException {
@@ -71,7 +72,7 @@ class StateUpdateLiveTest {
                     return real.chat(call);
                 }
 
-                @Override public ChatStreamResult chatStream(ChatRequest call, Consumer<String> delta)
+                @Override public ChatStreamResult chatStream(ChatRequest call, Consumer<StreamDelta> delta)
                         throws java.io.IOException, InterruptedException {
                     return real.chatStream(call, delta);
                 }
@@ -112,7 +113,7 @@ class StateUpdateLiveTest {
         var mapper = new ObjectMapper();
         var llm = new LlmProperties(System.getenv().getOrDefault("LLM_BASE_URL", "https://10.21.16.197/v1/chat/completions"),
                 System.getenv().getOrDefault("LLM_API_KEY", "llama"), System.getenv().getOrDefault("LLM_MODEL", "Qwen3.8-27B"),
-                .8, 8192, 120);
+                .8, 8192, 120, 60, 2048, 32);
         var serializer = new LlmRequestMapper(mapper, llm);
         var scenario = com.example.SelectionFixtures.scenario(com.example.SelectionFixtures.History.NONE,
                 com.example.SelectionFixtures.Photo.OBSERVED);
@@ -123,7 +124,7 @@ class StateUpdateLiveTest {
                 "reading", "她脱下红色斗篷并搭在椅背上，穿白色衬衫，坐在书桌旁的椅子上，双脚落地，左手扶住桌上的书，右手搭在书页边缘，低头阅读。");
         var saved = mapper.createObjectNode();
         try (var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()) {
-            var client = new OpenAiClient(http, mapper, llm.baseUrl(), llm.apiKey(), Duration.ofSeconds(120), serializer);
+            var client = new OpenAiClient(http, mapper, llm.baseUrl(), llm.apiKey(), Duration.ofSeconds(120), Duration.ofSeconds(5), serializer);
             var counter = new LlamaTokenCounter(http, mapper, serializer, llm, TestRequests.contextProperties());
             var contexts = new AuxiliaryContextService(mapper, counter, TestRequests.contextProperties(),
                     new AuxiliaryContextProperties(4, 8192, 8192, 32768, 32768, 2048, 2048));

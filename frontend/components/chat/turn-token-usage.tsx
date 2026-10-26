@@ -14,7 +14,7 @@ export function TurnTokenUsage() {
       className="ml-2 text-[11px] text-muted-foreground tabular-nums"
     >
       {usage?.status === "reported"
-        ? `输入 ${usage.inputTokens.toLocaleString()} · 输出 ${usage.outputTokens.toLocaleString()} · 合计 ${usage.totalTokens.toLocaleString()} token`
+        ? `输入 ${usage.inputTokens.toLocaleString()} · 输出（含思考）${usage.outputTokens.toLocaleString()} · 合计 ${usage.totalTokens.toLocaleString()} token`
         : "用量未知"}
     </span>
   );

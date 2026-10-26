@@ -3,7 +3,7 @@ package com.example.service;
 import java.io.Closeable;
 import java.io.IOException;
 
-/** 工作线程安装取消句柄，截止计时可以主动关闭上游流，而非只改变界面状态。 */
+/** 工作线程安装取消句柄，主动停止时关闭上游流。 */
 public final class UpstreamCancellation {
     private static final ThreadLocal<UpstreamCancellation> CURRENT = new ThreadLocal<>();
     private Closeable resource;

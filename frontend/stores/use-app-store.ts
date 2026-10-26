@@ -54,6 +54,7 @@ import {
 import { unknownUsage, type ContextBudget } from "@/lib/context/types";
 import {
   DEFAULT_INTERACTION_SETTINGS,
+  finishReasoning,
   errorText,
   now,
   id,
@@ -821,6 +822,7 @@ async function consumeRun(
     reply = {
       ...reply!,
       segments: snapshot.segments,
+      reasoning: snapshot.reasoning ?? undefined,
       status: completed
         ? "complete"
         : snapshot.terminal
@@ -935,6 +937,7 @@ async function consumeRun(
           db.checkpoint({
             ...current,
             status: error instanceof ResultExpired ? "interrupted" : "error",
+            reasoning: finishReasoning(current.reasoning, "error"),
             error: error.message,
             updatedAt: now(),
           }),

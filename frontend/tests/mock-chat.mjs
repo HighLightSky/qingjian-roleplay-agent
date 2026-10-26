@@ -361,7 +361,7 @@ createServer(async (request, response) => {
     response.writeHead(200, { "content-type": "application/json" }).end(
       JSON.stringify({
         contextWindowTokens: 193024,
-        outputReserveTokens: 8192,
+        outputReserveTokens: 10272,
         safetyTokens: 1024,
         compactionTriggerRatio: 0.7,
         compactionTargetRatio: 0.5,
@@ -414,11 +414,11 @@ createServer(async (request, response) => {
       inputTokens,
       contextWindowTokens: 193024,
       usageRatio: inputTokens / 193024,
-      outputReserveTokens: 8192,
+      outputReserveTokens: 10272,
       safetyTokens: 1024,
       accuracy: "exact",
       needsCompaction: inputTokens >= 193024 * 0.7,
-      fits: inputTokens + 8192 + 1024 <= 193024,
+      fits: inputTokens + 10272 + 1024 <= 193024,
       requestFingerprint: String(inputTokens),
       compactThroughSeq: end,
     };

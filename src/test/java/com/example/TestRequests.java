@@ -25,7 +25,7 @@ public final class TestRequests {
     }
 
     public static com.example.config.DispatchProperties dispatch() {
-        return new com.example.config.DispatchProperties(536870912, 1800, 7200, 600, 7200, 32, 67108864, 60, 4096, 8192);
+        return new com.example.config.DispatchProperties(536870912, 1800, 7200, 300, 7200, 32, 67108864, 60, 4096, 8192);
     }
     private TestRequests() {}
     public static com.example.web.dto.ContextDtos.HistorySummary summary() {
@@ -43,7 +43,7 @@ public final class TestRequests {
             org.mockito.Mockito.when(counter.countText(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyList())).thenReturn(count);
         } catch (Exception e) { throw new AssertionError(e); }
         var vision = vision();
-        var llm = new com.example.config.LlmProperties("", "", "test-model", .8, 800, 120);
+        var llm = new com.example.config.LlmProperties("", "", "test-model", .8, 800, 120, 60, 2048, 32);
         return new com.example.service.ContextBudgetService(counter, new com.example.prompt.PromptBuilder(llm, com.example.TestRequests.vision()),
                 contextProperties(), vision, new com.example.service.ContextValidation(),
                 new com.example.service.ImageValidationService(vision), mapper);

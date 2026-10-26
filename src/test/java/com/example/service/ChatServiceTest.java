@@ -23,6 +23,7 @@ import com.example.llm.LLMClient;
 import com.example.llm.model.ChatStreamResult;
 import com.example.llm.model.TokenUsage;
 import com.example.llm.model.ChatRequest;
+import com.example.llm.model.StreamDelta;
 import com.example.prompt.PromptBuilder;
 import com.example.prompt.VisualSelectionPromptBuilder;
 import com.example.web.dto.CharacterDto;
@@ -51,20 +52,20 @@ class ChatServiceTest {
             assertEquals(List.of("system", "assistant", "user"), request.getMessages()
                     .stream().map(message -> message.getRole()).toList());
             assertEquals("你好", request.getMessages().getLast().getContent());
-            assertEquals(Integer.valueOf(800), request.getMaxTokens());
+            assertEquals(Integer.valueOf(2880), request.getMaxTokens());
             assertEquals(Double.valueOf(0.8), request.getTemperature());
 
-            Consumer<String> onText = invocation.getArgument(1);
-            onText.accept("[台");
+            Consumer<StreamDelta> onText = invocation.getArgument(1);
+            onText.accept(new StreamDelta("", "[台"));
             assertEquals(List.of(), deltas);
-            onText.accept("词]“你好。”");
+            onText.accept(new StreamDelta("", "词]“你好。”"));
             assertEquals(List.of(new SegmentDelta("dialogue", "“你好。”")), deltas);
             // 不完整的最后一行留给 parser.finish() 处理。
-            onText.accept("\n[描");
+            onText.accept(new StreamDelta("", "\n[描"));
             return new ChatStreamResult("stop", TokenUsage.unavailable());
         }).when(llmClient).chatStream(any(), any());
 
-        assertEquals("stop", service.chatStream(validRequest(), deltas::add, budget -> {}).finishReason());
+        assertEquals("stop", service.chatStream(validRequest(), deltas::add, budget -> {}, delta -> {}).finishReason());
         assertEquals(List.of(
                 new SegmentDelta("dialogue", "“你好。”"),
                 new SegmentDelta("dialogue", "\n"),
@@ -122,21 +123,21 @@ class ChatServiceTest {
         doAnswer(invocation -> new ChatStreamResult("length", TokenUsage.unavailable())).when(llmClient).chatStream(any(), any());
         ChatApiRequest valid = validRequest();
         ChatApiRequest request = new ChatApiRequest(valid.character(), com.example.TestRequests.state(Collections.nCopies(50, "记忆")), com.example.TestRequests.summary(), List.of(), new InputDto("字".repeat(2000), null), SETTINGS, null, "operation");
-        assertEquals("length", service.chatStream(request, delta -> {}, budget -> {}).finishReason());
+        assertEquals("length", service.chatStream(request, delta -> {}, budget -> {}, delta -> {}).finishReason());
     }
 
     @Test
     void propagatesModelFailureWithoutFlushingUnfinishedMarker() throws Exception {
         IOException failure = new IOException("模型连接中断");
         doAnswer(invocation -> {
-            Consumer<String> onText = invocation.getArgument(1);
-            onText.accept("[台");
+            Consumer<StreamDelta> onText = invocation.getArgument(1);
+            onText.accept(new StreamDelta("", "[台"));
             throw failure;
         }).when(llmClient).chatStream(any(), any());
 
         List<SegmentDelta> deltas = new ArrayList<>();
         assertSame(failure, assertThrows(IOException.class,
-                () -> service.chatStream(validRequest(), deltas::add, budget -> {})));
+                () -> service.chatStream(validRequest(), deltas::add, budget -> {}, delta -> {})));
         assertEquals(List.of(), deltas);
     }
 
@@ -145,40 +146,40 @@ class ChatServiceTest {
         InterruptedException interruption = new InterruptedException("请求中断");
         doAnswer(invocation -> { throw interruption; }).when(llmClient).chatStream(any(), any());
         assertSame(interruption, assertThrows(InterruptedException.class,
-                () -> service.chatStream(validRequest(), delta -> {}, budget -> {})));
+                () -> service.chatStream(validRequest(), delta -> {}, budget -> {}, delta -> {})));
 
         doAnswer(invocation -> {
-            Consumer<String> onText = invocation.getArgument(1);
-            onText.accept("[台词]你好");
+            Consumer<StreamDelta> onText = invocation.getArgument(1);
+            onText.accept(new StreamDelta("", "[台词]你好"));
             return new ChatStreamResult("stop", TokenUsage.unavailable());
         }).when(llmClient).chatStream(any(), any());
         RuntimeException callbackFailure = new RuntimeException("前端连接已断开");
         assertSame(callbackFailure, assertThrows(RuntimeException.class,
-                () -> service.chatStream(validRequest(), delta -> { throw callbackFailure; }, budget -> {})));
+                () -> service.chatStream(validRequest(), delta -> { throw callbackFailure; }, budget -> {}, delta -> {})));
     }
 
     @Test
     void rejectsMissingFinishReasonInsteadOfReportingSuccess() throws Exception {
         doAnswer(invocation -> new ChatStreamResult(null, TokenUsage.unavailable())).when(llmClient).chatStream(any(), any());
-        assertThrows(IOException.class, () -> service.chatStream(validRequest(), delta -> {}, budget -> {}));
+        assertThrows(IOException.class, () -> service.chatStream(validRequest(), delta -> {}, budget -> {}, delta -> {}));
     }
 
     @Test
     void createsIndependentParserForEachRequest() throws Exception {
         doAnswer(invocation -> {
-            Consumer<String> onText = invocation.getArgument(1);
-            onText.accept("[台词]第一轮");
+            Consumer<StreamDelta> onText = invocation.getArgument(1);
+            onText.accept(new StreamDelta("", "[台词]第一轮"));
             return new ChatStreamResult("stop", TokenUsage.unavailable());
         }).doAnswer(invocation -> {
-            Consumer<String> onText = invocation.getArgument(1);
-            onText.accept("第二轮");
+            Consumer<StreamDelta> onText = invocation.getArgument(1);
+            onText.accept(new StreamDelta("", "第二轮"));
             return new ChatStreamResult("stop", TokenUsage.unavailable());
         }).when(llmClient).chatStream(any(), any());
 
         List<SegmentDelta> first = new ArrayList<>();
         List<SegmentDelta> second = new ArrayList<>();
-        service.chatStream(validRequest(), first::add, budget -> {});
-        service.chatStream(validRequest(), second::add, budget -> {});
+        service.chatStream(validRequest(), first::add, budget -> {}, delta -> {});
+        service.chatStream(validRequest(), second::add, budget -> {}, delta -> {});
         assertEquals(List.of(new SegmentDelta("dialogue", "第一轮")), first);
         assertEquals(List.of(new SegmentDelta("narration", "第二轮")), second);
     }

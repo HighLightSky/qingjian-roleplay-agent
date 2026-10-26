@@ -105,4 +105,11 @@ ss -ltn | grep -E ':(443|3000|8080)\b' || echo "已全部关闭"
 
 浏览器关闭不停止后台生成，任务结果默认保留两小时。后端重启不保留在途任务与临时结果。升级前先在旧版“完整备份 → 导出全部”保存浏览器数据，按 `docs/15-剧情图开发与数据迁移计划.md` 同步发布前后端。不要用旧前端打开升级后的 v10 库。
 
-生图固定使用后端黑色画布作为第一张输入，默认 256 × 512，按 32 像素向上对齐。宽高和对齐值读取 roleplay.image-generation.default-width/default-height/dimension-alignment；黑图占用一个图片名额，人物照片和历史图为可选参考且允许压缩。新版数据库 v10，备份 v11，旧 v8/v9 数据库及 v9/v10 备份在入口迁移。
+生图固定使用后端黑色画布作为第一张输入，默认 256 × 512，按 32 像素向上对齐。宽高和对齐值读取 roleplay.image-generation.default-width/default-height/dimension-alignment；黑图占用一个图片名额，人物照片和历史图为可选参考且允许压缩。当前数据库 v11，备份 v13，旧 v8—v10 数据库及 v9—v12 备份在入口迁移。
+
+
+## 正文思考与超时
+
+正文请求显式读取模型的 reasoning_content 并在前端折叠展示，思考随消息保存。正文预留8192、思考预算2048、协议余量32，总生成额度及窗口预留为10272 tokens；上游需支持 reasoning_budget_tokens。连接超时10秒，正文首增量等待60秒，之后及整轮均不限时；整理每次调用超时300秒。配置统一位于 application.yml。
+
+升级前等所有在途聊天结束并保存备份，再同步更新前后端。真实模型验证可执行 `LLM_BASE_URL=http://127.0.0.1:10080/v1/chat/completions mvn -Droleplay.live-llm=true -Dtest=BodyReasoningLiveTest test`，地址应按部署实际填写。

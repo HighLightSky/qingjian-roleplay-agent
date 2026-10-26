@@ -18,8 +18,10 @@ public final class DispatchDtos {
         public Retry { images = images == null ? List.of() : List.copyOf(images); }
     }
     public record Stage(String name, String status, String error, Plan plan) {}
+    public record ReasoningTrace(String text, String status, long startedAt, Long endedAt) {}
+    public record ReasoningEvent(String delta, String status, long startedAt, Long endedAt) {}
     public record Snapshot(String runId, long revision, List<SegmentDelta> segments, Map<String, Stage> stages,
-            ContextDtos.ContextBudget budget, Plan plan, ChatStreamResult body, Result state,
+            ContextDtos.ContextBudget budget, Plan plan, ChatStreamResult body, Result state, ReasoningTrace reasoning,
             boolean terminal, String error) {}
     public record Event(long revision, Object value) {}
 }

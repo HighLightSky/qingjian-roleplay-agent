@@ -26,13 +26,14 @@ import com.example.SelectionFixtures;
 import org.junit.jupiter.params.provider.MethodSource;
 import com.example.llm.LLMClient;
 import com.example.llm.model.*;
+import com.example.llm.model.StreamDelta;
 import com.example.service.*;
 import com.example.web.dto.*;
 import com.example.web.dto.DispatchDtos.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {"roleplay.llm.timeout-seconds=3", "roleplay.dispatch.task-timeout-seconds=4", "roleplay.dispatch.max-results=4", "logging.level.root=ERROR", "logging.level.com.example.service.SegmentStreamParser=WARN", "logging.level.com.example.service.ChatDispatchService=WARN"})
+        properties = {"roleplay.llm.timeout-seconds=3", "roleplay.dispatch.max-results=4", "logging.level.root=ERROR", "logging.level.com.example.service.SegmentStreamParser=WARN", "logging.level.com.example.service.ChatDispatchService=WARN"})
 @Timeout(20)
 @ExtendWith(OutputCaptureExtension.class)
 class ChatControllerTest {
@@ -50,7 +51,7 @@ class ChatControllerTest {
         when(counter.countTextOnly(any())).thenReturn(new ContextDtos.TokenCount(100, "exact", "test", "fp"));
         when(counter.count(any())).thenReturn(new ContextDtos.TokenCount(100, "exact", "test", "fp"));
         when(model.chat(any())).thenReturn(new ChatResponse(EMPTY, "stop", TokenUsage.unavailable()));
-        doAnswer(i -> { Consumer<String> out = i.getArgument(1); out.accept("[台词]你好\n[描写]她挥手。");
+        doAnswer(i -> { Consumer<StreamDelta> out = i.getArgument(1); out.accept(new StreamDelta("", "[台词]你好\n[描写]她挥手。"));
             return new ChatStreamResult("stop", TokenUsage.unavailable()); }).when(model).chatStream(any(), any());
     }
     @AfterEach void cleanup() throws Exception {
@@ -98,8 +99,8 @@ class ChatControllerTest {
     }
     @Test void disconnectDoesNotCancelAndResubscribeDoesNotRestartTheModel() throws Exception {
         var release = new CountDownLatch(1); var started = new CountDownLatch(1);
-        doAnswer(i -> { Consumer<String> out = i.getArgument(1); out.accept("[台词]先说\n"); started.countDown();
-            release.await(); out.accept("[描写]然后继续。"); return new ChatStreamResult("stop", TokenUsage.unavailable());
+        doAnswer(i -> { Consumer<StreamDelta> out = i.getArgument(1); out.accept(new StreamDelta("", "[台词]先说\n")); started.countDown();
+            release.await(); out.accept(new StreamDelta("", "[描写]然后继续。")); return new ChatStreamResult("stop", TokenUsage.unavailable());
         }).when(model).chatStream(any(), any());
         var request = request("继续");
         try (var client = HttpClient.newHttpClient()) {
@@ -127,8 +128,8 @@ class ChatControllerTest {
     @ValueSource(strings = {"", " \n\t", "[台词]\n[描写] "})
     void emptyBodyWithStopReportsActualCauseAndSkipsStateUpdate(String content, CapturedOutput logs) throws Exception {
         doAnswer(i -> {
-            Consumer<String> out = i.getArgument(1);
-            out.accept(content);
+            Consumer<StreamDelta> out = i.getArgument(1);
+            out.accept(new StreamDelta("", content));
             return new ChatStreamResult("stop", new TokenUsage("reported", 100L, 12L, 112L));
         }).when(model).chatStream(any(), any());
         var request = request("继续");
@@ -144,7 +145,7 @@ class ChatControllerTest {
         String error = terminal.path("error").asText();
         assertTrue(error.contains("模型正常结束，但正文为空"), error);
         assertTrue(error.contains("finish_reason=stop"), error);
-        assertTrue(error.contains("本次输出上限=8192 token"), error);
+        assertTrue(error.contains("本次输出上限=10272 token"), error);
         assertTrue(error.contains("输入 token=100；输出 token=12；总 token=112"), error);
         assertTrue(error.contains("已返回正文=0 字符"), error);
         assertTrue(logs.getAll().contains("模型正常结束，但正文为空"));
@@ -158,8 +159,8 @@ class ChatControllerTest {
     void incompleteBodyPreservesPartialTextAndUnknownUsage(String finishReason, CapturedOutput logs) throws Exception {
         String content = "未完成的私密正文";
         doAnswer(i -> {
-            Consumer<String> out = i.getArgument(1);
-            out.accept("[描写]" + content);
+            Consumer<StreamDelta> out = i.getArgument(1);
+            out.accept(new StreamDelta("", "[描写]" + content));
             return new ChatStreamResult(finishReason, TokenUsage.unavailable());
         }).when(model).chatStream(any(), any());
         String output = post("/api/chat", request("继续")).body();
@@ -212,7 +213,7 @@ class ChatControllerTest {
     }
     @Test void explicitCancelInterruptsModelAndRetainsPartialResult(CapturedOutput logs) throws Exception {
         var started = new CountDownLatch(1); var interrupted = new CountDownLatch(1);
-        doAnswer(i -> { Consumer<String> out = i.getArgument(1); out.accept("[台词]已有内容\n"); started.countDown();
+        doAnswer(i -> { Consumer<StreamDelta> out = i.getArgument(1); out.accept(new StreamDelta("", "[台词]已有内容\n")); started.countDown();
             try { new CountDownLatch(1).await(); } finally { interrupted.countDown(); }
             return null;
         }).when(model).chatStream(any(), any());
@@ -228,13 +229,71 @@ class ChatControllerTest {
             assertFalse(logs.getAll().contains("后台生成失败：任务=" + request.runId()));
         }
     }
-    @Test void deadlineInterruptsWithoutDeletingPartialResult() throws Exception {
-        doAnswer(i -> { Consumer<String> out = i.getArgument(1); out.accept("[台词]尚未结束\n"); new CountDownLatch(1).await(); return null; })
-                .when(model).chatStream(any(), any());
+    @Test void reasoningIsRecoverableAndNeverBecomesBodyOrStateMaterial() throws Exception {
+        doAnswer(i -> {
+            Consumer<StreamDelta> out = i.getArgument(1);
+            out.accept(new StreamDelta("仅供界面查看的推理", ""));
+            out.accept(new StreamDelta("接着回应", "[台词]你好。"));
+            return new ChatStreamResult("stop", TokenUsage.unavailable());
+        }).when(model).chatStream(any(), any());
         var request = request("继续");
         String output = post("/api/chat", request).body();
-        assertTrue(output.contains("超时")); assertTrue(resume(request.runId()).contains("尚未结束"));
+        assertTrue(output.contains("event:reasoning") || output.contains("event: reasoning"), output);
+        var data = output.lines().filter(line -> line.startsWith("data:"))
+                .map(line -> line.substring(5)).toList().getLast();
+        var terminal = mapper.readTree(data).path("value");
+        assertEquals("仅供界面查看的推理接着回应", terminal.path("reasoning").path("text").asText());
+        assertEquals("complete", terminal.path("reasoning").path("status").asText());
+        assertTrue(terminal.path("reasoning").path("endedAt").isNumber());
+        assertFalse(terminal.path("segments").toString().contains("推理"));
+        var stateRequest = org.mockito.ArgumentCaptor.forClass(com.example.llm.model.ChatRequest.class);
+        verify(model).chat(stateRequest.capture());
+        assertFalse(mapper.writeValueAsString(stateRequest.getValue().getMessages()).contains("仅供界面查看的推理"));
+        assertEquals(Duration.ofSeconds(300), stateRequest.getValue().getTimeout());
+        assertTrue(resume(request.runId()).contains("仅供界面查看的推理"));
     }
+
+    @Test void cancellingDuringReasoningPreservesTheThoughtAndReleasesTheTask() throws Exception {
+        var started = new CountDownLatch(1);
+        doAnswer(i -> {
+            Consumer<StreamDelta> out = i.getArgument(1);
+            out.accept(new StreamDelta("已经保存的思考", ""));
+            started.countDown();
+            new CountDownLatch(1).await();
+            return null;
+        }).when(model).chatStream(any(), any());
+        var request = request("继续");
+        try (var client = HttpClient.newHttpClient()) {
+            var response = client.send(postRequest("/api/chat", request), HttpResponse.BodyHandlers.ofInputStream());
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            assertEquals(200, post("/api/chat/" + request.runId() + "/cancel", Map.of()).statusCode());
+            response.body().close();
+            var wire = resume(request.runId()).lines().filter(line -> line.startsWith("data:"))
+                    .map(line -> line.substring(5)).findFirst().orElseThrow();
+            var trace = mapper.readTree(wire).path("reasoning");
+            assertEquals("已经保存的思考", trace.path("text").asText());
+            assertEquals("cancelled", trace.path("status").asText());
+            assertTrue(trace.path("endedAt").isNumber());
+            verify(model, never()).chat(any());
+        }
+    }
+
+    @Test void thinkingWithoutAnAnswerIsNotACompletedBody() throws Exception {
+        doAnswer(i -> {
+            Consumer<StreamDelta> out = i.getArgument(1);
+            out.accept(new StreamDelta("尚未形成正文", ""));
+            return new ChatStreamResult("length", TokenUsage.unavailable());
+        }).when(model).chatStream(any(), any());
+        var request = request("继续");
+        var output = post("/api/chat", request).body();
+        assertTrue(output.contains("尚未形成正文"));
+        assertTrue(output.contains("模型因长度限制停止生成"));
+        var data = output.lines().filter(line -> line.startsWith("data:"))
+                .map(line -> line.substring(5)).toList().getLast();
+        assertEquals("error", mapper.readTree(data).path("value").path("reasoning").path("status").asText());
+        verify(model, never()).chat(any());
+    }
+
     @Test void tokenCapacityIsCheckedBeforeGeneration() throws Exception {
         when(counter.countTextOnly(any())).thenReturn(new ContextDtos.TokenCount(100, "exact", "test", "fp"));
         when(counter.count(any())).thenReturn(new ContextDtos.TokenCount(193024, "exact", "test", "fp"));

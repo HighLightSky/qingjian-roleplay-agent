@@ -224,7 +224,7 @@ class StateUpdateServiceTest {
         assertTrue(correction.contains("目标 goal1 的 value 包含未知字段：[progressEvidence]"));
         assertTrue(correction.contains("progressEvidence 必须与 value 同级"));
         var serializer = new LlmRequestMapper(mapper,
-                new com.example.config.LlmProperties("", "", "test", .8, 8192, 120));
+                new com.example.config.LlmProperties("", "", "test", .8, 8192, 120, 60, 2048, 32));
         for (var call : calls.getAllValues()) {
             var format = serializer.chatBody(call, false).path("response_format");
             assertEquals("json_schema", format.path("type").asText());

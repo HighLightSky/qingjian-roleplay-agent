@@ -1,6 +1,6 @@
 export const contextCapabilities = {
   contextWindowTokens: 193024,
-  outputReserveTokens: 8192,
+  outputReserveTokens: 10272,
   safetyTokens: 1024,
   compactionTriggerRatio: 0.7,
   compactionTargetRatio: 0.5,
@@ -21,7 +21,7 @@ export function contextFixture(path: string, init?: RequestInit) {
     inputTokens: 1000,
     contextWindowTokens: 193024,
     usageRatio: 1000 / 193024,
-    outputReserveTokens: 8192,
+    outputReserveTokens: 10272,
     safetyTokens: 1024,
     accuracy: "exact",
     needsCompaction: false,

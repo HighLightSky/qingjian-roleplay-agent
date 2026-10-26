@@ -140,6 +140,7 @@ export async function replaceFailedTurn(
     const assistant: Message = {
       ...previous.assistant,
       segments: [],
+      reasoning: undefined,
       status: "pending",
       error: undefined,
       finishReason: undefined,

@@ -253,7 +253,7 @@ test("v9 备份一次性转换为 v11；新图关系可完整恢复且不恢复�
     delete session.visualSources;
   }
   const converted = validateBackup(legacy);
-  assert.equal(converted.formatVersion, 12);
+  assert.equal(converted.formatVersion, 13);
   assert.equal(converted.data.assets[0].creationOrigin, "uploaded");
   assert.equal(converted.data.sessions[0].stateVersion, 0);
   await db.put("sceneGenerations", generation);
@@ -496,7 +496,7 @@ test("v10 备份保留真实提示词与原件尺寸，移除旧前幕和目标�
   delete oldGeneration.submission;
   oldGeneration.sceneId = "scene";
   const converted = validateBackup(backup);
-  assert.equal(converted.formatVersion, 12);
+  assert.equal(converted.formatVersion, 13);
   const result = converted.data.sceneGenerations[0];
   assert.equal(result.submission.effectivePrompt, plan.prompt);
   assert.equal(result.submission.width, 1);
@@ -556,7 +556,7 @@ test("v11 备份转为 v12 后移除所有参考 roles 并保留真实文本和�
     "identity",
   ];
   const migrated = validateBackup(legacy);
-  assert.equal(migrated.formatVersion, 12);
+  assert.equal(migrated.formatVersion, 13);
   assert.equal(
     "roles" in migrated.data.sceneImagePlans[0].referenceImages[0],
     false,

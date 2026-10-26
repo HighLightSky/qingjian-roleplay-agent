@@ -56,6 +56,9 @@ public class LlmRequestMapper {
         body.put("temperature", request.getTemperature());
         body.put("stream", stream);
         body.putObject("chat_template_kwargs").put("enable_thinking", request.isThinkingEnabled());
+        body.put("reasoning_format", "deepseek");
+        if (request.getReasoningBudgetTokens() != null)
+            body.put("reasoning_budget_tokens", request.getReasoningBudgetTokens());
         appendResponseFormat(body, request);
         if (stream) body.putObject("stream_options").put("include_usage", true);
         return body;

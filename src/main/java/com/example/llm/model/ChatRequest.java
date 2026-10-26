@@ -1,6 +1,7 @@
 package com.example.llm.model;
 
 import java.util.List;
+import java.time.Duration;
 import com.fasterxml.jackson.databind.JsonNode;
 
 // 定义发送给LLM model的消息
@@ -10,6 +11,24 @@ public class ChatRequest {
     private Double temperature;
     private final boolean thinkingEnabled;
     private JsonNode responseSchema;
+    private Integer reasoningBudgetTokens;
+    private Duration timeout;
+
+    public Integer getReasoningBudgetTokens() {
+        return reasoningBudgetTokens;
+    }
+
+    public void setReasoningBudgetTokens(Integer value) {
+        reasoningBudgetTokens = value;
+    }
+
+    public Duration getTimeout() {
+        return timeout;
+    }
+
+    public void setTimeout(Duration value) {
+        timeout = value;
+    }
 
     public ChatRequest(List<Message> messages, Integer maxTokens, Double temperature, boolean thinkingEnabled) {
         this.messages = messages;

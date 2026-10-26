@@ -67,7 +67,7 @@ class SceneGenerationLiveTest {
                     List.of(new CharacterPhotoSource("character", 1)), null, List.of(), hash);
             var payload = new Payload("img1", hash, "data:image/png;base64," + Base64.getEncoder().encodeToString(seed));
             var serializer = new LlmRequestMapper(mapper, llm);
-            var client = new OpenAiClient(http, mapper, llm.baseUrl(), llm.apiKey(), Duration.ofSeconds(llm.timeoutSeconds()), serializer);
+            var client = new OpenAiClient(http, mapper, llm.baseUrl(), llm.apiKey(), Duration.ofSeconds(llm.timeoutSeconds()), Duration.ofSeconds(5), serializer);
             var counter = new LlamaTokenCounter(http, mapper, serializer, llm, contextConfig);
             var contexts = new AuxiliaryContextService(mapper, counter, contextConfig, auxiliary);
             var images = new ImageValidationService(vision);

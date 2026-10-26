@@ -9,6 +9,9 @@ roleplay:
     temperature: 0.8
     max-tokens: 8192
     timeout-seconds: 120
+    first-token-timeout-seconds: 60
+    reasoning-budget-tokens: 2048
+    reasoning-protocol-tokens: 32
 
   context:
     context-window-tokens: ${CONTEXT_WINDOW_TOKENS:193024}
@@ -44,7 +47,7 @@ roleplay:
     image-cache-bytes: 536870912
     image-idle-seconds: 1800
     image-lifetime-seconds: 7200
-    task-timeout-seconds: 600
+    state-timeout-seconds: 300
     result-retention-seconds: 7200
     max-results: 32
     result-cache-bytes: 67108864

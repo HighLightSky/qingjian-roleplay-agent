@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 
 import com.example.llm.LLMClient;
 import com.example.llm.model.ChatStreamResult;
+import com.example.llm.model.StreamDelta;
 import com.example.web.dto.ChatApiRequest;
 import com.example.web.dto.ContextDtos.ContextBudget;
 import com.example.web.dto.SegmentDelta;
@@ -38,7 +39,7 @@ public class ChatService {
      * @throws InterruptedException 当前模型请求被中断
      */
     public ChatStreamResult chatStream(ChatApiRequest request, Consumer<SegmentDelta> onDelta,
-            Consumer<ContextBudget> onContext)
+            Consumer<ContextBudget> onContext, Consumer<StreamDelta> onModelDelta)
             throws IOException, InterruptedException {
         Objects.requireNonNull(onDelta, "onDelta 不能为空");
 
@@ -48,8 +49,10 @@ public class ChatService {
         // 解析器有当前行的状态，因此每次请求都要新建，不能放在成员字段中共享。
         SegmentStreamParser parser = new SegmentStreamParser(onDelta);
 
-        // parser::feed 作为回调函数传入
-        ChatStreamResult result = llmClient.chatStream(prepared.request(), parser::feed);
+        ChatStreamResult result = llmClient.chatStream(prepared.request(), delta -> {
+            onModelDelta.accept(delta);
+            if (!delta.content().isEmpty()) parser.feed(delta.content());
+        });
 
         if (result.finishReason() == null || result.finishReason().isBlank()) {
             throw new IOException("模型流缺少结束原因，可能已意外中断");

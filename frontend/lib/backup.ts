@@ -86,7 +86,7 @@ export type Snapshot = {
 };
 export type Backup = {
   format: "roleplay-agent-backup";
-  formatVersion: 12;
+  formatVersion: 13;
   exportedAt: string;
   data: Snapshot;
 };
@@ -111,7 +111,9 @@ export function validateBackup(value: unknown): Backup {
     value = convertV11Backup(value);
     object(value);
   }
-  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 12)
+  if (value.format === "roleplay-agent-backup" && value.formatVersion === 12)
+    value.formatVersion = 13;
+  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 13)
     throw new Error("不支持此备份格式或版本，请选择本应用导出的文件。");
   date(value.exportedAt);
   object(value.data);
@@ -184,6 +186,26 @@ export function validateBackup(value: unknown): Backup {
       throw new Error("消息引用了不存在的会话。");
     integer(message.seq, 1);
     integer(message.checkpointVersion);
+    if (message.reasoning !== undefined) {
+      if (message.role !== "assistant")
+        throw new Error("用户消息不能包含思考过程。");
+      const trace = message.reasoning;
+      object(trace);
+      string(trace.text);
+      integer(trace.startedAt);
+      if (
+        !["streaming", "complete", "cancelled", "error"].includes(
+          trace.status as string,
+        )
+      )
+        throw new Error("思考状态无效。");
+      if (trace.status === "streaming") {
+        if (trace.endedAt !== null)
+          throw new Error("生成中的思考不能有结束时间。");
+      } else {
+        integer(trace.endedAt, trace.startedAt);
+      }
+    }
     date(message.createdAt);
     const key = `${message.sessionId}:${message.seq}`;
     if (sequences.has(key)) throw new Error("会话中存在重复消息序号。");
@@ -350,7 +372,7 @@ export function validateBackup(value: unknown): Backup {
   validateImages(snapshot);
   return {
     format: "roleplay-agent-backup",
-    formatVersion: 12,
+    formatVersion: 13,
     exportedAt: value.exportedAt as string,
     data: snapshot,
   };
@@ -1000,7 +1022,7 @@ export async function takeSnapshot(): Promise<Backup> {
   }
   const backup: Backup = {
     format: "roleplay-agent-backup",
-    formatVersion: 12,
+    formatVersion: 13,
     exportedAt: new Date().toISOString(),
     data: { ...data, assets: serialized },
   };

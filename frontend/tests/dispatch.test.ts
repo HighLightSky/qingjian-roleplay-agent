@@ -12,6 +12,8 @@ import {
 } from "../lib/db";
 import { IMAGE_SEQUENCE_KEY } from "../lib/images/ids";
 import { DEFAULT_INTERACTION_SETTINGS } from "../lib/domain";
+import { takeSnapshot, restoreSnapshot, validateBackup } from "../lib/backup";
+import { plainText, type ReasoningTrace } from "../lib/domain";
 import { chatContext } from "../lib/chat/context";
 import {
   followDispatch,
@@ -490,4 +492,202 @@ test("本轮新附件的原件元信息进入生图目录，但仍由系统必�
   assert.equal(entry.sourceSha256, hash);
   assert.equal(entry.sources[0].messageId, captured.user.id);
   assert.deepEqual(captured.context.visual.imagePayloads, []);
+});
+
+test("思考增量按序号去重，重订阅快照替换原内容并保存结束时间", async () => {
+  const trace: ReasoningTrace = {
+    text: "先思考",
+    status: "streaming",
+    startedAt: 1000,
+    endedAt: null,
+  };
+  const initial = { ...snapshot("run", false), reasoning: trace };
+  const completed: DispatchSnapshot = {
+    ...snapshot("run", true),
+    revision: 4,
+    reasoning: {
+      ...trace,
+      text: "先思考，再回应",
+      status: "complete",
+      endedAt: 2000,
+    },
+  };
+  let requests = 0;
+  globalThis.fetch = async () =>
+    ++requests === 1
+      ? sse([
+          ["snapshot", initial],
+          [
+            "reasoning",
+            {
+              revision: 2,
+              value: {
+                delta: "，再回应",
+                status: "streaming",
+                startedAt: 1000,
+                endedAt: null,
+              },
+            },
+          ],
+          [
+            "reasoning",
+            {
+              revision: 2,
+              value: {
+                delta: "重复",
+                status: "streaming",
+                startedAt: 1000,
+                endedAt: null,
+              },
+            },
+          ],
+        ])
+      : sse([
+          ["snapshot", { ...completed, terminal: false, revision: 3 }],
+          [
+            "reasoning",
+            {
+              revision: 3,
+              value: {
+                delta: "重复",
+                status: "complete",
+                startedAt: 1000,
+                endedAt: 2000,
+              },
+            },
+          ],
+          ["done", { revision: 4, value: completed }],
+        ]);
+  const seen: DispatchSnapshot[] = [];
+  await followDispatch(
+    { runId: "run" } as StoredRun,
+    new AbortController().signal,
+    async (value) => {
+      seen.push(value);
+    },
+  );
+  assert.equal(requests, 2);
+  assert.equal(seen.at(-1)!.reasoning!.text, "先思考，再回应");
+  assert.equal(seen.at(-1)!.reasoning!.endedAt, 2000);
+  assert.ok(seen.every((value) => !value.reasoning!.text.includes("重复")));
+});
+
+test("思考随消息及 v13 备份保存，普通复制和下一轮上下文不含思考，兼容 v12", async () => {
+  const { session } = await setup();
+  const trace: ReasoningTrace = {
+    text: "仅供查看的推理，不应发回模型",
+    status: "complete",
+    startedAt: 1000,
+    endedAt: 2000,
+  };
+  let calls = 0;
+  globalThis.fetch = async (path, init) => {
+    const fixture = contextFixture(String(path), init);
+    if (fixture) return fixture;
+    if (String(path).endsWith("/ack")) return Response.json({});
+    const request = JSON.parse(String(init?.body));
+    assert.ok(!JSON.stringify(request.context).includes(trace.text));
+    calls++;
+    const raw = await dispatchResponse(request).text();
+    const complete = JSON.parse(
+      raw.split("data: ")[1].trim(),
+    ) as DispatchSnapshot;
+    return sse([["snapshot", { ...complete, reasoning: trace }]]);
+  };
+  await sendMessage("你好");
+  await sendMessage("继续");
+  assert.equal(calls, 2);
+  const replies = (await allMessages(session.id)).filter(
+    (m) => m.role === "assistant",
+  );
+  assert.deepEqual(replies[0].reasoning, trace);
+  assert.ok(!plainText(replies[0]).includes(trace.text));
+  const backup = await takeSnapshot();
+  assert.equal(backup.formatVersion, 13);
+  await restoreSnapshot(backup);
+  assert.deepEqual(
+    (await allMessages(session.id)).find((m) => m.id === replies[0].id)!
+      .reasoning,
+    trace,
+  );
+  const legacy = JSON.parse(JSON.stringify(backup));
+  legacy.formatVersion = 12;
+  for (const message of legacy.data.messages) delete message.reasoning;
+  const converted = validateBackup(legacy);
+  assert.equal(converted.formatVersion, 13);
+  assert.ok(converted.data.messages.every((m) => m.reasoning === undefined));
+  const corrupt = JSON.parse(JSON.stringify(backup));
+  corrupt.data.messages.find(
+    (m: { role: string }) => m.role === "assistant",
+  ).reasoning.endedAt = 500;
+  assert.throws(() => validateBackup(corrupt), /序号或版本/);
+  const badStatus = JSON.parse(JSON.stringify(backup));
+  badStatus.data.messages.find(
+    (m: { role: string }) => m.role === "assistant",
+  ).reasoning.status = "unknown";
+  assert.throws(() => validateBackup(badStatus), /思考状态/);
+});
+
+for (const status of ["cancelled", "error"] as const) {
+  test(`仅思考时${status}保留内容，不触发状态整理`, async () => {
+    const { session } = await setup();
+    const trace: ReasoningTrace = {
+      text: "已生成的思考",
+      status,
+      startedAt: 1000,
+      endedAt: 2000,
+    };
+    globalThis.fetch = async (path, init) => {
+      const fixture = contextFixture(String(path), init);
+      if (fixture) return fixture;
+      if (String(path).endsWith("/ack")) return Response.json({});
+      const request = JSON.parse(String(init?.body));
+      return sse([
+        [
+          "snapshot",
+          {
+            ...snapshot(request.runId, true),
+            segments: [],
+            reasoning: trace,
+            stages: {
+              body: {
+                name: "body",
+                status: status === "error" ? "failed" : "cancelled",
+                error: "生成中断",
+              },
+            },
+            error: "生成中断",
+          },
+        ],
+      ]);
+    };
+    await sendMessage("继续");
+    const reply = (await allMessages(session.id)).find(
+      (m) => m.role === "assistant",
+    )!;
+    assert.equal(reply.status, status);
+    assert.deepEqual(reply.reasoning, trace);
+    assert.equal((await (await database()).getAll("stateTasks")).length, 0);
+  });
+}
+
+test("后台句柄缺失的思考检查点恢复为中断，保留思考内容", async () => {
+  const { session } = await setup();
+  const { assistant } = await beginTurn(session.id, "继续");
+  const db = await database();
+  await db.put("messages", {
+    ...assistant,
+    reasoning: {
+      text: "保存中的思考",
+      status: "streaming",
+      startedAt: 1000,
+      endedAt: null,
+    },
+  });
+  await recoverInterrupted();
+  const restored = (await db.get("messages", assistant.id))!;
+  assert.equal(restored.status, "interrupted");
+  assert.equal(restored.reasoning!.status, "error");
+  assert.equal(restored.reasoning!.text, "保存中的思考");
+  assert.ok(restored.reasoning!.endedAt! >= 1000);
 });

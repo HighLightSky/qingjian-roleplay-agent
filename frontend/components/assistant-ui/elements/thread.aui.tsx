@@ -619,7 +619,7 @@ const AssistantMessage: FC = () => {
         data-slot="aui_assistant-message-content"
         className="text-foreground px-2 leading-relaxed wrap-break-word"
       >
-        {pending && !preparing && <ThinkingIndicator />}
+        {!activity && (!pending || !preparing) && <ThinkingIndicator />}
         <MessagePrimitive.GroupedParts groupBy={groupBy}>
           {({ part, children }) => {
             switch (part.type) {

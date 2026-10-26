@@ -119,6 +119,7 @@ public class StateUpdatePromptBuilder {
         messages.addAll(correction);
         var request = new ChatRequest(messages, config.stateOutputTokens(), 0.0, true);
         request.setResponseSchema(StateUpdateResponseSchema.build(material));
+        request.setTimeout(java.time.Duration.ofSeconds(config.stateTimeoutSeconds()));
         return request;
     }
 

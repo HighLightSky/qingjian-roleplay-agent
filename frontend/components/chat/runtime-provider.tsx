@@ -132,6 +132,7 @@ function convertMessage(message: RuntimeEntry): ThreadMessageLike {
       custom: {
         segmented: message.role === "assistant",
         pending: message.status === "pending",
+        reasoning: message.reasoning,
         sessionId: message.sessionId,
         plainText: text,
       },

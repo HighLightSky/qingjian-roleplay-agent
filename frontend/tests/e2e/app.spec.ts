@@ -80,7 +80,7 @@ test("选图时隐藏思考提示，正文首字前显示角色名与 Reasoning 
     },
   };
   await expect(thinking).toBeVisible();
-  await expect(thinking).toHaveText("林溪正在思考中");
+  await expect(thinking).toHaveText("等待模型响应");
   await expect(
     thinking.locator('[data-slot="reasoning-trigger-icon"]'),
   ).toBeVisible();
@@ -89,7 +89,7 @@ test("选图时隐藏思考提示，正文首字前显示角色名与 Reasoning 
   ).toHaveClass(/shimmer/);
   await page.reload();
   await expect(thinking).toBeVisible();
-  await expect(thinking).toHaveText("林溪正在思考中");
+  await expect(thinking).toHaveText("等待模型响应");
 
   current = { ...current, segments: completed!.segments };
   await expect(page.getByText("她检查地图。", { exact: true })).toBeVisible();
@@ -114,6 +114,92 @@ test("选图时隐藏思考提示，正文首字前显示角色名与 Reasoning 
   await expect(thinking).toHaveCount(0);
 });
 
+test("思考默认折叠且实时可展开，刷新和正文完成后仍可查看", async ({ page }) => {
+  await createRole(page);
+  let current: DispatchSnapshot;
+  let completed: DispatchSnapshot;
+  await page.route("**/api/chat", async (route) => {
+    completed = JSON.parse(
+      (await dispatchResponse(route.request().postDataJSON()).text())
+        .split("data: ")[1]
+        .trim(),
+    );
+    current = {
+      ...completed,
+      terminal: false,
+      body: null,
+      state: null,
+      segments: [],
+      stages: {
+        selection: completed.stages.selection,
+        body: { name: "body", status: "running", error: null },
+      },
+      reasoning: {
+        text: "先检查角色当前状态。",
+        status: "streaming",
+        startedAt: Date.now(),
+        endedAt: null,
+      },
+    };
+    await route.fulfill({
+      contentType: "text/event-stream",
+      body: `event: snapshot\ndata: ${JSON.stringify(current)}\n\n`,
+    });
+  });
+  await page.route("**/api/chat/*/events", async (route) => {
+    await route.fulfill({
+      contentType: "text/event-stream",
+      body: `event: snapshot\ndata: ${JSON.stringify(current)}\n\n`,
+    });
+  });
+  await send(page, "你好");
+  const trigger = page.getByRole("button", { name: /正在思考/ });
+  await expect(trigger).toBeVisible();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect(
+    page.getByText("先检查角色当前状态。", { exact: true }),
+  ).not.toBeVisible();
+  await trigger.click();
+  await expect(
+    page.getByText("先检查角色当前状态。", { exact: true }),
+  ).toBeVisible();
+  current = {
+    ...current!,
+    reasoning: {
+      ...current!.reasoning!,
+      text: "先检查角色当前状态。再回应用户。",
+    },
+  };
+  await expect(
+    page.getByText("先检查角色当前状态。再回应用户。", { exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: /正在思考/ })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  current = {
+    ...completed!,
+    reasoning: {
+      ...current.reasoning!,
+      status: "complete",
+      endedAt: Date.now(),
+    },
+  };
+  await expect(page.getByText("她检查地图。", { exact: true })).toBeVisible();
+  const finished = page.getByRole("button", { name: /思考完成/ });
+  await expect(finished).toHaveAttribute("aria-expanded", "false");
+  await finished.click();
+  await expect(
+    page.getByText("先检查角色当前状态。再回应用户。", { exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: /思考完成/ }).click();
+  await expect(
+    page.getByText("先检查角色当前状态。再回应用户。", { exact: true }),
+  ).toBeVisible();
+});
+
 test("上下文环位于32px发送按钮左侧，支持查看预留，本轮usage刷新后保留", async ({
   page,
 }) => {
@@ -134,7 +220,7 @@ test("上下文环位于32px发送按钮左侧，支持查看预留，本轮usag
   expect(layout[0]!.x + layout[0]!.width).toBeLessThanOrEqual(layout[1]!.x);
   if ((page.viewportSize()?.width ?? 1440) < 768) await ring.tap();
   else await ring.hover();
-  await expect(page.getByText("输出预留：8,192 token")).toBeVisible();
+  await expect(page.getByText("输出预留：10,272 token")).toBeVisible();
   await expect(page.getByText(/精确计数/)).toBeVisible();
   await expect(
     page.locator(
@@ -145,11 +231,11 @@ test("上下文环位于32px发送按钮左侧，支持查看预留，本轮usag
   await send(page, "你好");
   await expect(
     page.locator('[data-slot="turn-token-usage"]').last(),
-  ).toHaveText("输入 12,300 · 输出 780 · 合计 13,080 token");
+  ).toHaveText("输入 12,300 · 输出（含思考）780 · 合计 13,080 token");
   await page.reload();
   await expect(
     page.locator('[data-slot="turn-token-usage"]').last(),
-  ).toHaveText("输入 12,300 · 输出 780 · 合计 13,080 token");
+  ).toHaveText("输入 12,300 · 输出（含思考）780 · 合计 13,080 token");
 });
 
 test("达到70%自动压缩前30轮并保留最近10轮，原始历史不删除", async ({
