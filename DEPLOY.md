@@ -2,6 +2,28 @@
 
 以下命令均在项目根目录执行。
 
+## 0. 信任外部服务证书
+
+模型服务和生图服务使用 HTTPS 证书，部署机必须先信任 `cert/qwen-lan-ca.crt` 和 `cert/server.crt`。服务在本机部署时同样需要导入。
+
+```bash
+# 系统信任库：curl 等工具使用
+sudo cp cert/qwen-lan-ca.crt /usr/local/share/ca-certificates/qwen-lan-ca.crt
+sudo cp cert/server.crt /usr/local/share/ca-certificates/roleplay-server.crt
+sudo update-ca-certificates
+
+# JVM 信任库：后端调用模型服务和生图服务使用
+# keytool 必须来自启动后端的同一个 JDK；JDK 在系统目录时给这些命令加 sudo
+"$JAVA_HOME/bin/keytool" -delete -alias qwen-lan-ca -cacerts -storepass changeit 2>/dev/null || true
+"$JAVA_HOME/bin/keytool" -delete -alias roleplay-server -cacerts -storepass changeit 2>/dev/null || true
+"$JAVA_HOME/bin/keytool" -importcert -noprompt -alias qwen-lan-ca \
+  -file cert/qwen-lan-ca.crt -cacerts -storepass changeit
+"$JAVA_HOME/bin/keytool" -importcert -noprompt -alias roleplay-server \
+  -file cert/server.crt -cacerts -storepass changeit
+```
+
+`server.crt` 是自签名证书，SAN 为 `localhost`、`127.0.0.1`、`0.0.0.0`、`10.21.16.197`，访问地址的主机名必须在其中；`qwen-lan-ca.crt` 是根 CA，签发对象不限主机名。
+
 ## 1. 启动 nginx（443 -> 127.0.0.1:3000）
 
 ```bash
@@ -77,7 +99,7 @@ ss -ltn | grep -E ':(443|3000|8080)\b' || echo "已全部关闭"
 
 ## 剧情图服务
 
-后端设置 `IMAGE_SERVICE_BASE_URL`（默认内网 HTTPS 地址）和 `IMAGE_SERVICE_API_TOKEN`。Token 只配置在后端；未配置时聊天正常，生图按钮会提示未启用。使用自签证书时，将服务证书导入 JVM 信任库并配置 `JAVA_TOOL_OPTIONS`，不能关闭 TLS 校验。
+后端设置 `IMAGE_SERVICE_BASE_URL`（默认内网 HTTPS 地址）和 `IMAGE_SERVICE_API_TOKEN`。Token 只配置在后端；未配置时聊天正常，生图按钮会提示未启用。服务证书信任见第 0 步，不能关闭 TLS 校验。
 
 远端代理必须放行 `/api/image/edit/{task_id}/cancel`，且该路由不占用生成连接配额。应用停止按钮使用另一条连接发送取消，原生成连接继续等待 `409 TASK_CANCELLED`；收到 `202` 时仍显示取消中。
 
