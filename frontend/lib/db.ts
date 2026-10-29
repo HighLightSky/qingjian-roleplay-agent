@@ -10,6 +10,7 @@ import {
   upgradeV8Record,
   upgradeV10Record,
   upgradeV11Record,
+  upgradeV12Record,
 } from "./scene-images/migration";
 import { IMAGE_SEQUENCE_KEY } from "./images/ids";
 import {
@@ -107,7 +108,7 @@ let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
     let upgradeError: unknown;
-    connection = openDB<RoleplayDB>("roleplay-agent", 12, {
+    connection = openDB<RoleplayDB>("roleplay-agent", 13, {
       upgrade(db, oldVersion, _newVersion, tx) {
         void tx.done.catch((error: unknown) => {
           upgradeError ??= error;
@@ -117,7 +118,8 @@ export function database(): Promise<IDBPDatabase<RoleplayDB>> {
           oldVersion !== 8 &&
           oldVersion !== 9 &&
           oldVersion !== 10 &&
-          oldVersion !== 11
+          oldVersion !== 11 &&
+          oldVersion !== 12
         ) {
           upgradeError = new Error(
             "当前数据库版本不支持自动升级，原数据已保留，请使用旧版本导出备份。",
@@ -144,18 +146,12 @@ export function database(): Promise<IDBPDatabase<RoleplayDB>> {
                   (cursor.value as Setting).key.startsWith("dispatch:")
                 )
                   await cursor.delete();
-                else
-                  await cursor.update(
-                    upgradeV11Record(
-                      table,
-                      oldVersion === 11
-                        ? (cursor.value as unknown as Record<string, unknown>)
-                        : upgradeV10Record(
-                            table,
-                            cursor.value as unknown as Record<string, unknown>,
-                          ),
-                    ) as never,
-                  );
+                else {
+                  let row = cursor.value as unknown as Record<string, unknown>;
+                  if (oldVersion < 11) row = upgradeV10Record(table, row);
+                  if (oldVersion < 12) row = upgradeV11Record(table, row);
+                  await cursor.update(upgradeV12Record(table, row) as never);
+                }
                 cursor = await cursor.continue();
               }
             }

@@ -28,6 +28,8 @@ import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 class AuxiliaryAgentsTest {
+    // 为固定协议与一次纠错留出空间，长材料仍须触发裁减。
+    private static final int CONSTRAINED_STATE_INPUT_TOKENS = 12000;
     private final ObjectMapper mapper = new ObjectMapper();
     private final LLMClient model = mock(LLMClient.class);
     private final LlamaTokenCounter counter = mock(LlamaTokenCounter.class);
@@ -163,7 +165,7 @@ class AuxiliaryAgentsTest {
         logger.setLevel(ch.qos.logback.classic.Level.WARN);
         logger.addAppender(logs);
         try {
-            stateService(10000).update(request);
+            stateService(CONSTRAINED_STATE_INPUT_TOKENS).update(request);
         } finally {
             logger.detachAppender(logs);
             logger.setLevel(previousLevel);
@@ -171,7 +173,7 @@ class AuxiliaryAgentsTest {
         }
         var calls = ArgumentCaptor.forClass(ChatRequest.class);
         verify(model).chat(calls.capture());
-        assertTrue(counter.countTextOnly(calls.getValue()).inputTokens() <= 10000);
+        assertTrue(counter.countTextOnly(calls.getValue()).inputTokens() <= CONSTRAINED_STATE_INPUT_TOKENS);
         var data = material(calls.getValue());
         assertTrue(data.path("currentMessages").get(1).path("incomplete").asBoolean());
         assertFalse(data.path("incompleteSections").isEmpty());
@@ -180,7 +182,7 @@ class AuxiliaryAgentsTest {
         assertEquals(before, mapper.writeValueAsString(context));
         String evidence = ",\"progressEvidence\":{\"type\":\"outcome\",\"sourceMessageId\":\"msg2\",\"quote\":\"结尾\"}";
         when(model.chat(any())).thenReturn(new ChatResponse(goalPatch("{\"progressSummary\":\"覆盖早期信息\"}", evidence), "stop", TokenUsage.unavailable()));
-        assertThrows(IOException.class, () -> stateService(10000).update(request));
+        assertThrows(IOException.class, () -> stateService(CONSTRAINED_STATE_INPUT_TOKENS).update(request));
     }
 
     @Test void restoresMemoryIdsAndProtectsOmittedStoryLists() throws Exception {
@@ -199,14 +201,14 @@ class AuxiliaryAgentsTest {
         var input = request(context(0, 0, snapshot), "普通寒暄，没有改变关键物品。");
         when(model.chat(any())).thenReturn(new ChatResponse(EMPTY, "stop", TokenUsage.unavailable()));
         clearInvocations(model);
-        stateService(10000).update(input);
+        stateService(CONSTRAINED_STATE_INPUT_TOKENS).update(input);
         var calls = ArgumentCaptor.forClass(ChatRequest.class);
         verify(model).chat(calls.capture());
         assertFalse(material(calls.getValue()).path("editableStoryFields").toString().contains("items"));
         String change = "{\"action\":\"update\",\"id\":\"items\",\"value\":[],\"reason\":\"未看到物品\",\"sourceMessageIds\":[\"msg2\"]}";
         when(model.chat(any())).thenReturn(new ChatResponse(EMPTY.replace("\"visualChanges\":[],\"storyChanges\":[]", "\"visualChanges\":[],\"storyChanges\":[" + change + "]"),
                 "stop", TokenUsage.unavailable()));
-        assertThrows(IOException.class, () -> stateService(10000).update(input));
+        assertThrows(IOException.class, () -> stateService(CONSTRAINED_STATE_INPUT_TOKENS).update(input));
         assertEquals(1, snapshot.story().items().size());
     }
 
@@ -218,13 +220,13 @@ class AuxiliaryAgentsTest {
             goals.add(new Goal("ended-goal-" + i, "session", new GoalValue("旧目标" + i, "completed", "", "旧进展".repeat(30)),
                     1, "automatic", List.of(), "2026-10-21T00:00:00Z"));
         var snapshot = new Snapshot(memories.sessionId(), memories.characterId(), 0, 0, memories.story(), Map.of(), memories.memories(), goals, com.example.web.dto.StateDtos.VisualState.empty(), java.util.Map.of());
-        stateService(10000).update(request(context(0, 0, snapshot), "本轮没有新的重要进展。"));
+        stateService(CONSTRAINED_STATE_INPUT_TOKENS).update(request(context(0, 0, snapshot), "本轮没有新的重要进展。"));
         var calls = ArgumentCaptor.forClass(ChatRequest.class);
         verify(model).chat(calls.capture());
         var data = material(calls.getValue());
         assertTrue(data.path("goals").isEmpty());
         assertTrue(data.path("memories").size() < 500);
-        assertTrue(counter.countTextOnly(calls.getValue()).inputTokens() <= 10000);
+        assertTrue(counter.countTextOnly(calls.getValue()).inputTokens() <= CONSTRAINED_STATE_INPUT_TOKENS);
         verify(counter, atMost(32)).countTextOnly(any());
         assertEquals(500, snapshot.memories().size());
         assertEquals(500, snapshot.goals().size());

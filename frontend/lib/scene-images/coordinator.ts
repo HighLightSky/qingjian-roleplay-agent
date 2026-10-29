@@ -18,6 +18,7 @@ import {
   initialSceneDraft,
   orderedSceneReferences,
   poseGenerationError,
+  selectedScenePose,
 } from "./draft";
 
 const following = new Map<string, Promise<void>>();
@@ -75,6 +76,12 @@ export async function saveSceneDraft(
               : current.poseSearch.selectedPoseId,
         },
       };
+    const sameSelection =
+      current &&
+      current.poseQuery === draft.poseQuery &&
+      current.poseSearch.revision === draft.poseSearch.revision &&
+      current.poseSearch.selectedPoseId === draft.poseSearch.selectedPoseId;
+    draft = { ...draft, poseEdit: sameSelection ? current.poseEdit : null };
     await db.put("sceneImagePlans", { ...plan, draft });
   });
 }
@@ -152,11 +159,7 @@ export async function startSceneGeneration(planId: string, commit: Commit) {
     poseEnabled: draft.poseEnabled,
     poseQuery: draft.poseQuery || null,
     characterReferenceAssetId: draft.characterReferenceAssetId,
-    poseSelection: draft.poseEnabled
-      ? draft.poseSearch.matches.find(
-          (match) => match.poseId === draft.poseSearch.selectedPoseId,
-        )!
-      : null,
+    poseSelection: draft.poseEnabled ? selectedScenePose(draft) : null,
   });
   if (references.length > caps.imageGeneration.maxReferenceImages)
     throw new Error(

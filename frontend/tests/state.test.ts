@@ -414,6 +414,7 @@ test("正常整理结果与手动重试共用草稿事务，重复接收保留�
       poseQuery: "",
       characterReferenceAssetId: null,
       poseSearch: emptyPoseSearch(),
+      poseEdit: null,
     },
   });
   await acceptStateResult(task, result, commit, changed);
@@ -426,7 +427,7 @@ test("正常整理结果与手动重试共用草稿事务，重复接收保留�
     (await db.get("sessions", session.id))!.stateVersion,
     session.stateVersion,
   );
-  assert.equal(validateBackup(await takeSnapshot()).formatVersion, 14);
+  assert.equal(validateBackup(await takeSnapshot()).formatVersion, 15);
 });
 
 test("computed 画面草稿的独占原图参与计量、回收和备份，重提无需再次调用模型", async () => {

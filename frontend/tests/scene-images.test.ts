@@ -264,7 +264,7 @@ test("v9 备份一次性转换为 v11；新图关系可完整恢复且不恢复�
     delete session.visualSources;
   }
   const converted = validateBackup(legacy);
-  assert.equal(converted.formatVersion, 14);
+  assert.equal(converted.formatVersion, 15);
   assert.equal(converted.data.assets[0].creationOrigin, "uploaded");
   assert.equal(converted.data.sessions[0].stateVersion, 0);
   await db.put("sceneGenerations", generation);
@@ -402,6 +402,7 @@ test("编辑草稿持久化；每次提交冻结实际提示词和对齐尺寸�
     poseQuery: "",
     characterReferenceAssetId: null,
     poseSearch: emptyPoseSearch(),
+    poseEdit: null,
   };
   await saveSceneDraft(plan.id, draft, commit);
   assert.deepEqual((await db.get("sceneImagePlans", plan.id))!.draft, draft);
@@ -453,6 +454,7 @@ test("建议解析失败不封锁手动草稿；无身份参考可仅提交文�
       poseQuery: "",
       characterReferenceAssetId: null,
       poseSearch: emptyPoseSearch(),
+      poseEdit: null,
     },
   });
   let request: any;
@@ -515,7 +517,7 @@ test("v10 备份保留真实提示词与原件尺寸，移除旧前幕和目标�
   delete oldGeneration.submission;
   oldGeneration.sceneId = "scene";
   const converted = validateBackup(backup);
-  assert.equal(converted.formatVersion, 14);
+  assert.equal(converted.formatVersion, 15);
   const result = converted.data.sceneGenerations[0];
   assert.equal(result.submission.effectivePrompt, plan.prompt);
   assert.equal(result.submission.width, 1);
@@ -542,6 +544,7 @@ test("手动取消参考后原样提交提示词，不校验或改写旧图片�
       poseQuery: "",
       characterReferenceAssetId: null,
       poseSearch: emptyPoseSearch(),
+      poseEdit: null,
     },
   });
   let request: any;
@@ -578,12 +581,13 @@ test("v11 备份转为 v12 后移除所有参考 roles 并保留真实文本和�
     poseQuery: "",
     characterReferenceAssetId: null,
     poseSearch: emptyPoseSearch(),
+    poseEdit: null,
   };
   legacy.data.sceneGenerations[0].submission.referenceImages[0].roles = [
     "identity",
   ];
   const migrated = validateBackup(legacy);
-  assert.equal(migrated.formatVersion, 14);
+  assert.equal(migrated.formatVersion, 15);
   assert.equal(
     "roles" in migrated.data.sceneImagePlans[0].referenceImages[0],
     false,
@@ -686,6 +690,7 @@ test("从资源库添加剧情参考会保存选择和原件哈希，不改写�
       poseQuery: "",
       characterReferenceAssetId: null,
       poseSearch: emptyPoseSearch(),
+      poseEdit: null,
     },
     commit,
   );
@@ -1108,7 +1113,7 @@ test("v13 备份迁移保留历史动作文本及嵌套草稿，明确关闭姿�
   ])
     delete backup.data.sceneGenerations[0].submission[key];
   const migrated = validateBackup(backup);
-  assert.equal(migrated.formatVersion, 14);
+  assert.equal(migrated.formatVersion, 15);
   assert.equal(migrated.data.sceneImagePlans[0].poseQuery, null);
   assert.equal(migrated.data.sceneImagePlans[0].draft!.poseEnabled, false);
   assert.equal(
@@ -1122,5 +1127,174 @@ test("v13 备份迁移保留历史动作文本及嵌套草稿，明确关闭姿�
   assert.equal(
     migrated.data.sceneGenerations[0].submission.prompt,
     generation.submission.prompt,
+  );
+});
+
+test("应用姿态编辑原子绑定候选和版本，旧草稿保存不覆盖编辑，切换候选清除", async () => {
+  const { applyPoseEdit } = await import("../lib/pose-editor/repository");
+  const { poseScene } = await import("./pose-fixture");
+  const {
+    initialSceneDraft,
+    selectScenePose,
+    selectedScenePose,
+    withPoseQuery,
+  } = await import("../lib/scene-images/draft");
+  const { saveSceneDraft } = await import("../lib/scene-images/coordinator");
+  const { db, plan } = await fixture();
+  globalThis.fetch = async () => Response.json(caps);
+  const modern = {
+    ...plan,
+    poseQuery: "站立",
+    characterReferenceAssetId: "img1",
+  };
+  const original = poseScene();
+  const candidate = { ...poseCandidate("standing"), pose: original };
+  const other = { ...candidate, poseId: "other" };
+  const draft = {
+    ...initialSceneDraft(modern, caps),
+    poseSearch: {
+      status: "succeeded" as const,
+      query: "站立",
+      revision: 3,
+      matches: [candidate, other],
+      selectedPoseId: "standing",
+      error: null,
+    },
+  };
+  await db.put("sceneImagePlans", { ...modern, draft });
+  const edited = structuredClone(original);
+  edited.characters[0].poses[0].bones.upperarm_l = [0, 0, 35];
+  await applyPoseEdit(
+    plan.id,
+    { sourcePoseId: "standing", searchRevision: 3 },
+    edited,
+    commit,
+  );
+  await saveSceneDraft(
+    plan.id,
+    { ...draft, prompt: "刚才的旧草稿修改" },
+    commit,
+  );
+  const saved = (await db.get("sceneImagePlans", plan.id))!.draft!;
+  assert.deepEqual(selectedScenePose(saved).pose, edited);
+  assert.deepEqual(saved.poseSearch.matches[0].pose, original);
+  await assert.rejects(
+    applyPoseEdit(
+      plan.id,
+      { sourcePoseId: "standing", searchRevision: 2 },
+      original,
+      commit,
+    ),
+    /版本已变化/,
+  );
+  const backup = validateBackup(await takeSnapshot());
+  assert.deepEqual(
+    backup.data.sceneImagePlans[0].draft!.poseEdit!.scene,
+    edited,
+  );
+  await restoreSnapshot(backup);
+  const restored = (await db.get("sceneImagePlans", plan.id))!.draft!;
+  assert.deepEqual(restored.poseEdit!.scene, edited);
+  await saveSceneDraft(plan.id, selectScenePose(restored, "other"), commit);
+  const switched = (await db.get("sceneImagePlans", plan.id))!.draft!;
+  assert.equal(switched.poseEdit, null);
+  assert.equal(selectScenePose(switched, "standing").poseEdit, null);
+  assert.equal(withPoseQuery(restored, "新描述").poseEdit, null);
+});
+
+test("关闭姿势保留编辑但不提交，开启后提交完整编辑场景并冻结到任务快照", async () => {
+  const { poseScene } = await import("./pose-fixture");
+  const { applyPoseEdit } = await import("../lib/pose-editor/repository");
+  const { initialSceneDraft } = await import("../lib/scene-images/draft");
+  const { saveSceneDraft } = await import("../lib/scene-images/coordinator");
+  const { db, plan } = await fixture();
+  const modern = {
+    ...plan,
+    poseQuery: "站立",
+    characterReferenceAssetId: "img1",
+  };
+  const candidate = { ...poseCandidate("standing"), pose: poseScene() };
+  const draft = {
+    ...initialSceneDraft(modern, caps),
+    poseSearch: {
+      status: "succeeded" as const,
+      query: "站立",
+      revision: 1,
+      matches: [candidate],
+      selectedPoseId: "standing",
+      error: null,
+    },
+  };
+  await db.put("sceneImagePlans", { ...modern, draft });
+  const requests: any[] = [];
+  globalThis.fetch = async (path, init) => {
+    if (path === "/api/capabilities") return Response.json(caps);
+    if (path === "/api/images/missing") return Response.json({ missing: [] });
+    if (path === "/api/scene-images") {
+      const request = JSON.parse(String(init!.body));
+      requests.push(request);
+      return Response.json({ runId: request.runId });
+    }
+    if (String(path).endsWith("/events")) {
+      const request = requests.find((row) => String(path).includes(row.runId));
+      return new Response(
+        `event: snapshot\ndata: ${JSON.stringify({ runId: request.runId, revision: 2, status: "failed", terminal: true, error: "测试结束", submission: { ...request, effectivePrompt: request.prompt } })}\n\n`,
+      );
+    }
+    if (String(path).endsWith("/ack")) return new Response(null);
+    throw new Error(`意外请求：${path}`);
+  };
+  const edited = poseScene();
+  edited.characters[0].transform.x = 2;
+  await applyPoseEdit(
+    plan.id,
+    { sourcePoseId: "standing", searchRevision: 1 },
+    edited,
+    commit,
+  );
+  const saved = (await db.get("sceneImagePlans", plan.id))!.draft!;
+  await saveSceneDraft(plan.id, { ...saved, poseEnabled: false }, commit);
+  await startSceneGeneration(plan.id, commit);
+  await followSceneGeneration(requests[0].runId, commit);
+  assert.equal(requests[0].poseSelection, null);
+  assert.deepEqual(
+    (await db.get("sceneImagePlans", plan.id))!.draft!.poseEdit!.scene,
+    edited,
+  );
+  await saveSceneDraft(plan.id, { ...saved, poseEnabled: true }, commit);
+  await startSceneGeneration(plan.id, commit);
+  await followSceneGeneration(requests[1].runId, commit);
+  assert.deepEqual(requests[1].poseSelection.pose, edited);
+  const second = structuredClone(edited);
+  second.characters[0].transform.x = 3;
+  await applyPoseEdit(
+    plan.id,
+    { sourcePoseId: "standing", searchRevision: 1 },
+    second,
+    commit,
+  );
+  assert.deepEqual(
+    (await db.get("sceneGenerations", requests[1].runId))!.submission
+      .poseSelection!.pose,
+    edited,
+  );
+});
+
+test("v14 备份迁移为 v15 时保留姿势状态、候选和选择，新增编辑为空", async () => {
+  const { db, plan } = await fixture();
+  const { initialSceneDraft } = await import("../lib/scene-images/draft");
+  await db.put("sceneImagePlans", {
+    ...plan,
+    draft: initialSceneDraft(plan, caps),
+  });
+  const backup = structuredClone(await takeSnapshot()) as any;
+  backup.formatVersion = 14;
+  delete backup.data.sceneImagePlans[0].draft.poseEdit;
+  const migrated = validateBackup(backup);
+  assert.equal(migrated.formatVersion, 15);
+  assert.equal(migrated.data.sceneImagePlans[0].draft!.poseEdit, null);
+  assert.deepEqual(
+    migrated.data.sceneImagePlans[0].draft!.poseSearch,
+    backup.data.sceneImagePlans[0].draft.poseSearch,
   );
 });

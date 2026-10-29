@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
+import { poseScene } from "../pose-fixture";
 import { dispatchResponse } from "../dispatch-fixture";
 import { contextCapabilities } from "../context-fixture";
 const base64 =
@@ -54,7 +55,7 @@ async function setup(page: Page) {
   await expect
     .poll(() =>
       page.evaluate(async () => {
-        const request = indexedDB.open("roleplay-agent", 12);
+        const request = indexedDB.open("roleplay-agent", 13);
         const db = await new Promise<IDBDatabase>((resolve) => {
           request.onsuccess = () => resolve(request.result);
         });
@@ -75,7 +76,7 @@ async function setup(page: Page) {
   await expect(page.getByTestId("scene-image-card")).toBeVisible();
   await page.evaluate(
     async ({ base64, hash }) => {
-      const request = indexedDB.open("roleplay-agent", 12);
+      const request = indexedDB.open("roleplay-agent", 13);
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
@@ -283,7 +284,7 @@ test("身份和服装参考均可压缩，黑图由后端注入", async ({ page 
       ),
       (b) => b.toString(16).padStart(2, "0"),
     ).join("");
-    const request = indexedDB.open("roleplay-agent", 12);
+    const request = indexedDB.open("roleplay-agent", 13);
     const db = await new Promise<IDBDatabase>((resolve) => {
       request.onsuccess = () => resolve(request.result);
     });
@@ -465,7 +466,7 @@ test("无身份照片且参考建议报错时，仍允许仅用提示词生成�
   );
   await setup(page);
   await page.evaluate(async () => {
-    const opening = indexedDB.open("roleplay-agent", 12);
+    const opening = indexedDB.open("roleplay-agent", 13);
     const db = await new Promise<IDBDatabase>((resolve) => {
       opening.onsuccess = () => resolve(opening.result);
     });
@@ -844,4 +845,182 @@ test("新回复整理落库立即触发姿势检索，等待检索不阻塞聊�
     "人物站立，双手下垂",
   );
   await expect(card.getByRole("radio")).toHaveCount(3);
+});
+
+async function editorFixture(page: Page) {
+  await page.route("**/api/scene-images/poses/search", (route) =>
+    route.fulfill({
+      json: {
+        matches: [
+          {
+            poseId: "editor-source",
+            score: 0.7,
+            description: { zh: "原始姿势", en: "Original pose" },
+            pose: poseScene(),
+          },
+          {
+            poseId: "editor-other",
+            score: 0.5,
+            description: { zh: "另一个姿势", en: "Another pose" },
+            pose: poseScene("sitting"),
+          },
+        ],
+      },
+    }),
+  );
+  await setup(page);
+  await seedPosePlan(page);
+  const card = page.getByTestId("scene-image-card").last();
+  await card.locator("summary").click();
+  await card.getByLabel("选择姿势 原始姿势").check();
+  await card.getByRole("button", { name: "编辑姿势", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑姿势", exact: true });
+  await expect(
+    dialog.getByRole("button", { name: "应用修改", exact: true }),
+  ).toBeEnabled({ timeout: 30000 });
+  return { card, dialog };
+}
+
+test("实际人体编辑可撤销重做，应用并刷新后生成冻结完整修改姿势", async ({
+  page,
+}, info) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const { card, dialog } = await editorFixture(page);
+  await dialog
+    .getByLabel("旋转骨骼", { exact: true })
+    .selectOption("upperarm_l");
+  const originalRotation =
+    poseScene().characters[0].poses[0].bones.upperarm_l[2];
+  await dialog.getByLabel("骨骼旋转 Z").fill("55");
+  await dialog.getByLabel("骨骼旋转 Z").press("Tab");
+  await expect(
+    dialog.getByRole("button", { name: "撤销", exact: true }),
+  ).toBeEnabled();
+  await dialog.getByRole("button", { name: "撤销", exact: true }).click();
+  await dialog
+    .getByLabel("旋转骨骼", { exact: true })
+    .selectOption("upperarm_l");
+  await expect(dialog.getByLabel("骨骼旋转 Z")).toHaveValue(
+    String(originalRotation),
+  );
+  await dialog.getByRole("button", { name: "重做", exact: true }).click();
+  await dialog
+    .getByLabel("旋转骨骼", { exact: true })
+    .selectOption("upperarm_l");
+  await expect(dialog.getByLabel("骨骼旋转 Z")).toHaveValue("55");
+  await dialog.getByLabel("人物 X", { exact: true }).fill("1.5");
+  await dialog.getByLabel("人物 X", { exact: true }).press("Tab");
+  await dialog.getByLabel("机位水平角").fill("20");
+  await dialog.getByLabel("机位水平角").press("Tab");
+  await expect(
+    dialog.getByRole("button", { name: "应用修改", exact: true }),
+  ).toBeEnabled();
+  await dialog.screenshot({ path: info.outputPath("pose-editor.png") });
+  await dialog.getByRole("button", { name: "应用修改", exact: true }).click();
+  await expect(card.getByText("已编辑", { exact: true })).toBeVisible();
+  await page.reload();
+  const restored = page.getByTestId("scene-image-card").last();
+  await restored.locator("summary").click();
+  await expect(restored.getByText("已编辑", { exact: true })).toBeVisible();
+  let submitted: any;
+  await page.route("**/api/scene-images", (route) => {
+    submitted = route.request().postDataJSON();
+    return route.fulfill({ json: { runId: submitted.runId } });
+  });
+  await page.route("**/api/scene-images/*/events", (route) =>
+    route.fulfill({ status: 404, json: { message: "测试结束" } }),
+  );
+  await restored.getByRole("button", { name: "生成图片", exact: true }).click();
+  await expect
+    .poll(
+      () =>
+        submitted?.poseSelection?.pose?.characters[0].poses[0].bones
+          .upperarm_l[2],
+    )
+    .toBe(55);
+  expect(submitted.poseSelection.pose.characters[0].transform.x).toBe(1.5);
+  expect(
+    submitted.poseSelection.pose.characters[0].poses[0].cameraParams.yaw_deg,
+  ).toBe(20);
+  expect(submitted.poseSelection.pose.vendorMetadata).toEqual({
+    preserved: true,
+  });
+  expect(submitted.poseSelection.pose.characters[0].poses[1]).toEqual(
+    poseScene().characters[0].poses[1],
+  );
+  expect(errors).toEqual([]);
+});
+
+test("取消姿态编辑不保存，切换候选清除已应用修改，恢复原姿势可重新编辑", async ({
+  page,
+}) => {
+  const { card, dialog } = await editorFixture(page);
+  await dialog.getByLabel("人物 X", { exact: true }).fill("2");
+  await dialog.getByLabel("人物 X", { exact: true }).press("Tab");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(card.getByText("已编辑", { exact: true })).toHaveCount(0);
+  await card.getByRole("button", { name: "编辑姿势", exact: true }).click();
+  const reopened = page.getByRole("dialog", { name: "编辑姿势", exact: true });
+  await expect(
+    reopened.getByRole("button", { name: "应用修改", exact: true }),
+  ).toBeEnabled({ timeout: 30000 });
+  await expect(reopened.getByLabel("人物 X", { exact: true })).toHaveValue("0");
+  await reopened.getByLabel("人物 X", { exact: true }).fill("3");
+  await reopened.getByLabel("人物 X", { exact: true }).press("Tab");
+  await reopened.getByRole("button", { name: "应用修改", exact: true }).click();
+  await expect(card.getByText("已编辑", { exact: true })).toBeVisible();
+  await card.getByRole("button", { name: "恢复检索姿势", exact: true }).click();
+  await expect(card.getByText("已编辑", { exact: true })).toHaveCount(0);
+  await card.getByRole("button", { name: "编辑姿势", exact: true }).click();
+  const reset = page.getByRole("dialog", { name: "编辑姿势", exact: true });
+  await expect(
+    reset.getByRole("button", { name: "应用修改", exact: true }),
+  ).toBeEnabled({ timeout: 30000 });
+  await expect(reset.getByLabel("人物 X", { exact: true })).toHaveValue("0");
+  await reset.getByLabel("人物 X", { exact: true }).fill("4");
+  await reset.getByLabel("人物 X", { exact: true }).press("Tab");
+  await reset.getByRole("button", { name: "应用修改", exact: true }).click();
+  await card.getByLabel("选择姿势 另一个姿势").check();
+  await expect(card.getByText("已编辑", { exact: true })).toHaveCount(0);
+  await card.getByLabel("选择姿势 原始姿势").check();
+  await expect(card.getByText("已编辑", { exact: true })).toHaveCount(0);
+});
+
+test("人体贴图缺失显示具体错误，不允许把无贴图占位人偶应用为编辑结果", async ({
+  page,
+}) => {
+  await page.route("**/pose_studio/textures/skin.png*", (route) =>
+    route.fulfill({ status: 404 }),
+  );
+  await page.route("**/api/scene-images/poses/search", (route) =>
+    route.fulfill({
+      json: {
+        matches: [
+          {
+            poseId: "broken",
+            score: 0.7,
+            description: { zh: "缺贴图姿势", en: "Pose" },
+            pose: poseScene(),
+          },
+        ],
+      },
+    }),
+  );
+  await setup(page);
+  await seedPosePlan(page);
+  const card = page.getByTestId("scene-image-card").last();
+  await card.locator("summary").click();
+  await card.getByLabel("选择姿势 缺贴图姿势").check();
+  await card.getByRole("button", { name: "编辑姿势", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑姿势", exact: true });
+  await expect(dialog.getByRole("alert")).toContainText(
+    "人体材质贴图未成功加载",
+    { timeout: 30000 },
+  );
+  await expect(
+    dialog.getByRole("button", { name: "应用修改", exact: true }),
+  ).toBeDisabled();
+  await expect(dialog.getByAltText("人偶生成构图预览")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
 });

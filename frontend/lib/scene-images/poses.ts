@@ -36,6 +36,7 @@ async function search(planId: string, commit: Commit) {
       ...plan,
       draft: {
         ...draft,
+        poseEdit: null,
         poseSearch: {
           ...emptyPoseSearch(revision),
           query,

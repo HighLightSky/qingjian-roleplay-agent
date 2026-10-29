@@ -109,7 +109,7 @@ class StateUpdateLiveTest {
     }
 
     @Test
-    void realScenePromptsFollowPoseOutfitAndReadingWithoutRewritingIdentity() throws Exception {
+    void realScenePromptsKeepPoseQueriesVisibleAndSeparateFromStory() throws Exception {
         var mapper = new ObjectMapper();
         var llm = new LlmProperties(System.getenv().getOrDefault("LLM_BASE_URL", "https://10.21.16.197/v1/chat/completions"),
                 System.getenv().getOrDefault("LLM_API_KEY", "llama"), System.getenv().getOrDefault("LLM_MODEL", "Qwen3.8-27B"),
@@ -121,7 +121,10 @@ class StateUpdateLiveTest {
         var checks = Map.of(
                 "pose", "她穿着原来的红色斗篷，侧身站在窗边，右手扶住窗台，目视窗外，双脚落地。",
                 "outfit", "她已经脱下红色斗篷，穿着里面的白色衬衫，站在书桌旁，外套搭在椅背上。",
-                "reading", "她脱下红色斗篷并搭在椅背上，穿白色衬衫，坐在书桌旁的椅子上，双脚落地，左手扶住桌上的书，右手搭在书页边缘，低头阅读。");
+                "reading", "她脱下红色斗篷并搭在椅背上，穿白色衬衫，坐在书桌旁的椅子上，双脚落地，左手扶住桌上的书，右手搭在书页边缘，低头阅读。",
+                "hotel", "林溪这位年轻的女旅馆老板穿着浅蓝针织开衫和白裙，开心地在酒店门口台阶下站着，身体微侧，右手握着牛皮纸袋提手，左臂垂在身侧，稍偏头看向一侧。夕阳照着玻璃门，她等着与旧友继续逛街。",
+                "closeup", "当前画面为双手局部特写，只可见手和手腕：一只手的掌心覆盖另一只手的手背，手指放松。无法分辨人物自身的左右手，其他身体部位和周围物体均不在画面内。她刚才从学校出来，穿着红色斗篷，心里有些紧张。",
+                "stride", "当前静态画面为行走姿态，躯干直立，双腿前后分开，一条腿的膝部略弯，双臂自然前后错开。无法确认人物自身左右；看不到与物体的接触。她在热闹街道上准备跑向酒店，之后打算推门进去找朋友。");
         var saved = mapper.createObjectNode();
         try (var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()) {
             var client = new OpenAiClient(http, mapper, llm.baseUrl(), llm.apiKey(), Duration.ofSeconds(120), Duration.ofSeconds(5), serializer);
@@ -149,8 +152,38 @@ class StateUpdateLiveTest {
                 assertEquals("img2", result.scenePlan().referenceImages().getFirst().assetId());
                 assertEquals(3, result.scenePlan().sourceCheckpointVersion());
                 if (entry.getKey().equals("reading")) {
-                    assertTrue(poseQuery.contains("椅"));
+                    assertTrue(poseQuery.contains("坐"));
                     assertTrue(poseQuery.contains("书"));
+                }
+                if (entry.getKey().equals("outfit")) {
+                    assertTrue(poseQuery.contains("站"), "应保留有依据的站姿：" + poseQuery);
+                    for (String excluded : List.of("桌", "椅", "斗篷", "衬衫", "外套")) {
+                        assertFalse(poseQuery.contains(excluded), "缺少姿态细节时不能用背景或服装凑数：" + poseQuery);
+                    }
+                }
+                if (entry.getKey().equals("pose")) {
+                    assertTrue(poseQuery.contains("窗台"), "应保留有依据的支撑接触：" + poseQuery);
+                    assertFalse(poseQuery.contains("窗外"), "头部方向不应夹带场景目标：" + poseQuery);
+                }
+                if (entry.getKey().equals("hotel")) {
+                    for (String excluded : List.of("林溪", "年轻", "女", "老板", "针织", "裙", "开心", "酒店", "旅馆", "门", "台阶", "牛皮", "夕阳", "玻璃", "旧友", "逛街")) {
+                        assertFalse(poseQuery.contains(excluded), "姿态描述混入剧情或外观信息：" + poseQuery);
+                    }
+                    assertTrue(poseQuery.contains("站"), "应保留整体站姿：" + poseQuery);
+                    assertTrue(poseQuery.contains("提手"), "应保留有依据的手部接触：" + poseQuery);
+                }
+                if (entry.getKey().equals("closeup")) {
+                    for (String excluded : List.of("左", "右", "站", "坐", "肩", "躯干", "头", "腿", "脚", "膝", "椅", "桌", "学校", "斗篷", "紧张")) {
+                        assertFalse(poseQuery.contains(excluded), "局部特写不应补全不可见信息或猜测左右：" + poseQuery);
+                    }
+                    assertTrue(poseQuery.contains("掌心"), "应保留可见的掌心接触：" + poseQuery);
+                    assertTrue(poseQuery.contains("手背"), "应保留可见的手背接触：" + poseQuery);
+                }
+                if (entry.getKey().equals("stride")) {
+                    for (String excluded : List.of("左", "右", "街道", "酒店", "准备", "跑向", "之后", "推门", "朋友", "椅", "扶", "握")) {
+                        assertFalse(poseQuery.contains(excluded), "静态姿态不应混入运动过程或臆测接触：" + poseQuery);
+                    }
+                    assertTrue(poseQuery.contains("前后"), "应保留双腿或双臂的静态位置：" + poseQuery);
                 }
                 saved.set(entry.getKey(), mapper.valueToTree(result));
                 System.out.println("画面真实回归通过：场景=" + entry.getKey() + "，提示词字数=" + prompt.codePointCount(0, prompt.length()));

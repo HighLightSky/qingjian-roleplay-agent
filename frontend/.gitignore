@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 固定版本的姿态资源由校验脚本准备
+/public/vendor/vnccs/

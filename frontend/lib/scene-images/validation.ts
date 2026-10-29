@@ -1,6 +1,12 @@
+import { validatePoseScene } from "../pose-editor/scene";
 import { assertImageId } from "../images/ids";
 import { object, string, integer, array } from "../state/validation";
-import type { SceneImagePlan, SceneGeneration, PoseSelection } from "./types";
+import type {
+  SceneImagePlan,
+  SceneGeneration,
+  PoseSelection,
+  PoseSearch,
+} from "./types";
 
 function references(value: unknown, input: boolean) {
   array(value, 10000);
@@ -57,6 +63,19 @@ export function validateScenePlan(
     if (value.draft.characterReferenceAssetId !== null)
       assertImageId(value.draft.characterReferenceAssetId);
     validatePoseSearch(value.draft.poseSearch);
+    if (value.draft.poseEdit !== null) {
+      const edit = value.draft.poseEdit;
+      object(edit);
+      string(edit.sourcePoseId);
+      string(edit.runtimeRevision);
+      integer(edit.searchRevision, 0);
+      if (
+        edit.sourcePoseId !== value.draft.poseSearch.selectedPoseId ||
+        edit.searchRevision !== value.draft.poseSearch.revision
+      )
+        throw new Error("编辑姿态对应的候选或检索版本已变化。");
+      validatePoseScene(edit.scene);
+    }
     integer(value.draft.width, 1);
     integer(value.draft.height, 1);
     array(value.draft.referenceAssetIds, 10000);
@@ -155,7 +174,7 @@ export function validatePoseSelection(
     throw new Error("姿势对象超过体积限制。");
 }
 
-function validatePoseSearch(value: unknown) {
+function validatePoseSearch(value: unknown): asserts value is PoseSearch {
   object(value);
   if (
     !["idle", "searching", "succeeded", "failed"].includes(

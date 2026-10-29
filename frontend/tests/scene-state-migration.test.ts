@@ -99,11 +99,12 @@ test("v10 原地升级失败回滚，成功移除用途分类并保留草稿、�
   );
   preserved.close();
   const current = await database();
-  assert.equal(current.version, 12);
+  assert.equal(current.version, 13);
   const plan = (await current.get("sceneImagePlans", "plan"))!;
   assert.equal("roles" in plan.referenceImages[0], false);
   assert.deepEqual(plan.draft, {
     ...draft,
+    poseEdit: null,
     poseEnabled: false,
     poseQuery: "",
     characterReferenceAssetId: null,

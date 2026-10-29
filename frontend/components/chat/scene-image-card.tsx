@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import { useAuiState } from "@assistant-ui/react";
 import { ImagePreviewDialog } from "@/components/image-preview-dialog";
@@ -16,11 +17,19 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { database } from "@/lib/db";
+import {
+  applyPoseEdit,
+  resetPoseEdit,
+  type EditBinding,
+} from "@/lib/pose-editor/repository";
+import type { JsonObject } from "@/lib/scene-images/types";
 import { searchScenePoses } from "@/lib/scene-images/poses";
 import {
   orderedSceneReferences,
   poseGenerationError,
   withPoseQuery,
+  selectedScenePose,
+  selectScenePose,
 } from "@/lib/scene-images/draft";
 import { useImageUrl } from "@/hooks/use-image-url";
 import { useAppStore, write } from "@/stores/use-app-store";
@@ -39,6 +48,10 @@ import {
   type SceneGeneration,
   type SceneDraft,
 } from "@/lib/scene-images/types";
+
+const PoseEditorDialog = dynamic(() => import("./pose-editor-dialog"), {
+  ssr: false,
+});
 
 function AssetPreview({ assetId }: { assetId: string }) {
   const { url, missing } = useImageUrl(assetId);
@@ -104,6 +117,13 @@ export function SceneImageCard() {
   const [busy, setBusy] = useState(false);
   const [confirmEdit, setConfirmEdit] = useState(false);
   const [picker, setPicker] = useState(false);
+  const [editing, setEditing] = useState<{
+    binding: EditBinding;
+    scene: JsonObject;
+    original: JsonObject;
+    width: number;
+    height: number;
+  } | null>(null);
   const upload = useRef<HTMLInputElement>(null);
   const [widthText, setWidthText] = useState("");
   const [heightText, setHeightText] = useState("");
@@ -141,7 +161,11 @@ export function SceneImageCard() {
             current &&
             current.poseQuery === selected.draft!.poseQuery &&
             current.poseSearch.revision <= selected.draft!.poseSearch.revision
-              ? { ...current, poseSearch: selected.draft!.poseSearch }
+              ? {
+                  ...current,
+                  poseSearch: selected.draft!.poseSearch,
+                  poseEdit: selected.draft!.poseEdit,
+                }
               : current,
           );
       }
@@ -306,13 +330,7 @@ export function SceneImageCard() {
                     disabled={disabled || !draft.poseEnabled}
                     checked={draft.poseSearch.selectedPoseId === match.poseId}
                     onChange={() =>
-                      updateDraft({
-                        ...draft,
-                        poseSearch: {
-                          ...draft.poseSearch,
-                          selectedPoseId: match.poseId,
-                        },
-                      })
+                      updateDraft(selectScenePose(draft, match.poseId))
                     }
                   />
                   <span className="grid min-w-0 gap-1 break-words">
@@ -326,6 +344,63 @@ export function SceneImageCard() {
                   </span>
                 </label>
               ))}
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  disabled={
+                    disabled ||
+                    !draft.poseEnabled ||
+                    !draft.poseSearch.selectedPoseId ||
+                    !sizeValid ||
+                    !caps
+                  }
+                  onClick={() =>
+                    void action(async () => {
+                      await writes.current;
+                      const stored = await (
+                        await database()
+                      ).get("sceneImagePlans", plan!.id);
+                      if (!stored)
+                        throw new Error("姿势编辑对应的草稿不存在。");
+                      const next = initialSceneDraft(stored, caps!);
+                      const original = next.poseSearch.matches.find(
+                        (match) =>
+                          match.poseId === next.poseSearch.selectedPoseId,
+                      );
+                      if (!original) throw new Error("请先选择姿势候选。");
+                      const unit = caps!.imageGeneration.dimensionAlignment;
+                      setEditing({
+                        binding: {
+                          sourcePoseId: original.poseId,
+                          searchRevision: next.poseSearch.revision,
+                        },
+                        scene: structuredClone(selectedScenePose(next).pose),
+                        original: structuredClone(original.pose),
+                        width: Math.ceil(next.width / unit) * unit,
+                        height: Math.ceil(next.height / unit) * unit,
+                      });
+                    })
+                  }
+                >
+                  编辑姿势
+                </button>
+                <button
+                  type="button"
+                  disabled={disabled || !draft.poseEdit}
+                  onClick={() =>
+                    void action(async () => {
+                      await writes.current;
+                      await resetPoseEdit(plan!.id, write);
+                    })
+                  }
+                >
+                  恢复检索姿势
+                </button>
+                {draft.poseEdit && <span className="text-xs">已编辑</span>}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                只保留当前候选的编辑，切换候选或重新检索会清除修改。
+              </p>
               <label className="grid gap-1">
                 人物参考图（image2）
                 <select
@@ -568,6 +643,21 @@ export function SceneImageCard() {
             </button>
           </div>
         ))}
+      {editing && caps && (
+        <PoseEditorDialog
+          scene={editing.scene}
+          originalScene={editing.original}
+          width={editing.width}
+          height={editing.height}
+          maxPixels={caps.imageGeneration.maxPixels}
+          maxEdge={caps.imageGeneration.maxEdge}
+          onClose={() => setEditing(null)}
+          onApply={async (scene) => {
+            await writes.current;
+            await applyPoseEdit(plan.id, editing.binding, scene, write);
+          }}
+        />
+      )}
       <ResourcePicker
         open={picker}
         onOpenChange={setPicker}

@@ -28,6 +28,13 @@ export type SceneReference = {
 };
 export type JsonValue =
   null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type JsonObject = { [key: string]: JsonValue };
+export type PoseEdit = {
+  sourcePoseId: string;
+  searchRevision: number;
+  runtimeRevision: string;
+  scene: JsonObject;
+};
 export type PoseSelection = {
   poseId: string;
   score: number;
@@ -57,6 +64,7 @@ export type SceneDraft = {
   poseQuery: string;
   characterReferenceAssetId: string | null;
   poseSearch: PoseSearch;
+  poseEdit: PoseEdit | null;
 };
 export type SceneImagePlan = {
   id: string;

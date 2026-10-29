@@ -26,6 +26,7 @@ export function initialSceneDraft(
       poseQuery: plan.poseQuery ?? "",
       characterReferenceAssetId: plan.characterReferenceAssetId,
       poseSearch: emptyPoseSearch(),
+      poseEdit: null,
     }
   );
 }
@@ -34,6 +35,7 @@ export function withPoseQuery(draft: SceneDraft, query: string): SceneDraft {
   return {
     ...draft,
     poseQuery: query,
+    poseEdit: null,
     poseSearch: emptyPoseSearch(draft.poseSearch.revision + 1),
   };
 }
@@ -69,4 +71,27 @@ export function poseGenerationError(draft: SceneDraft): string | null {
     return "请使用当前姿态描述重新检索，并选择候选。";
   if (!draft.poseSearch.selectedPoseId) return "请选择一个姿势候选。";
   return null;
+}
+
+export function selectScenePose(draft: SceneDraft, poseId: string): SceneDraft {
+  return {
+    ...draft,
+    poseEdit:
+      draft.poseSearch.selectedPoseId === poseId ? draft.poseEdit : null,
+    poseSearch: { ...draft.poseSearch, selectedPoseId: poseId },
+  };
+}
+
+export function selectedScenePose(draft: SceneDraft) {
+  const selected = draft.poseSearch.matches.find(
+    (match) => match.poseId === draft.poseSearch.selectedPoseId,
+  );
+  if (!selected) throw new Error("选中的姿势候选不存在。");
+  if (!draft.poseEdit) return selected;
+  if (
+    draft.poseEdit.sourcePoseId !== selected.poseId ||
+    draft.poseEdit.searchRevision !== draft.poseSearch.revision
+  )
+    throw new Error("编辑姿势与当前候选或检索版本不一致。");
+  return { ...selected, pose: draft.poseEdit.scene };
 }

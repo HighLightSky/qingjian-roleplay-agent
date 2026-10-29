@@ -9,7 +9,10 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "prepare:pose": "node scripts/prepare-pose-assets.mjs",
+    "predev": "npm run prepare:pose",
+    "prebuild": "npm run prepare:pose"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.29",

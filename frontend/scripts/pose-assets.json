@@ -1,0 +1,107 @@
+{
+  "revision": "334eee549fba5025b97c4e0a6123b2b68a46f0fc",
+  "files": [
+    {
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/LICENSE",
+      "sha256": "eb067508882e612f646174b5948a398f291f663e8f54a5474dd1da2c07dcbbfd",
+      "bytes": 1067
+    },
+    {
+      "path": "pose_studio/animation.mjs",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/pose_studio/animation.mjs",
+      "sha256": "4f26edd383586732ad99c27de370934a790a584a7aae4016395a22403f14cfdc",
+      "bytes": 125155
+    },
+    {
+      "path": "pose_studio/morph_runtime.mjs",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/pose_studio/morph_runtime.mjs",
+      "sha256": "74da3394f29d96c4ea78cd939c374273341fbfb512b70b1e15831097a252d48b",
+      "bytes": 12233
+    },
+    {
+      "path": "pose_studio/core.js",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/pose_studio/core.js",
+      "sha256": "d80179af8752e1b44e22eaa9bc2e7060461453c6162a54d816e81e19f007a3c8",
+      "bytes": 381987
+    },
+    {
+      "path": "pose_studio/morph_worker.js",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/pose_studio/morph_worker.js",
+      "sha256": "becc5e304bcd890e6491843cac244f3b4d4557b6ba76186b89bdb238e74698b8",
+      "bytes": 2375
+    },
+    {
+      "path": "pose_studio/characters.mjs",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/pose_studio/characters.mjs",
+      "sha256": "e85a7eaa5a4679051c4249a6aa5ca1ebd4f7ee1c0d6fa96be223e290567ee786",
+      "bytes": 12309
+    },
+    {
+      "path": "pose_studio/assets/pose_studio_makehuman.v2.bin.gz",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/pose_studio/assets/pose_studio_makehuman.v2.bin.gz",
+      "sha256": "76adfddc9a98ecd89e5b4a334911e65469fc77939e3fb0500832ab9e2a1baec9",
+      "bytes": 37857679
+    },
+    {
+      "path": "pose_studio/assets/pose_studio_makehuman.v2.CC0-1.0.md",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/pose_studio/assets/pose_studio_makehuman.v2.CC0-1.0.md",
+      "sha256": "f6089cba01cb570a24712b41ab8a586ccd3cc5ef53dc266ca50b95c288956d2c",
+      "bytes": 6962
+    },
+    {
+      "path": "pose_studio/assets/pose_studio_makehuman.v2.LICENSE.md",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/pose_studio/assets/pose_studio_makehuman.v2.LICENSE.md",
+      "sha256": "478ce6343cc2da8f964bd3176b13bd70915390ab7869b708685501c0eb461e19",
+      "bytes": 381
+    },
+    {
+      "path": "pose_studio/textures/skin_dummy.png",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/pose_studio/textures/skin_dummy.png",
+      "sha256": "54818713c197884b27fe1e5ae951b99c3a752d6cdc1b65e284ccf469f22299e1",
+      "bytes": 61879
+    },
+    {
+      "path": "pose_studio/textures/skin.png",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/pose_studio/textures/skin.png",
+      "sha256": "681998b85bf71cafb0742e3737e9f5d139e208821e7768bceb2d845db37feb08",
+      "bytes": 5247911
+    },
+    {
+      "path": "pose_studio/textures/skin_marks.png",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/pose_studio/textures/skin_marks.png",
+      "sha256": "691f307f7e6fa221f028467a66f7b0f6012351dc22f77c085160fe1113079338",
+      "bytes": 5271360
+    },
+    {
+      "path": "vendor/three/TransformControls.js",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/vendor/three/TransformControls.js",
+      "sha256": "a85063ff8e0f67cebd0d530ef62318f16bacf6899473efa77536212b54eb962a",
+      "bytes": 38999
+    },
+    {
+      "path": "vendor/three/OrbitControls.js",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/vendor/three/OrbitControls.js",
+      "sha256": "11af4fc1d92a24fd7197367d9a910a4cefba603f2b7c886b378a980360909945",
+      "bytes": 29100
+    },
+    {
+      "path": "vendor/three/three.module.js",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/vendor/three/three.module.js",
+      "sha256": "3dab5924b43ee586750b2d1af44e8f75a8222c3e94c158c27895b8c6b3881618",
+      "bytes": 1273050
+    },
+    {
+      "path": "vendor/three/LICENSE",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r160/LICENSE",
+      "sha256": "852e0e8699169bf9f6fdc6bda3e682d078dcbc738b5d33e74df594721bff271d",
+      "bytes": 1081
+    },
+    {
+      "path": "shared/custom_select.mjs",
+      "url": "https://raw.githubusercontent.com/AHEKOT/ComfyUI_VNCCS_Utils/334eee549fba5025b97c4e0a6123b2b68a46f0fc/web/shared/custom_select.mjs",
+      "sha256": "8bdc294809e152fd413bd9c4769f1622b32c88dce17fa11a033a0c0f13c1182e",
+      "bytes": 27184
+    }
+  ]
+}

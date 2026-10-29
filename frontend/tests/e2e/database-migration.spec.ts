@@ -7,8 +7,8 @@ const hash = createHash("sha256")
   .update(Buffer.from(png, "base64"))
   .digest("hex");
 
-for (const legacyVersion of [8, 9, 10, 11]) {
-  test(`原生 IndexedDB 的 v${legacyVersion} 库保留原件、正文与草稿后升级为 v12`, async ({
+for (const legacyVersion of [8, 9, 10, 11, 12]) {
+  test(`原生 IndexedDB 的 v${legacyVersion} 库保留原件、正文与草稿后升级为 v13`, async ({
     page,
     baseURL,
   }) => {
@@ -192,6 +192,29 @@ for (const legacyVersion of [8, 9, 10, 11]) {
             error: null,
             prompt: "旧蓝袍人物站在瀑布旁。",
             referenceImages: [],
+            ...(legacyVersion === 12
+              ? {
+                  poseQuery: "站立",
+                  characterReferenceAssetId: null,
+                  draft: {
+                    prompt: "原来的姿态草稿",
+                    width: 256,
+                    height: 512,
+                    referenceAssetIds: [],
+                    poseEnabled: true,
+                    poseQuery: "站立",
+                    characterReferenceAssetId: null,
+                    poseSearch: {
+                      status: "succeeded",
+                      query: "站立",
+                      revision: 2,
+                      matches: [],
+                      selectedPoseId: null,
+                      error: null,
+                    },
+                  },
+                }
+              : {}),
           });
           tx.objectStore("sceneGenerations").put({
             id: "g",
@@ -263,7 +286,7 @@ for (const legacyVersion of [8, 9, 10, 11]) {
       "原来未发的草稿",
     );
     const migrated = await page.evaluate(async () => {
-      const request = indexedDB.open("roleplay-agent", 12);
+      const request = indexedDB.open("roleplay-agent", 13);
       const db = await new Promise<IDBDatabase>((resolve) => {
         request.onsuccess = () => resolve(request.result);
       });
@@ -299,7 +322,7 @@ for (const legacyVersion of [8, 9, 10, 11]) {
       db.close();
       return result;
     });
-    expect(migrated.version).toBe(12);
+    expect(migrated.version).toBe(13);
     expect(migrated.tables).toEqual(
       expect.arrayContaining(["sceneImagePlans", "sceneGenerations"]),
     );

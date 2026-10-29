@@ -57,7 +57,7 @@ roleplay:
 
   image-generation:
     base-url: ${API_BASE_URL:https://10.21.16.104}
-    api-token: ${IMAGE_SERVICE_API_TOKEN:}
+    api-token: ${IMAGE_SERVICE_API_TOKEN:comfyUI-qwen-image-21-edit-api-20261024-token}
     timeout-seconds: 1800
     ready-timeout-seconds: 10
     pose-search-timeout-seconds: 60
