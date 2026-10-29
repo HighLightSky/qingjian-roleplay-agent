@@ -1,6 +1,9 @@
 import type { JsonObject } from "../scene-images/types";
 import { object, array, integer, string } from "../state/validation";
 
+const MAX_SCENE_CHARACTERS = 4;
+const MAX_CHARACTER_POSES = 10000;
+
 export type Vector = [number, number, number];
 export type CharacterTransform = {
   x: number;
@@ -37,6 +40,120 @@ export type PoseScene = JsonObject & {
   characters: PoseCharacter[];
 };
 
+/** 旧单人姿势在入口转换为人物场景，原候选及未知字段保持不变。 */
+export function normalizePoseScene(value: unknown): PoseScene {
+  object(value);
+  if (
+    value.schema_version !== undefined &&
+    value.schema_version !== 1 &&
+    value.schema_version !== 2 &&
+    value.schema_version !== 3
+  )
+    throw new Error(`不支持的姿势场景版本：${value.schema_version}。`);
+  const scene = structuredClone(value);
+  const activeTab = scene.activeTab === undefined ? 0 : scene.activeTab;
+  integer(activeTab, 0);
+  const sourceCharacters: unknown =
+    scene.characters === undefined
+      ? [
+          {
+            id: "character-1",
+            mesh: scene.mesh === undefined ? {} : scene.mesh,
+            transform: { x: 0, y: 0, z: 0, zoom: 1 },
+            poses:
+              scene.poses === undefined
+                ? scene.image_poses === undefined
+                  ? [{}]
+                  : scene.image_poses
+                : scene.poses,
+          },
+        ]
+      : scene.characters;
+  array(sourceCharacters, MAX_SCENE_CHARACTERS);
+  const characters = sourceCharacters.map((source, index) => {
+    object(source);
+    const transform = source.transform === undefined ? {} : source.transform;
+    object(transform);
+    const normalizedTransform: Record<string, unknown> = {
+      x: 0,
+      y: 0,
+      z: 0,
+      zoom: 1,
+      ...transform,
+    };
+    for (const [key, alias] of [
+      ["x", "offset_x"],
+      ["y", "offset_y"],
+      ["z", "depth"],
+      ["zoom", "scale"],
+    ] as const) {
+      if (transform[key] === undefined && transform[alias] !== undefined)
+        normalizedTransform[key] = transform[alias];
+    }
+    return {
+      ...source,
+      id: source.id === undefined ? `character-${index + 1}` : source.id,
+      poses: source.poses,
+      mesh:
+        source.mesh === undefined
+          ? scene.mesh === undefined
+            ? {}
+            : scene.mesh
+          : source.mesh,
+      transform: normalizedTransform,
+    };
+  });
+  const activeIndex =
+    scene.active_character_index === undefined
+      ? 0
+      : scene.active_character_index;
+  integer(activeIndex, 0);
+  const activeId =
+    scene.active_character_id === undefined
+      ? scene.activeCharacterId === undefined
+        ? characters[activeIndex]?.id
+        : scene.activeCharacterId
+      : scene.active_character_id;
+  const active = characters.find((character) => character.id === activeId);
+  if (!active) throw new Error("姿势场景缺少活动人物。");
+  array(active.poses, MAX_CHARACTER_POSES);
+  const pose = active.poses[activeTab];
+  object(pose);
+  // 早期场景会把活动姿态及输出机位放在顶层。
+  for (const key of [...EDITED_POSE_FIELDS, "cameraParams"]) {
+    if (pose[key] === undefined && scene[key] !== undefined)
+      pose[key] = scene[key];
+  }
+  if (scene.export !== undefined) {
+    object(scene.export);
+    const camera = pose.cameraParams === undefined ? {} : pose.cameraParams;
+    object(camera);
+    for (const key of [
+      "offset_x",
+      "offset_y",
+      "zoom",
+      "yaw_deg",
+      "pitch_deg",
+    ]) {
+      if (camera[key] === undefined && scene.export[`cam_${key}`] !== undefined)
+        camera[key] = scene.export[`cam_${key}`];
+    }
+    pose.cameraParams = camera;
+  }
+  const normalized = {
+    ...scene,
+    schema_version: 3,
+    ...(scene.type === "single_pose" || scene.type === "pose_set"
+      ? { type: "scene_pose" }
+      : {}),
+    active_character_id: activeId,
+    activeTab,
+    characters,
+  };
+  validatePoseScene(normalized);
+  return normalized;
+}
+
 function vector(value: unknown) {
   if (
     !Array.isArray(value) ||
@@ -50,12 +167,12 @@ function vector(value: unknown) {
 export function validatePoseScene(value: unknown): asserts value is PoseScene {
   object(value);
   if (value.schema_version !== 3)
-    throw new Error("姿势编辑器仅支持 v3 场景格式。");
+    throw new Error("编辑后的姿势场景必须使用 v3 格式。");
   if (value.type === "pose_animation" || value.animation)
     throw new Error("姿势编辑器暂不支持动画场景。");
   string(value.active_character_id);
   integer(value.activeTab, 0);
-  array(value.characters, 4);
+  array(value.characters, MAX_SCENE_CHARACTERS);
   if (!value.characters.length) throw new Error("姿势场景缺少人物。");
   const ids = new Set<string>();
   for (const character of value.characters) {
@@ -75,7 +192,7 @@ export function validatePoseScene(value: unknown): asserts value is PoseScene {
     }
     if ((character.transform.zoom as number) <= 0)
       throw new Error("人物缩放必须大于零。");
-    array(character.poses, 10000);
+    array(character.poses, MAX_CHARACTER_POSES);
     const pose = character.poses[value.activeTab as number];
     object(pose);
     object(pose.bones);

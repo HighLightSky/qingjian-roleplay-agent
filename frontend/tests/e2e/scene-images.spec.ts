@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { poseScene } from "../pose-fixture";
+import type { JsonObject } from "../../lib/scene-images/types";
 import { dispatchResponse } from "../dispatch-fixture";
 import { contextCapabilities } from "../context-fixture";
 const base64 =
@@ -847,7 +848,7 @@ test("新回复整理落库立即触发姿势检索，等待检索不阻塞聊�
   await expect(card.getByRole("radio")).toHaveCount(3);
 });
 
-async function editorFixture(page: Page) {
+async function editorFixture(page: Page, source: JsonObject = poseScene()) {
   await page.route("**/api/scene-images/poses/search", (route) =>
     route.fulfill({
       json: {
@@ -856,7 +857,7 @@ async function editorFixture(page: Page) {
             poseId: "editor-source",
             score: 0.7,
             description: { zh: "原始姿势", en: "Original pose" },
-            pose: poseScene(),
+            pose: source,
           },
           {
             poseId: "editor-other",
@@ -879,6 +880,80 @@ async function editorFixture(page: Page) {
     dialog.getByRole("button", { name: "应用修改", exact: true }),
   ).toBeEnabled({ timeout: 30000 });
   return { card, dialog };
+}
+
+for (const version of [undefined, 1, 2]) {
+  test(`旧格式 ${version ?? "无版本"} 能渲染、恢复、保存并提交完整编辑场景`, async ({
+    page,
+  }) => {
+    test.setTimeout(120000);
+    const character = poseScene().characters[0];
+    const source: JsonObject = {
+      ...(version === undefined ? {} : { schema_version: version }),
+      ...(version === 1
+        ? { poses: character.poses, activeTab: 0 }
+        : version === 2
+          ? { image_poses: character.poses, activeTab: 0 }
+          : { ...character.poses[0], type: "single_pose", version: "1.0" }),
+      mesh: character.mesh,
+      vendorMetadata: { preserved: true },
+    };
+    const { card, dialog } = await editorFixture(page, source);
+    await expect(dialog.getByAltText("人偶生成构图预览")).toBeVisible();
+    await dialog.getByLabel("人物 X", { exact: true }).fill("2");
+    await dialog.getByLabel("人物 X", { exact: true }).press("Tab");
+    await dialog
+      .getByRole("button", { name: "恢复检索姿势", exact: true })
+      .click();
+    await expect(dialog.getByLabel("人物 X", { exact: true })).toHaveValue("0");
+    await dialog
+      .getByLabel("旋转骨骼", { exact: true })
+      .selectOption("upperarm_l");
+    await dialog.getByLabel("骨骼旋转 Z").fill("55");
+    await dialog.getByLabel("骨骼旋转 Z").press("Tab");
+    await dialog.getByRole("button", { name: "应用修改", exact: true }).click();
+    await expect(card.getByText("已编辑", { exact: true })).toBeVisible();
+    await page.reload();
+    const restored = page.getByTestId("scene-image-card").last();
+    await restored.locator("summary").click();
+    await expect(restored.getByText("已编辑", { exact: true })).toBeVisible();
+    let submitted: any;
+    await page.route("**/api/scene-images", (route) => {
+      submitted = route.request().postDataJSON();
+      return route.fulfill({ json: { runId: submitted.runId } });
+    });
+    await page.route("**/api/scene-images/*/events", (route) =>
+      route.fulfill({ status: 404, json: { message: "测试结束" } }),
+    );
+    await restored
+      .getByRole("button", { name: "生成图片", exact: true })
+      .click();
+    await expect
+      .poll(() => submitted?.poseSelection?.pose?.schema_version)
+      .toBe(3);
+    expect(
+      submitted.poseSelection.pose.characters[0].poses[0].bones.upperarm_l[2],
+    ).toBe(55);
+    expect(submitted.poseSelection.pose.vendorMetadata).toEqual({
+      preserved: true,
+    });
+    const original = await page.evaluate(async () => {
+      const request = indexedDB.open("roleplay-agent");
+      const db = await new Promise<IDBDatabase>((resolve) => {
+        request.onsuccess = () => resolve(request.result);
+      });
+      const get = db
+        .transaction("sceneImagePlans")
+        .objectStore("sceneImagePlans")
+        .get("plan");
+      const plan = await new Promise<any>((resolve) => {
+        get.onsuccess = () => resolve(get.result);
+      });
+      db.close();
+      return plan.draft.poseSearch.matches[0].pose;
+    });
+    expect(original).toEqual(source);
+  });
 }
 
 test("实际人体编辑可撤销重做，应用并刷新后生成冻结完整修改姿势", async ({

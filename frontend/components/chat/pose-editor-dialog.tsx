@@ -15,7 +15,7 @@ import { POSE_ASSET_BASE } from "@/lib/pose-editor/version";
 import {
   SceneHistory,
   sceneCharacter,
-  validatePoseScene,
+  normalizePoseScene,
   writeEditedPose,
   writeOutputCamera,
   type PoseScene,
@@ -204,7 +204,7 @@ export default function PoseEditorDialog({
     let ownedRuntime: PoseRuntime | null = null;
     async function initialize() {
       try {
-        validatePoseScene(scene);
+        const input = normalizePoseScene(scene);
         if (
           width < 1 ||
           height < 1 ||
@@ -213,7 +213,6 @@ export default function PoseEditorDialog({
           width * height > maxPixels
         )
           throw new Error("画幅超出人体预览的尺寸或像素限制。");
-        const input = structuredClone(scene);
         current.current = input;
         history.current = new SceneHistory(input);
         const module = await loadPoseRuntime();
@@ -332,8 +331,7 @@ export default function PoseEditorDialog({
             disabled={disabled}
             onClick={() =>
               void action(async () => {
-                const source = structuredClone(originalScene);
-                validatePoseScene(source);
+                const source = normalizePoseScene(originalScene);
                 history.current!.checkpoint(source);
                 await restore(source, source.active_character_id);
               })
