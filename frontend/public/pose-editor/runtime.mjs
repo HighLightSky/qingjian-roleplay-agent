@@ -111,6 +111,7 @@ export class PoseSceneRuntime {
     this.onPoseChange = onPoseChange;
     this.onBoneSelection = onBoneSelection;
     this.disposed = false;
+    this.loading = true;
     this.events = new AbortController();
     this.originalAddEventListener = canvas.addEventListener;
     // 上游核心在 canvas 上注册匿名事件；统一绑定生命周期，关闭时一并移除。
@@ -184,13 +185,6 @@ export class PoseSceneRuntime {
   async loadRig(character, pose) {
     const data = modelData(await this.models.model(character.mesh));
     if (this.disposed) throw new Error("姿态编辑器已关闭。");
-    const names = new Set(data.bones.map((bone) => bone.name));
-    for (const name of [
-      ...Object.keys(pose.bones),
-      ...Object.keys(pose.bonePositions ?? {}),
-    ]) {
-      if (!names.has(name)) throw new Error(`人体模型中不存在骨骼：${name}`);
-    }
     applyProportions(this.viewer, character.mesh);
     this.viewer.loadData(data, true);
     this.viewer.setPose(pose, true);
@@ -247,6 +241,9 @@ export class PoseSceneRuntime {
   }
   cameraParams() {
     return this.camera(this.scene);
+  }
+  currentPose() {
+    return this.viewer.getPose();
   }
   resize(width, height) {
     this.viewer?.resize(width, height);

@@ -2,7 +2,7 @@ import { database } from "../db";
 import type { Commit } from "../images/types";
 import type { JsonObject } from "../scene-images/types";
 import { capabilities } from "../images/repository";
-import { validatePoseScene } from "./scene";
+import { validatePoseJson } from "../scene-images/pose-json";
 import { POSE_RUNTIME_REVISION } from "./version";
 import { notifySceneImages } from "../scene-images/coordinator";
 
@@ -14,12 +14,8 @@ export async function applyPoseEdit(
   scene: JsonObject,
   commit: Commit,
 ) {
-  validatePoseScene(scene);
   const caps = await capabilities();
-  if (
-    new Blob([JSON.stringify(scene)]).size > caps.imageGeneration.poseMaxBytes
-  )
-    throw new Error("编辑后的姿势超过生图体积限制。");
+  validatePoseJson(scene, caps.imageGeneration.poseMaxBytes);
   const frozen = structuredClone(scene);
   await commit(async () => {
     const db = await database();

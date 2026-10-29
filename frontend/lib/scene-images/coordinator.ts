@@ -130,13 +130,13 @@ export async function startSceneGeneration(planId: string, commit: Commit) {
   const db = await database();
   const plan = await db.get("sceneImagePlans", planId);
   if (!plan) throw new Error("画面草稿不存在。");
-  validateScenePlan(plan);
   const [session, source, generations, caps] = await Promise.all([
     db.get("sessions", plan.sessionId),
     db.get("messages", plan.assistantMessageId),
     db.getAll("sceneGenerations"),
     capabilities(),
   ]);
+  validateScenePlan(plan, caps.imageGeneration.poseMaxBytes);
   if (
     !session ||
     source?.status !== "complete" ||

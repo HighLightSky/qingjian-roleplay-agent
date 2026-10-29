@@ -1,8 +1,4 @@
 import type { JsonObject } from "../scene-images/types";
-import { object, array, integer, string } from "../state/validation";
-
-const MAX_SCENE_CHARACTERS = 4;
-const MAX_CHARACTER_POSES = 10000;
 
 export type Vector = [number, number, number];
 export type CharacterTransform = {
@@ -11,7 +7,7 @@ export type CharacterTransform = {
   z: number;
   zoom: number;
 };
-export type OutputCamera = {
+export type OutputCamera = JsonObject & {
   offset_x: number;
   offset_y: number;
   zoom: number;
@@ -34,190 +30,170 @@ export type PoseCharacter = JsonObject & {
   poses: CharacterPose[];
 };
 export type PoseScene = JsonObject & {
-  schema_version: 3;
   active_character_id: string;
   activeTab: number;
   characters: PoseCharacter[];
 };
 
-/** 旧单人姿势在入口转换为人物场景，原候选及未知字段保持不变。 */
-export function normalizePoseScene(value: unknown): PoseScene {
-  object(value);
-  if (
-    value.schema_version !== undefined &&
-    value.schema_version !== 1 &&
-    value.schema_version !== 2 &&
-    value.schema_version !== 3
-  )
-    throw new Error(`不支持的姿势场景版本：${value.schema_version}。`);
-  const scene = structuredClone(value);
-  const activeTab = scene.activeTab === undefined ? 0 : scene.activeTab;
-  integer(activeTab, 0);
-  const sourceCharacters: unknown =
-    scene.characters === undefined
-      ? [
-          {
-            id: "character-1",
-            mesh: scene.mesh === undefined ? {} : scene.mesh,
-            transform: { x: 0, y: 0, z: 0, zoom: 1 },
-            poses:
-              scene.poses === undefined
-                ? scene.image_poses === undefined
-                  ? [{}]
-                  : scene.image_poses
-                : scene.poses,
-          },
-        ]
-      : scene.characters;
-  array(sourceCharacters, MAX_SCENE_CHARACTERS);
-  const characters = sourceCharacters.map((source, index) => {
-    object(source);
-    const transform = source.transform === undefined ? {} : source.transform;
-    object(transform);
-    const normalizedTransform: Record<string, unknown> = {
-      x: 0,
-      y: 0,
-      z: 0,
-      zoom: 1,
-      ...transform,
-    };
-    for (const [key, alias] of [
-      ["x", "offset_x"],
-      ["y", "offset_y"],
-      ["z", "depth"],
-      ["zoom", "scale"],
-    ] as const) {
-      if (transform[key] === undefined && transform[alias] !== undefined)
-        normalizedTransform[key] = transform[alias];
-    }
+/** 缺省值只用于本地视口，不写入待提交的姿势 JSON。 */
+export function createPoseEditorScene(value: JsonObject): PoseScene {
+  const source = structuredClone(value);
+  const legacyPoses = source.poses ?? source.image_poses ?? [source];
+  const characters = (
+    (source.characters ?? [
+      {
+        mesh: source.mesh,
+        transform: source.transform,
+        poses: legacyPoses,
+      },
+    ]) as JsonObject[]
+  ).map((character, index) => {
+    const transform = (character.transform ?? {}) as JsonObject;
     return {
-      ...source,
-      id: source.id === undefined ? `character-${index + 1}` : source.id,
-      poses: source.poses,
-      mesh:
-        source.mesh === undefined
-          ? scene.mesh === undefined
-            ? {}
-            : scene.mesh
-          : source.mesh,
-      transform: normalizedTransform,
+      ...character,
+      id: character.id ?? `character-${index + 1}`,
+      mesh: character.mesh ?? source.mesh ?? {},
+      transform: {
+        ...transform,
+        x: transform.x ?? transform.offset_x ?? 0,
+        y: transform.y ?? transform.offset_y ?? 0,
+        z: transform.z ?? transform.depth ?? 0,
+        zoom: transform.zoom ?? transform.scale ?? 1,
+      },
+      poses: (
+        (character.poses ??
+          character.image_poses ??
+          legacyPoses) as JsonObject[]
+      ).map((pose) => ({ ...pose })),
     };
   });
-  const activeIndex =
-    scene.active_character_index === undefined
-      ? 0
-      : scene.active_character_index;
-  integer(activeIndex, 0);
-  const activeId =
-    scene.active_character_id === undefined
-      ? scene.activeCharacterId === undefined
-        ? characters[activeIndex]?.id
-        : scene.activeCharacterId
-      : scene.active_character_id;
-  const active = characters.find((character) => character.id === activeId);
-  if (!active) throw new Error("姿势场景缺少活动人物。");
-  array(active.poses, MAX_CHARACTER_POSES);
-  const pose = active.poses[activeTab];
-  object(pose);
-  // 早期场景会把活动姿态及输出机位放在顶层。
-  for (const key of [...EDITED_POSE_FIELDS, "cameraParams"]) {
-    if (pose[key] === undefined && scene[key] !== undefined)
-      pose[key] = scene[key];
-  }
-  if (scene.export !== undefined) {
-    object(scene.export);
-    const camera = pose.cameraParams === undefined ? {} : pose.cameraParams;
-    object(camera);
-    for (const key of [
-      "offset_x",
-      "offset_y",
-      "zoom",
-      "yaw_deg",
-      "pitch_deg",
-    ]) {
-      if (camera[key] === undefined && scene.export[`cam_${key}`] !== undefined)
-        camera[key] = scene.export[`cam_${key}`];
-    }
-    pose.cameraParams = camera;
-  }
-  const normalized = {
-    ...scene,
-    schema_version: 3,
-    ...(scene.type === "single_pose" || scene.type === "pose_set"
-      ? { type: "scene_pose" }
-      : {}),
-    active_character_id: activeId,
-    activeTab,
+  const scene = {
+    ...source,
+    activeTab: source.activeTab ?? 0,
+    active_character_id:
+      source.active_character_id ??
+      source.activeCharacterId ??
+      characters[(source.active_character_index ?? 0) as number].id,
     characters,
-  };
-  validatePoseScene(normalized);
-  return normalized;
-}
-
-function vector(value: unknown) {
+  } as PoseScene;
+  const pose = sceneCharacter(scene, scene.active_character_id).poses[
+    scene.activeTab
+  ];
+  for (const key of EDITED_POSE_FIELDS) {
+    if (pose[key] === undefined && source[key] !== undefined)
+      (pose as JsonObject)[key] = source[key];
+  }
   if (
-    !Array.isArray(value) ||
-    value.length !== 3 ||
-    value.some((n) => typeof n !== "number" || !Number.isFinite(n))
+    value.characters === undefined &&
+    value.poses === undefined &&
+    value.image_poses === undefined
   )
-    throw new Error("姿势向量必须包含三个有限数字。");
-}
-
-/** 只在编辑器入口校验场景；体型默认值由固定版本的上游模块解释。 */
-export function validatePoseScene(value: unknown): asserts value is PoseScene {
-  object(value);
-  if (value.schema_version !== 3)
-    throw new Error("编辑后的姿势场景必须使用 v3 格式。");
-  if (value.type === "pose_animation" || value.animation)
-    throw new Error("姿势编辑器暂不支持动画场景。");
-  string(value.active_character_id);
-  integer(value.activeTab, 0);
-  array(value.characters, MAX_SCENE_CHARACTERS);
-  if (!value.characters.length) throw new Error("姿势场景缺少人物。");
-  const ids = new Set<string>();
-  for (const character of value.characters) {
-    object(character);
-    string(character.id);
-    if (!character.id || ids.has(character.id))
-      throw new Error("场景人物标识为空或重复。");
-    ids.add(character.id);
-    object(character.mesh);
-    object(character.transform);
-    for (const key of ["x", "y", "z", "zoom"]) {
-      if (
-        typeof character.transform[key] !== "number" ||
-        !Number.isFinite(character.transform[key])
-      )
-        throw new Error(`人物位置或缩放无效：${character.id} · ${key}`);
-    }
-    if ((character.transform.zoom as number) <= 0)
-      throw new Error("人物缩放必须大于零。");
-    array(character.poses, MAX_CHARACTER_POSES);
-    const pose = character.poses[value.activeTab as number];
-    object(pose);
-    object(pose.bones);
-    for (const rotation of Object.values(pose.bones)) vector(rotation);
-    if (pose.modelRotation !== undefined) vector(pose.modelRotation);
-    for (const key of [
-      "bonePositions",
-      "ikEffectorPositions",
-      "poleTargetPositions",
-      "hipBonePosition",
-    ]) {
-      if (pose[key] === undefined) continue;
-      object(pose[key]);
-      for (const position of Object.values(pose[key])) vector(position);
-    }
-    if (pose.cameraParams !== undefined) {
-      object(pose.cameraParams);
-      for (const n of Object.values(pose.cameraParams))
-        if (typeof n !== "number" || !Number.isFinite(n))
-          throw new Error("姿势相机参数必须是有限数字。");
+    pose.bones = (source.bones as Record<string, Vector>) ?? {};
+  for (const character of scene.characters)
+    for (const pose of character.poses) pose.bones ??= {};
+  const camera: JsonObject = {
+    ...(source.cameraParams as JsonObject),
+    ...pose.cameraParams,
+  };
+  const settings = source.export as JsonObject | undefined;
+  if (settings) {
+    for (const key of CAMERA_FIELDS) {
+      if (camera[key] === undefined && settings[`cam_${key}`] !== undefined)
+        camera[key] = settings[`cam_${key}`];
     }
   }
-  if (!ids.has(value.active_character_id))
-    throw new Error("姿势场景缺少活动人物。");
+  pose.cameraParams = camera as OutputCamera;
+  return scene;
 }
+
+function writeChangedFields(
+  target: JsonObject,
+  before: JsonObject,
+  after: JsonObject,
+  fields: readonly string[],
+) {
+  const changes: JsonObject = {};
+  for (const key of fields) {
+    if (JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+      changes[key] = structuredClone(after[key]);
+  }
+  Object.assign(target, changes);
+  return changes;
+}
+
+/** 只合并用户改动，保留原来的版本、包装结构和缺省字段。 */
+export function applyPoseSceneEdits(
+  source: JsonObject,
+  before: PoseScene,
+  after: PoseScene,
+): JsonObject {
+  const result = structuredClone(source);
+  for (const [index, character] of after.characters.entries()) {
+    const previous = before.characters[index];
+    const targetCharacter =
+      result.characters == null
+        ? result
+        : (result.characters as JsonObject[])[index];
+    const poses = (targetCharacter.poses ?? targetCharacter.image_poses) as
+      JsonObject[] | undefined;
+    const targetPose =
+      poses === undefined ? targetCharacter : poses[after.activeTab];
+    const oldPose = previous.poses[before.activeTab];
+    const newPose = character.poses[after.activeTab];
+    for (const key of EDITED_POSE_FIELDS) {
+      if (key === "modelRotation") {
+        writeChangedFields(targetPose, oldPose, newPose, [key]);
+      } else {
+        const oldValues = (oldPose[key] ?? {}) as JsonObject;
+        const newValues = (newPose[key] ?? {}) as JsonObject;
+        const target = { ...(targetPose[key] as JsonObject) };
+        const changes = writeChangedFields(
+          target,
+          oldValues,
+          newValues,
+          Object.keys(newValues),
+        );
+        if (Object.keys(changes).length) targetPose[key] = target;
+      }
+    }
+    const transform = { ...(targetCharacter.transform as JsonObject) };
+    if (
+      Object.keys(
+        writeChangedFields(transform, previous.transform, character.transform, [
+          "x",
+          "y",
+          "z",
+          "zoom",
+        ]),
+      ).length
+    )
+      targetCharacter.transform = transform;
+    const camera = { ...(targetPose.cameraParams as JsonObject) };
+    const cameraChanges = writeChangedFields(
+      camera,
+      oldPose.cameraParams ?? {},
+      newPose.cameraParams ?? {},
+      CAMERA_FIELDS,
+    );
+    if (Object.keys(cameraChanges).length) targetPose.cameraParams = camera;
+    if (character.id === after.active_character_id) {
+      for (const [key, value] of Object.entries(cameraChanges)) {
+        if (result.export) (result.export as JsonObject)[`cam_${key}`] = value;
+        if (result.camera && (key === "yaw_deg" || key === "pitch_deg"))
+          (result.camera as JsonObject)[key] = value;
+      }
+    }
+  }
+  return result;
+}
+
+const CAMERA_FIELDS = [
+  "offset_x",
+  "offset_y",
+  "zoom",
+  "yaw_deg",
+  "pitch_deg",
+] as const;
 
 export function sceneCharacter(scene: PoseScene, id: string): PoseCharacter {
   const character = scene.characters.find((row) => row.id === id);
@@ -243,7 +219,13 @@ export function writeEditedPose(
   const pose = sceneCharacter(scene, characterId).poses[scene.activeTab];
   for (const key of EDITED_POSE_FIELDS) {
     if (edited[key] !== undefined)
-      (pose as JsonObject)[key] = structuredClone(edited[key]);
+      (pose as JsonObject)[key] =
+        key === "modelRotation"
+          ? structuredClone(edited[key])
+          : {
+              ...(pose[key] as JsonObject),
+              ...(structuredClone(edited[key]) as JsonObject),
+            };
   }
 }
 
@@ -268,12 +250,12 @@ export function writeOutputCamera(scene: PoseScene, camera: OutputCamera) {
 
 const MAX_HISTORY_STEPS = 30;
 
-export class SceneHistory {
-  private undoScenes: PoseScene[] = [];
-  private redoScenes: PoseScene[] = [];
+export class SceneHistory<T extends JsonObject = PoseScene> {
+  private undoScenes: T[] = [];
+  private redoScenes: T[] = [];
   private saved: string;
-  private scene: PoseScene;
-  constructor(scene: PoseScene) {
+  private scene: T;
+  constructor(scene: T) {
     this.scene = structuredClone(scene);
     this.saved = JSON.stringify(scene);
   }
@@ -283,7 +265,7 @@ export class SceneHistory {
   get canRedo() {
     return this.redoScenes.length > 0;
   }
-  checkpoint(next: PoseScene): boolean {
+  checkpoint(next: T): boolean {
     const serialized = JSON.stringify(next);
     if (serialized === this.saved) return false;
     this.undoScenes.push(structuredClone(this.scene));
@@ -293,7 +275,7 @@ export class SceneHistory {
     this.saved = serialized;
     return true;
   }
-  undo(): PoseScene {
+  undo(): T {
     const scene = this.undoScenes.pop();
     if (!scene) throw new Error("没有可撤销的姿态编辑。");
     this.redoScenes.push(this.scene);
@@ -301,7 +283,7 @@ export class SceneHistory {
     this.saved = JSON.stringify(scene);
     return structuredClone(scene);
   }
-  redo(): PoseScene {
+  redo(): T {
     const scene = this.redoScenes.pop();
     if (!scene) throw new Error("没有可重做的姿态编辑。");
     this.undoScenes.push(this.scene);

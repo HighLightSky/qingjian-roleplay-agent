@@ -7,6 +7,7 @@ export interface PoseRuntime {
   loadScene(scene: PoseScene, editingId: string): Promise<void>;
   updateScene(scene: PoseScene): void;
   cameraParams(): OutputCamera;
+  currentPose(): JsonObject;
   resize(width: number, height: number): void;
   boneNames(): string[];
   selectBone(name: string): void;

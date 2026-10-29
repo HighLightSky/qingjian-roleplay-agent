@@ -80,9 +80,12 @@ async function search(planId: string, commit: Commit) {
       bytes.set(chunk, offset);
       offset += chunk.length;
     }
-    const result: { matches: unknown } = JSON.parse(
-      new TextDecoder().decode(bytes),
-    );
+    let result: { matches: unknown };
+    try {
+      result = JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      throw new Error("姿势 JSON 格式错误。");
+    }
     array(result.matches, caps.imageGeneration.poseSearchTopK);
     const ids = new Set<string>();
     for (const match of result.matches) {

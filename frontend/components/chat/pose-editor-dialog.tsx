@@ -15,7 +15,8 @@ import { POSE_ASSET_BASE } from "@/lib/pose-editor/version";
 import {
   SceneHistory,
   sceneCharacter,
-  normalizePoseScene,
+  createPoseEditorScene,
+  applyPoseSceneEdits,
   writeEditedPose,
   writeOutputCamera,
   type PoseScene,
@@ -63,16 +64,12 @@ function NumberField({
   label,
   value,
   disabled,
-  min,
-  max,
   change,
   validity,
 }: {
   label: string;
   value: number;
   disabled: boolean;
-  min: number;
-  max: number;
   change(value: number): void;
   validity(label: string, valid: boolean): void;
 }) {
@@ -86,8 +83,8 @@ function NumberField({
   useEffect(() => () => validity(label, true), [label]);
   function apply() {
     const n = Number(text);
-    if (!text.trim() || !Number.isFinite(n) || n < min || n > max) {
-      setError(`${label}需要在 ${min} 至 ${max} 之间。`);
+    if (!text.trim() || !Number.isFinite(n)) {
+      setError(`${label}必须是有限数字。`);
       validity(label, false);
       return;
     }
@@ -102,18 +99,13 @@ function NumberField({
         aria-label={label}
         type="number"
         step="0.1"
-        min={min}
-        max={max}
         disabled={disabled}
         value={text}
         onChange={(event) => {
           const next = event.target.value;
           setText(next);
           const n = Number(next);
-          validity(
-            label,
-            !!next.trim() && Number.isFinite(n) && n >= min && n <= max,
-          );
+          validity(label, !!next.trim() && Number.isFinite(n));
         }}
         onBlur={apply}
         onKeyDown={(event) => {
@@ -153,7 +145,9 @@ export default function PoseEditorDialog({
   const host = useRef<HTMLDivElement>(null);
   const runtime = useRef<PoseRuntime | null>(null);
   const current = useRef<PoseScene | null>(null);
-  const history = useRef<SceneHistory | null>(null);
+  const history = useRef<SceneHistory<JsonObject> | null>(null);
+  const document = useRef<JsonObject>(structuredClone(scene));
+  const baseline = useRef<PoseScene | null>(null);
   const generation = useRef(0);
   const previewUrl = useRef("");
   const [preview, setPreview] = useState("");
@@ -192,10 +186,23 @@ export default function PoseEditorDialog({
     }
   }
   function changed() {
+    document.current = applyPoseSceneEdits(
+      document.current,
+      baseline.current!,
+      current.current!,
+    );
+    baseline.current = structuredClone(current.current!);
     runtime.current!.updateScene(current.current!);
-    history.current!.checkpoint(current.current!);
+    history.current!.checkpoint(document.current);
     refresh((value) => value + 1);
     void updatePreview();
+  }
+  function rememberRenderedScene(input: PoseScene, renderer: PoseRuntime) {
+    writeEditedPose(input, renderer.editingId, renderer.currentPose());
+    sceneCharacter(input, input.active_character_id).poses[
+      input.activeTab
+    ].cameraParams = renderer.cameraParams();
+    baseline.current = structuredClone(input);
   }
   useEffect(() => {
     live.current = true;
@@ -203,8 +210,11 @@ export default function PoseEditorDialog({
     let disposed = false;
     let ownedRuntime: PoseRuntime | null = null;
     async function initialize() {
+      document.current = structuredClone(scene);
+      history.current = new SceneHistory(document.current);
+      baseline.current = null;
       try {
-        const input = normalizePoseScene(scene);
+        const input = createPoseEditorScene(scene);
         if (
           width < 1 ||
           height < 1 ||
@@ -214,13 +224,12 @@ export default function PoseEditorDialog({
         )
           throw new Error("画幅超出人体预览的尺寸或像素限制。");
         current.current = input;
-        history.current = new SceneHistory(input);
         const module = await loadPoseRuntime();
         if (disposed) return;
         const renderer = new module.PoseSceneRuntime(canvas.current!, {
           assetBase: POSE_ASSET_BASE,
           onPoseChange: (pose) => {
-            if (disposed) return;
+            if (disposed || !baseline.current) return;
             writeEditedPose(
               current.current!,
               renderer.editingId ?? current.current!.active_character_id,
@@ -236,6 +245,7 @@ export default function PoseEditorDialog({
         runtime.current = renderer;
         await renderer.initialize(input, width, height);
         if (disposed) return;
+        rememberRenderedScene(input, renderer);
         setEditingId(input.active_character_id);
         setBones(renderer.boneNames());
         setCamera(renderer.cameraParams());
@@ -274,11 +284,15 @@ export default function PoseEditorDialog({
       if (live.current) setBusy(false);
     }
   }
-  async function restore(next: PoseScene, characterId = editingId) {
-    await runtime.current!.loadScene(next, characterId);
+  async function restore(source: JsonObject, characterId?: string) {
+    const next = createPoseEditorScene(source);
+    const id = characterId ?? next.active_character_id;
+    await runtime.current!.loadScene(next, id);
+    document.current = source;
     current.current = next;
+    rememberRenderedScene(next, runtime.current!);
     runtime.current!.setIKMode(ikMode);
-    setEditingId(characterId);
+    setEditingId(id);
     setSelectedBone("");
     setBones(runtime.current!.boneNames());
     setCamera(runtime.current!.cameraParams());
@@ -306,7 +320,7 @@ export default function PoseEditorDialog({
     >
       <DialogContent
         className="max-h-[94dvh] overflow-y-auto sm:max-w-6xl"
-        aria-busy={!ready || busy}
+        aria-busy={(!ready && !error) || busy}
       >
         <DialogHeader>
           <DialogTitle>编辑姿势</DialogTitle>
@@ -331,9 +345,9 @@ export default function PoseEditorDialog({
             disabled={disabled}
             onClick={() =>
               void action(async () => {
-                const source = normalizePoseScene(originalScene);
+                const source = structuredClone(originalScene);
                 history.current!.checkpoint(source);
-                await restore(source, source.active_character_id);
+                await restore(source);
               })
             }
           >
@@ -408,7 +422,7 @@ export default function PoseEditorDialog({
                 onChange={(event) =>
                   void action(() =>
                     restore(
-                      structuredClone(current.current!),
+                      structuredClone(document.current),
                       event.target.value,
                     ),
                   )
@@ -450,8 +464,6 @@ export default function PoseEditorDialog({
                     key={`${selectedBone}-${axis}`}
                     label={`骨骼旋转 ${axis}`}
                     value={rotation[index]}
-                    min={-180}
-                    max={180}
                     disabled={disabled}
                     change={(value) =>
                       runtime.current!.rotateBone(selectedBone, index, value)
@@ -476,8 +488,6 @@ export default function PoseEditorDialog({
                       }[key]
                     }
                     value={character.transform[key]}
-                    min={key === "zoom" ? 0.1 : key === "z" ? -40 : -50}
-                    max={key === "zoom" ? 7 : key === "z" ? 40 : 50}
                     disabled={disabled}
                     change={(value) => {
                       character.transform = {
@@ -516,10 +526,6 @@ export default function PoseEditorDialog({
                       }[key]
                     }
                     value={camera[key]}
-                    min={
-                      key === "zoom" ? 0.1 : key.includes("deg") ? -180 : -50
-                    }
-                    max={key === "zoom" ? 7 : key.includes("deg") ? 180 : 50}
                     disabled={disabled}
                     change={(value) => {
                       const next = { ...camera, [key]: value };
@@ -537,6 +543,9 @@ export default function PoseEditorDialog({
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}
+            <span className="block">
+              本地预览失败不会修改原始数据，仍可应用并交给服务端生成。
+            </span>
           </p>
         )}
         <DialogFooter>
@@ -544,14 +553,10 @@ export default function PoseEditorDialog({
             取消
           </button>
           <button
-            disabled={
-              disabled || !!error || Object.values(invalidFields).some(Boolean)
-            }
+            disabled={busy || Object.values(invalidFields).some(Boolean)}
             onClick={() =>
               void action(async () => {
-                // 数值输入的 blur 可能刚提交最后一次修改，应用前确认最新场景仍能截图。
-                await runtime.current!.capturePreview();
-                await onApply(structuredClone(current.current!));
+                await onApply(structuredClone(document.current));
                 onClose();
               })
             }

@@ -1,4 +1,4 @@
-import { validatePoseScene } from "../pose-editor/scene";
+import { validatePoseJson } from "./pose-json";
 import { assertImageId } from "../images/ids";
 import { object, string, integer, array } from "../state/validation";
 import type {
@@ -33,6 +33,7 @@ function references(value: unknown, input: boolean) {
 
 export function validateScenePlan(
   value: unknown,
+  poseMaxBytes?: number,
 ): asserts value is SceneImagePlan {
   object(value);
   for (const key of ["id", "sessionId", "assistantMessageId"]) {
@@ -62,7 +63,7 @@ export function validateScenePlan(
     string(value.draft.poseQuery);
     if (value.draft.characterReferenceAssetId !== null)
       assertImageId(value.draft.characterReferenceAssetId);
-    validatePoseSearch(value.draft.poseSearch);
+    validatePoseSearch(value.draft.poseSearch, poseMaxBytes);
     if (value.draft.poseEdit !== null) {
       const edit = value.draft.poseEdit;
       object(edit);
@@ -74,7 +75,7 @@ export function validateScenePlan(
         edit.searchRevision !== value.draft.poseSearch.revision
       )
         throw new Error("编辑姿态对应的候选或检索版本已变化。");
-      validatePoseScene(edit.scene);
+      validatePoseJson(edit.scene, poseMaxBytes);
     }
     integer(value.draft.width, 1);
     integer(value.draft.height, 1);
@@ -164,17 +165,13 @@ export function validatePoseSelection(
     if (!(value.description[key] as string).trim())
       throw new Error("姿势候选缺少中英文描述。");
   }
-  object(value.pose);
-  if (!Object.keys(value.pose).length)
-    throw new Error("姿势候选缺少完整 pose 对象。");
-  if (
-    maxBytes !== undefined &&
-    new Blob([JSON.stringify(value.pose)]).size > maxBytes
-  )
-    throw new Error("姿势对象超过体积限制。");
+  validatePoseJson(value.pose, maxBytes);
 }
 
-function validatePoseSearch(value: unknown): asserts value is PoseSearch {
+function validatePoseSearch(
+  value: unknown,
+  maxBytes?: number,
+): asserts value is PoseSearch {
   object(value);
   if (
     !["idle", "searching", "succeeded", "failed"].includes(
@@ -187,7 +184,7 @@ function validatePoseSearch(value: unknown): asserts value is PoseSearch {
   array(value.matches, 10000);
   const ids = new Set<string>();
   for (const match of value.matches) {
-    validatePoseSelection(match);
+    validatePoseSelection(match, maxBytes);
     if (ids.has(match.poseId)) throw new Error("姿势候选重复。");
     ids.add(match.poseId);
   }

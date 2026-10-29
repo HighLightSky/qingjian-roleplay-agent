@@ -521,13 +521,58 @@ class SceneImageTaskServiceTest {
                 new GenerationRequest(request.runId(), request.source(), request.prompt(), 256, 512,
                         request.referenceImages(), true, request.poseQuery(), "img1",
                         new PoseSelection("large", .5, request.poseSelection().description(),
-                                mapper.createObjectNode().put("data", "字".repeat(400000)))))) {
+                                mapper.createObjectNode().put("bones", "由服务端解释").put("data", "字".repeat(400000)))))) {
             mvc.perform(post("/api/scene-images").contentType("application/json")
                     .content(mapper.writeValueAsBytes(invalid))).andExpect(status().isBadRequest());
         }
         mvc.perform(post("/api/scene-images/poses/search").contentType("application/json")
                 .content(mapper.writeValueAsBytes(Map.of("query", "字".repeat(23000)))))
                 .andExpect(status().isBadRequest());
+        assertEquals(0, readyChecks.get());
+        assertEquals(0, edits.get());
+    }
+
+    @Test
+    void opaquePoseKeepsFutureVersionPartialFieldsAndUnlimitedCharacterCountInMultipart() throws Exception {
+        var pose = mapper.readTree("""
+                {"schema_version":"future","bones":null,"characters":[null,null,null,null,null],
+                "poses":"由服务端解释","image_poses":[],"cameraParams":null,
+                "unknown":{"custom_bone":[99999,-99999,1e100],"preserved":true}}
+                """);
+        var base = posedRequest("future");
+        var request = new GenerationRequest(base.runId(), base.source(), base.prompt(), base.width(), base.height(),
+                base.referenceImages(), true, base.poseQuery(), base.characterReferenceAssetId(),
+                new PoseSelection("future", .5, base.poseSelection().description(), pose));
+        mvc.perform(post("/api/scene-images").contentType("application/json").content(mapper.writeValueAsBytes(request)))
+                .andExpect(status().isOk());
+        assertTrue(received.await(3, TimeUnit.SECONDS));
+        assertTrue(multipart.contains("name=\"pose\"\r\n"));
+        assertTrue(multipart.contains(mapper.writeValueAsString(pose)));
+        assertEquals(pose, tasks.snapshot(base.runId()).submission().poseSelection().pose());
+        finish.countDown();
+        assertEquals("succeeded", terminal(base.runId()).status());
+    }
+
+    @Test
+    void missingPoseMarkerAndNestedNonFiniteNumbersAreRejectedAtRequestBoundary() throws Exception {
+        var base = posedRequest("invalid");
+        for (var pose : List.of(mapper.createArrayNode(), mapper.createObjectNode().put("schema_version", 3))) {
+            var request = new GenerationRequest(base.runId(), base.source(), base.prompt(), base.width(), base.height(),
+                    base.referenceImages(), true, base.poseQuery(), base.characterReferenceAssetId(),
+                    new PoseSelection("invalid", .5, base.poseSelection().description(), pose));
+            mvc.perform(post("/api/scene-images").contentType("application/json").content(mapper.writeValueAsBytes(request)))
+                    .andExpect(status().isBadRequest());
+        }
+        for (double number : new double[] {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY}) {
+            var pose = mapper.createObjectNode();
+            pose.putNull("bones");
+            pose.putArray("unknown").addObject().put("value", number);
+            var request = new GenerationRequest(base.runId(), base.source(), base.prompt(), base.width(), base.height(),
+                    base.referenceImages(), true, base.poseQuery(), base.characterReferenceAssetId(),
+                    new PoseSelection("invalid", .5, base.poseSelection().description(), pose));
+            var error = assertThrows(IllegalArgumentException.class, () -> tasks.start(request));
+            assertTrue(error.getMessage().contains("NaN 或 Infinity"));
+        }
         assertEquals(0, readyChecks.get());
         assertEquals(0, edits.get());
     }
