@@ -16,6 +16,12 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { database } from "@/lib/db";
+import { searchScenePoses } from "@/lib/scene-images/poses";
+import {
+  orderedSceneReferences,
+  poseGenerationError,
+  withPoseQuery,
+} from "@/lib/scene-images/draft";
 import { useImageUrl } from "@/hooks/use-image-url";
 import { useAppStore, write } from "@/stores/use-app-store";
 import {
@@ -128,8 +134,17 @@ export function SceneImageCard() {
         generated.sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
       );
       if (!selected) return;
-      if (selected.draft && loaded.current !== selected.id)
-        showDraft(selected, selected.draft);
+      if (selected.draft) {
+        if (loaded.current !== selected.id) showDraft(selected, selected.draft);
+        else
+          setDraft((current) =>
+            current &&
+            current.poseQuery === selected.draft!.poseQuery &&
+            current.poseSearch.revision <= selected.draft!.poseSearch.revision
+              ? { ...current, poseSearch: selected.draft!.poseSearch }
+              : current,
+          );
+      }
       const capabilitiesValue = await (capabilityLoad ??= capabilities());
       if (!live) return;
       setCaps(capabilitiesValue);
@@ -193,6 +208,8 @@ export function SceneImageCard() {
     setDraft(updated!.draft!);
   }
   const disabled = readOnly || busy || active;
+  const poseError = draft ? poseGenerationError(draft) : null;
+  const orderedReferences = draft ? orderedSceneReferences(plan, draft) : [];
   return (
     <div
       className="mt-3 rounded-lg border p-3 text-sm"
@@ -216,6 +233,129 @@ export function SceneImageCard() {
                 }
               />
             </label>
+            <fieldset className="grid gap-3 rounded border p-3">
+              <legend>姿势参考</legend>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  aria-label="使用姿势参考"
+                  checked={draft.poseEnabled}
+                  disabled={disabled}
+                  onChange={(e) =>
+                    updateDraft({ ...draft, poseEnabled: e.target.checked })
+                  }
+                />
+                使用姿势参考
+              </label>
+              <label className="grid gap-1">
+                姿态检索描述
+                <textarea
+                  aria-label="姿态检索描述"
+                  value={draft.poseQuery}
+                  disabled={disabled}
+                  className="min-h-24 w-full rounded border bg-background p-2 text-xs"
+                  onChange={(e) =>
+                    updateDraft(withPoseQuery(draft, e.target.value))
+                  }
+                />
+              </label>
+              <p className="text-xs text-muted-foreground">
+                描述动作、朝向、四肢、支撑关系和观察角度。关闭姿势参考后，此描述仍会加入普通生图提示词。
+              </p>
+              <button
+                type="button"
+                className="justify-self-start"
+                disabled={
+                  disabled ||
+                  !draft.poseEnabled ||
+                  !draft.poseQuery.trim() ||
+                  draft.poseSearch.status === "searching"
+                }
+                onClick={() =>
+                  void action(async () => {
+                    await writes.current;
+                    await searchScenePoses(plan!.id, write);
+                  })
+                }
+              >
+                重新检索
+              </button>
+              <div aria-live="polite">
+                {draft.poseSearch.status === "searching" && (
+                  <p>正在检索姿势…</p>
+                )}
+                {draft.poseSearch.status === "failed" && (
+                  <p role="alert" className="text-destructive">
+                    {draft.poseSearch.error}
+                  </p>
+                )}
+                {draft.poseSearch.status === "succeeded" &&
+                  !draft.poseSearch.matches.length && (
+                    <p>没有姿势候选，请修改描述后重新检索。</p>
+                  )}
+              </div>
+              {draft.poseSearch.matches.map((match) => (
+                <label
+                  key={match.poseId}
+                  className="flex items-start gap-2 rounded border p-2"
+                >
+                  <input
+                    type="radio"
+                    name={`pose-${plan.id}`}
+                    aria-label={`选择姿势 ${match.description.zh}`}
+                    disabled={disabled || !draft.poseEnabled}
+                    checked={draft.poseSearch.selectedPoseId === match.poseId}
+                    onChange={() =>
+                      updateDraft({
+                        ...draft,
+                        poseSearch: {
+                          ...draft.poseSearch,
+                          selectedPoseId: match.poseId,
+                        },
+                      })
+                    }
+                  />
+                  <span className="grid min-w-0 gap-1 break-words">
+                    <span>{match.description.zh}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {match.description.en}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      相似度：{match.score.toFixed(3)}（非置信概率）
+                    </span>
+                  </span>
+                </label>
+              ))}
+              <label className="grid gap-1">
+                人物参考图（image2）
+                <select
+                  aria-label="人物参考图"
+                  value={draft.characterReferenceAssetId ?? ""}
+                  disabled={disabled || !draft.poseEnabled}
+                  className="min-w-0 rounded border bg-background p-2"
+                  onChange={(e) =>
+                    updateDraft({
+                      ...draft,
+                      characterReferenceAssetId: e.target.value || null,
+                    })
+                  }
+                >
+                  <option value="">请选择人物参考图</option>
+                  {plan.referenceImages
+                    .filter((ref) =>
+                      draft.referenceAssetIds.includes(ref.assetId),
+                    )
+                    .map((ref) => (
+                      <option key={ref.assetId} value={ref.assetId}>
+                        {ref.assetId} · {ref.scope}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <p className="text-xs text-muted-foreground">
+                候选按描述展示，选择后用于生成图片。
+              </p>
+            </fieldset>
             <div className="flex flex-wrap items-end gap-3">
               <label className="grid gap-1">
                 宽度
@@ -258,8 +398,10 @@ export function SceneImageCard() {
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              第一张为指定画幅的黑色画布。参考图可不选，最多{" "}
-              {caps?.imageGeneration.maxReferenceImages} 张。
+              {draft.poseEnabled
+                ? "image1 为指定画幅的人偶姿势图，image2 必须为人物参考。"
+                : "第一张为指定画幅的黑色画布，普通生图可不选参考。"}
+              最多 {caps?.imageGeneration.maxReferenceImages} 张参考图。
             </p>
             <div className="flex flex-wrap gap-3">
               <button
@@ -316,11 +458,9 @@ export function SceneImageCard() {
                   const related = generations.find(
                     (g) => g.id === ref.sourceGenerationId,
                   );
-                  const selectedIndex = plan.referenceImages
-                    .filter((item) =>
-                      draft.referenceAssetIds.includes(item.assetId),
-                    )
-                    .findIndex((item) => item.assetId === ref.assetId);
+                  const selectedIndex = orderedReferences.findIndex(
+                    (item) => item.assetId === ref.assetId,
+                  );
                   return (
                     <li key={ref.assetId} className="flex items-center gap-2">
                       <input
@@ -331,6 +471,11 @@ export function SceneImageCard() {
                         onChange={(e) =>
                           updateDraft({
                             ...draft,
+                            characterReferenceAssetId:
+                              !e.target.checked &&
+                              draft.characterReferenceAssetId === ref.assetId
+                                ? null
+                                : draft.characterReferenceAssetId,
                             referenceAssetIds: e.target.checked
                               ? [...draft.referenceAssetIds, ref.assetId]
                               : draft.referenceAssetIds.filter(
@@ -369,10 +514,15 @@ export function SceneImageCard() {
           {plan.error}。可调整提示词和参考后生成。
         </p>
       )}
+      {poseError && (
+        <p className="mt-2 text-xs text-muted-foreground">{poseError}</p>
+      )}
       <div className="mt-2 flex flex-wrap gap-3">
         {plan && draft && (
           <button
-            disabled={disabled || !sizeValid || !draft.prompt.trim()}
+            disabled={
+              disabled || !sizeValid || !draft.prompt.trim() || !!poseError
+            }
             onClick={() =>
               draft.prompt !== plan.prompt ? setConfirmEdit(true) : generate()
             }

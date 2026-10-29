@@ -1,4 +1,6 @@
 "use client";
+
+import { resumeScenePoseSearches } from "@/lib/scene-images/poses";
 import {
   notifySceneImages,
   resumeSceneGenerations,
@@ -223,7 +225,13 @@ export function initialize() {
           await selectCharacter(character.id, saved.get("sessionId"));
         set({ ready: true, bootError: "" });
         void resumeDispatch().catch(report);
-        if (!get().readOnly) void resumeSceneGenerations(write).catch(report);
+        if (!get().readOnly) {
+          void resumeSceneGenerations(write).catch(report);
+          const resumePoses = () =>
+            void resumeScenePoseSearches(write).catch(report);
+          window.addEventListener("scene-image-plans-committed", resumePoses);
+          resumePoses();
+        }
       } catch (error) {
         set({ bootError: `无法打开本地数据：${errorText(error)}` });
         initPromise = undefined;

@@ -99,10 +99,23 @@ test("v10 原地升级失败回滚，成功移除用途分类并保留草稿、�
   );
   preserved.close();
   const current = await database();
-  assert.equal(current.version, 11);
+  assert.equal(current.version, 12);
   const plan = (await current.get("sceneImagePlans", "plan"))!;
   assert.equal("roles" in plan.referenceImages[0], false);
-  assert.deepEqual(plan.draft, draft);
+  assert.deepEqual(plan.draft, {
+    ...draft,
+    poseEnabled: false,
+    poseQuery: "",
+    characterReferenceAssetId: null,
+    poseSearch: {
+      status: "idle",
+      query: null,
+      revision: 0,
+      matches: [],
+      selectedPoseId: null,
+      error: null,
+    },
+  });
   const submission = (await current.get("sceneGenerations", "g"))!.submission;
   assert.equal(submission.effectivePrompt, "追加说明后的真实提交");
   assert.equal("roles" in submission.referenceImages[0], false);

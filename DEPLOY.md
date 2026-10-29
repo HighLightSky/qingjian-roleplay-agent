@@ -99,13 +99,13 @@ ss -ltn | grep -E ':(443|3000|8080)\b' || echo "已全部关闭"
 
 ## 剧情图服务
 
-后端设置 `IMAGE_SERVICE_BASE_URL`（默认内网 HTTPS 地址）和 `IMAGE_SERVICE_API_TOKEN`。Token 只配置在后端；未配置时聊天正常，生图按钮会提示未启用。服务证书信任见第 0 步，不能关闭 TLS 校验。
+后端设置 `API_BASE_URL`（默认内网 HTTPS 地址）和 `IMAGE_SERVICE_API_TOKEN`。Token 只配置在后端；未配置时聊天正常，生图按钮会提示未启用。服务证书信任见第 0 步，不能关闭 TLS 校验。
 
-远端代理必须放行 `/api/image/edit/{task_id}/cancel`，且该路由不占用生成连接配额。应用停止按钮使用另一条连接发送取消，原生成连接继续等待 `409 TASK_CANCELLED`；收到 `202` 时仍显示取消中。
+远端服务必须为 `bd915865` 或更新版本，并已配置姿势索引和 embedding 服务；当前 API 不提供版本查询，需部署人员核验。应用会在检索和生成前调用 `/ready`，但该接口不检查姿势索引或 embedding，相关错误会在检索区域显示。远端代理必须放行 `/ready`、`/api/pose/search` 和 `/api/image/edit/{task_id}/cancel`，且该路由不占用生成连接配额。应用停止按钮使用另一条连接发送取消，原生成连接继续等待 `409 TASK_CANCELLED`；收到 `202` 时仍显示取消中。
 
-浏览器关闭不停止后台生成，任务结果默认保留两小时。后端重启不保留在途任务与临时结果。升级前先在旧版“完整备份 → 导出全部”保存浏览器数据，按 `docs/15-剧情图开发与数据迁移计划.md` 同步发布前后端。不要用旧前端打开升级后的 v10 库。
+浏览器关闭不停止后台生成，任务结果默认保留两小时。后端重启不保留在途任务与临时结果。升级前先在旧版“完整备份 → 导出全部”保存浏览器数据，按 `docs/15-剧情图开发与数据迁移计划.md` 同步发布前后端。不要用旧前端打开升级后的 v12 库。
 
-生图固定使用后端黑色画布作为第一张输入，默认 256 × 512，按 32 像素向上对齐。宽高和对齐值读取 roleplay.image-generation.default-width/default-height/dimension-alignment；黑图占用一个图片名额，人物照片和历史图为可选参考且允许压缩。当前数据库 v11，备份 v13，旧 v8—v10 数据库及 v9—v12 备份在入口迁移。
+生图固定使用后端黑色画布作为第一张输入，默认 512 × 512，按 32 像素向上对齐。姿势模式下远端将首图替换为人偶，用户指定的人物图固定为 image2；普通模式允许不选参考图。宽高、对齐及全部资源限制集中在 roleplay.image-generation；画幅图占用一个图片名额，其他参考允许压缩。新增配置包括 ready-timeout-seconds=10、pose-search-timeout-seconds=60、pose-max-bytes=1048576、pose-search-max-response-bytes=4194304、pose-search-max-request-bytes=65536、pose-search-top-k=3。当前数据库 v12，备份 v14，旧 v8—v11 数据库及 v9—v13 备份在入口迁移；历史草稿保留原文并关闭姿势参考。
 
 
 ## 正文思考与超时

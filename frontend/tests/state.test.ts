@@ -1,3 +1,4 @@
+import { emptyPoseSearch } from "../lib/scene-images/draft";
 import { IMAGE_SEQUENCE_KEY } from "../lib/images/ids";
 import "fake-indexeddb/auto";
 import { beforeEach, test } from "node:test";
@@ -409,6 +410,10 @@ test("正常整理结果与手动重试共用草稿事务，重复接收保留�
       width: 256,
       height: 512,
       referenceAssetIds: [],
+      poseEnabled: false,
+      poseQuery: "",
+      characterReferenceAssetId: null,
+      poseSearch: emptyPoseSearch(),
     },
   });
   await acceptStateResult(task, result, commit, changed);
@@ -421,7 +426,7 @@ test("正常整理结果与手动重试共用草稿事务，重复接收保留�
     (await db.get("sessions", session.id))!.stateVersion,
     session.stateVersion,
   );
-  assert.equal(validateBackup(await takeSnapshot()).formatVersion, 13);
+  assert.equal(validateBackup(await takeSnapshot()).formatVersion, 14);
 });
 
 test("computed 画面草稿的独占原图参与计量、回收和备份，重提无需再次调用模型", async () => {

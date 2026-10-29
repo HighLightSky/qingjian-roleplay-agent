@@ -18,6 +18,8 @@ export function emptyStateResult(body: UpdateBody): StateResult {
       sourceSeq: body.throughSeq,
       sourceCheckpointVersion: body.assistantCheckpointVersion,
       profileVersion: body.context.character.profileVersion,
+      poseQuery: null,
+      characterReferenceAssetId: null,
       referenceImages: [],
       prompt: "女孩坐在书桌旁的椅子上，双脚落地，低头阅读桌上的书。",
       error: null,

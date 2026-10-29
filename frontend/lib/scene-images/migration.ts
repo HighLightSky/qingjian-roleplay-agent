@@ -248,3 +248,62 @@ export function convertV11Backup(value: Record<string, unknown>) {
   }
   return { ...value, formatVersion: 12, data: converted };
 }
+
+/** v11 尚未拆分动作，升级时不能从历史提示词猜测姿势。 */
+export function upgradeV11Record(
+  table: string,
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  const row = { ...value };
+  const ordinaryPose = {
+    poseEnabled: false,
+    poseQuery: null,
+    characterReferenceAssetId: null,
+    poseSelection: null,
+  };
+  if (table === "sceneImagePlans") {
+    row.poseQuery = null;
+    row.characterReferenceAssetId = null;
+    if (row.draft)
+      row.draft = {
+        ...(row.draft as object),
+        poseEnabled: false,
+        poseQuery: "",
+        characterReferenceAssetId: null,
+        poseSearch: {
+          status: "idle",
+          query: null,
+          revision: 0,
+          matches: [],
+          selectedPoseId: null,
+          error: null,
+        },
+      };
+  }
+  if (table === "sceneGenerations")
+    row.submission = { ...(row.submission as object), ...ordinaryPose };
+  if (table === "operations" && row.kind === "state_update" && row.result) {
+    const result = row.result as Record<string, unknown>;
+    if (result.scenePlan)
+      row.result = {
+        ...result,
+        scenePlan: upgradeV11Record(
+          "sceneImagePlans",
+          result.scenePlan as Record<string, unknown>,
+        ),
+      };
+  }
+  return row;
+}
+
+export function convertV13Backup(value: Record<string, unknown>) {
+  const data = value.data;
+  if (!data || typeof data !== "object" || Array.isArray(data))
+    throw new Error("旧备份数据缺失。");
+  const converted: Record<string, unknown[]> = {};
+  for (const [table, rows] of Object.entries(data)) {
+    if (!Array.isArray(rows)) throw new Error(`旧备份的 ${table} 数据无效。`);
+    converted[table] = rows.map((row) => upgradeV11Record(table, row));
+  }
+  return { ...value, formatVersion: 14, data: converted };
+}

@@ -140,14 +140,17 @@ class StateUpdateLiveTest {
                 service.validateRequest(request);
                 var result = service.update(request);
                 String prompt = result.scenePlan().prompt();
+                String poseQuery = result.scenePlan().poseQuery();
+                assertFalse(poseQuery.isBlank(), "姿态检索描述必须独立返回");
+                assertEquals("img2", result.scenePlan().characterReferenceAssetId());
                 assertTrue(prompt.contains("<image2>"), "身份应直接引用自动角色照片");
                 assertFalse(prompt.contains("img2"));
                 assertFalse(prompt.contains("\n"), "画面指令应为单段");
                 assertEquals("img2", result.scenePlan().referenceImages().getFirst().assetId());
                 assertEquals(3, result.scenePlan().sourceCheckpointVersion());
                 if (entry.getKey().equals("reading")) {
-                    assertTrue(prompt.contains("椅"));
-                    assertTrue(prompt.contains("书"));
+                    assertTrue(poseQuery.contains("椅"));
+                    assertTrue(poseQuery.contains("书"));
                 }
                 saved.set(entry.getKey(), mapper.valueToTree(result));
                 System.out.println("画面真实回归通过：场景=" + entry.getKey() + "，提示词字数=" + prompt.codePointCount(0, prompt.length()));

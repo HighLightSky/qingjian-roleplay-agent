@@ -72,7 +72,7 @@ class StateUpdateServiceTest {
         var context = new ChatApiRequest(new CharacterDto("林溪", "", "", "img1", 1), c.state(), c.summary(),
                 c.history(), c.input(), c.interactionSettings(), new Context("session", List.of(), null, List.of(), List.of(missing)), c.operationId());
         var request = new UpdateRequest(original.operationId(), context, original.fromExclusiveSeq(), original.throughSeq(), 1, original.messages());
-        answer("{\"visualObservations\":[{\"assetId\":\"img1\",\"summary\":\"虚构外观\",\"visibleDetails\":[],\"extractedText\":[],\"uncertainDetails\":[]}],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"sceneImage\":{\"prompt\":\"人物坐在椅子上阅读。\",\"additionalReferences\":[]},\"goalChanges\":[]}");
+        answer("{\"visualObservations\":[{\"assetId\":\"img1\",\"summary\":\"虚构外观\",\"visibleDetails\":[],\"extractedText\":[],\"uncertainDetails\":[]}],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"sceneImage\":{\"poseQuery\":\"人物坐在椅子上，双脚落地，正面观察。\",\"prompt\":\"人物坐在椅子上阅读。\",\"additionalReferences\":[]},\"goalChanges\":[]}");
         assertTrue(assertThrows(IOException.class, () -> update(request)).getMessage().contains("未传入的原图"));
         verify(model, times(2)).chat(any());
     }
@@ -80,7 +80,7 @@ class StateUpdateServiceTest {
     private UpdateRequest request() { return request(TestRequests.state(List.of()), null, List.of()); }
     private void answer(String content) throws Exception { when(model.chat(any())).thenReturn(new ChatResponse(content, "stop", com.example.llm.model.TokenUsage.unavailable())); }
     private String output(String story, String memory, String goal) {
-        return "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":" + story + ",\"memoryChanges\":" + memory + ",\"goalChanges\":" + goal + ",\"sceneImage\":{\"prompt\":\"人物坐在椅子上阅读。\",\"additionalReferences\":[]}}";
+        return "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":" + story + ",\"memoryChanges\":" + memory + ",\"goalChanges\":" + goal + ",\"sceneImage\":{\"poseQuery\":\"人物坐在椅子上，双脚落地，正面观察。\",\"prompt\":\"人物坐在椅子上阅读。\",\"additionalReferences\":[]}}";
     }
     private String change(String id, String value) {
         return "{\"action\":\"" + (id.isEmpty() ? "create" : "update") + "\",\"id\":\"" + id
@@ -600,6 +600,7 @@ class StateUpdateServiceTest {
         var result = update(new UpdateRequest(base.operationId(), base.context(), base.fromExclusiveSeq(),
                 base.throughSeq(), 7, base.messages()));
         assertEquals("人物坐在椅子上阅读。", result.scenePlan().prompt());
+        assertEquals("人物坐在椅子上，双脚落地，正面观察。", result.scenePlan().poseQuery());
         assertEquals("assistant", result.scenePlan().assistantMessageId());
         assertEquals(7, result.scenePlan().sourceCheckpointVersion());
         assertTrue(result.storyChanges().isEmpty());
@@ -638,6 +639,7 @@ class StateUpdateServiceTest {
         var result = update(sceneRequest());
         assertEquals(List.of("img2", "img3", "img1"), result.scenePlan().referenceImages().stream().map(r -> r.assetId()).toList());
         assertEquals("generation", result.scenePlan().referenceImages().get(1).sourceGenerationId());
+        assertEquals("img2", result.scenePlan().characterReferenceAssetId());
         assertTrue(result.visualObservations().isEmpty());
         var calls = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(model).chat(calls.capture());
@@ -651,18 +653,20 @@ class StateUpdateServiceTest {
         assertFalse(calls.getValue().getMessages().stream().filter(m -> m.getParts() != null)
                 .flatMap(m -> m.getParts().stream()).anyMatch(part -> "image_url".equals(part.type())));
         var schema = calls.getValue().getResponseSchema().path("properties").path("sceneImage");
-        assertEquals(2, schema.path("required").size());
+        assertEquals(3, schema.path("required").size());
         assertFalse(schema.toString().contains("roles"));
         assertFalse(schema.path("properties").path("additionalReferences").toString().contains("img2"));
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"missing", "duplicate", "automatic", "unknown", "blankScope", "oldRoles", "overLimit"})
+    @ValueSource(strings = {"missing", "duplicate", "automatic", "unknown", "blankScope", "oldRoles", "overLimit", "missingPoseQuery", "blankPoseQuery"})
     void invalidSceneOutputIsCorrectedAsPartOfTheSameStateCall(String kind) throws Exception {
         if ("overLimit".equals(kind)) vision.setMaxImages(2);
         var valid = output("[]", "[]", "[]");
         var invalid = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(valid);
         if ("missing".equals(kind)) invalid.remove("sceneImage");
+        else if ("missingPoseQuery".equals(kind)) invalid.withObject("sceneImage").remove("poseQuery");
+        else if ("blankPoseQuery".equals(kind)) invalid.withObject("sceneImage").put("poseQuery", " ");
         else {
             var references = invalid.withObject("sceneImage").putArray("additionalReferences");
             var reference = references.addObject().put("assetId", switch (kind) {

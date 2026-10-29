@@ -433,6 +433,8 @@ export async function runStateTask(
       });
     });
     notifySceneImages();
+    if (typeof window !== "undefined")
+      window.dispatchEvent(new Event("scene-image-plans-committed"));
     await changed();
   } catch (error) {
     const computed =

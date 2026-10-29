@@ -75,6 +75,7 @@ final class StateUpdateResponseSchema {
         reference.set("scope", text().put("minLength", 1));
         var scene = JSON.objectNode();
         scene.set("prompt", text().put("minLength", 1));
+        scene.set("poseQuery", text().put("minLength", 1));
         scene.set("additionalReferences", array(object(reference),
                 Math.min(referenceIds.size(), material.path("maxAdditionalReferences").asInt())));
         properties.set("sceneImage", object(scene));

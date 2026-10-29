@@ -104,7 +104,8 @@ public class SceneImageTaskService {
             byte[] output = null;
             String status, code = null, error = null;
             try (lease) {
-                output = client.edit(task.taskId, submission.effectivePrompt(), images);
+                output = client.edit(task.taskId, submission.effectivePrompt(), images,
+                        submission.poseEnabled() ? submission.poseSelection().pose() : null);
                 try {
                     validation.validateOutput(output);
                 } catch (IOException e) {

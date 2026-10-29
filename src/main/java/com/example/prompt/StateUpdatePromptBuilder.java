@@ -140,7 +140,7 @@ public class StateUpdatePromptBuilder {
         template.putArray("storyChanges");
         template.putArray("memoryChanges");
         template.putArray("goalChanges");
-        template.putObject("sceneImage").put("prompt", "").putArray("additionalReferences");
+        template.putObject("sceneImage").put("prompt", "").put("poseQuery", "").putArray("additionalReferences");
         return template.toString();
     }
 }

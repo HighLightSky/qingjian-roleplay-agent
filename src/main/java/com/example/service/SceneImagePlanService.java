@@ -17,7 +17,7 @@ public class SceneImagePlanService {
         if (!photoId.isEmpty()) {
             var photo = ImageValidationService.catalog(context).stream().filter(a -> a.assetId().equals(photoId))
                     .findFirst().orElseThrow();
-            references.add(new Reference(photo.assetId(), "人物身份，动作与服装以提示词为准", photo.sourceSha256(), null));
+            references.add(new Reference(photo.assetId(), "人物身份与外观，服装以提示词为准", photo.sourceSha256(), null));
         }
         for (var suggested : scene.additionalReferences()) {
             var asset = ImageValidationService.catalog(context).stream()
@@ -30,6 +30,6 @@ public class SceneImagePlanService {
         }
         var source = request.messages().getLast();
         return new Plan(UUID.randomUUID().toString(), context.state().sessionId(), source.id(), source.seq(),
-                request.assistantCheckpointVersion(), context.character().profileVersion(), references, scene.prompt(), null);
+                request.assistantCheckpointVersion(), context.character().profileVersion(), references, scene.prompt(), null, scene.poseQuery(), photoId.isEmpty() ? null : photoId);
     }
 }

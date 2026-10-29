@@ -56,9 +56,15 @@ roleplay:
     state-output-tokens: 8192
 
   image-generation:
-    base-url: ${IMAGE_SERVICE_BASE_URL:https://10.21.16.104}
-    api-token: ${IMAGE_SERVICE_API_TOKEN:comfyUI-qwen-image-21-edit-api-20261024-token}
+    base-url: ${API_BASE_URL:https://10.21.16.104}
+    api-token: ${IMAGE_SERVICE_API_TOKEN:}
     timeout-seconds: 1800
+    ready-timeout-seconds: 10
+    pose-search-timeout-seconds: 60
+    pose-max-bytes: 1048576
+    pose-search-max-response-bytes: 4194304
+    pose-search-max-request-bytes: 65536
+    pose-search-top-k: 3
     cancel-timeout-seconds: 10
     task-timeout-seconds: 1900
     result-retention-seconds: 7200

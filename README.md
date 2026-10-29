@@ -55,14 +55,14 @@ export LLM_MODEL='你的模型名称'
 export LLM_API_KEY='你的模型密钥'
 export CONTEXT_WINDOW_TOKENS=193024
 
-export IMAGE_SERVICE_BASE_URL='http://127.0.0.1:8000'
+export API_BASE_URL='http://127.0.0.1:8000'
 export IMAGE_SERVICE_API_TOKEN='你的生图服务 Token'
 
 mvn spring-boot:run
 ```
 
 - **LLM 服务**：`LLM_BASE_URL` 填完整的聊天接口地址；服务需支持流式回复、视觉输入、JSON Schema 结构化输出，以及思考开关和 `reasoning_budget_tokens`。同一服务还需提供 `/tokenize` 和 `/apply-template` 接口。`CONTEXT_WINDOW_TOKENS` 按实际部署的上下文窗口填写。
-- **生图服务**：`IMAGE_SERVICE_BASE_URL` 只填服务根地址，后端会调用 `/api/image/edit`，使用 `IMAGE_SERVICE_API_TOKEN` 鉴权。需连接符合[生图服务协议](docs/13-生图服务API.md)的服务；暂不使用生图时可将 Token 设为空，不影响聊天。
+- **生图服务**：`API_BASE_URL` 只填服务根地址，后端会调用 `/ready`、`/api/pose/search` 和 `/api/image/edit`，使用 `IMAGE_SERVICE_API_TOKEN` 鉴权。需连接符合[生图服务协议](docs/API.md)的服务；暂不使用生图时可将 Token 设为空，不影响聊天。
 
 两类服务均由后端连接，密钥只需配置在后端。使用自签名 HTTPS 时，证书信任配置见[部署指南](DEPLOY.md)。
 

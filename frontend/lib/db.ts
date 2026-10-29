@@ -9,6 +9,7 @@ import {
   upgradeV9Data,
   upgradeV8Record,
   upgradeV10Record,
+  upgradeV11Record,
 } from "./scene-images/migration";
 import { IMAGE_SEQUENCE_KEY } from "./images/ids";
 import {
@@ -106,7 +107,7 @@ let connection: Promise<IDBPDatabase<RoleplayDB>> | undefined;
 export function database(): Promise<IDBPDatabase<RoleplayDB>> {
   if (!connection) {
     let upgradeError: unknown;
-    connection = openDB<RoleplayDB>("roleplay-agent", 11, {
+    connection = openDB<RoleplayDB>("roleplay-agent", 12, {
       upgrade(db, oldVersion, _newVersion, tx) {
         void tx.done.catch((error: unknown) => {
           upgradeError ??= error;
@@ -115,7 +116,8 @@ export function database(): Promise<IDBPDatabase<RoleplayDB>> {
           oldVersion !== 0 &&
           oldVersion !== 8 &&
           oldVersion !== 9 &&
-          oldVersion !== 10
+          oldVersion !== 10 &&
+          oldVersion !== 11
         ) {
           upgradeError = new Error(
             "当前数据库版本不支持自动升级，原数据已保留，请使用旧版本导出备份。",
@@ -144,9 +146,14 @@ export function database(): Promise<IDBPDatabase<RoleplayDB>> {
                   await cursor.delete();
                 else
                   await cursor.update(
-                    upgradeV10Record(
+                    upgradeV11Record(
                       table,
-                      cursor.value as unknown as Record<string, unknown>,
+                      oldVersion === 11
+                        ? (cursor.value as unknown as Record<string, unknown>)
+                        : upgradeV10Record(
+                            table,
+                            cursor.value as unknown as Record<string, unknown>,
+                          ),
                     ) as never,
                   );
                 cursor = await cursor.continue();

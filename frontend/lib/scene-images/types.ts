@@ -26,11 +26,37 @@ export type SceneReference = {
   sourceSha256: string | null;
   sourceGenerationId: string | null;
 };
+export type JsonValue =
+  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type PoseSelection = {
+  poseId: string;
+  score: number;
+  description: { zh: string; en: string };
+  pose: { [key: string]: JsonValue };
+};
+export type PoseSearch = {
+  status: "idle" | "searching" | "succeeded" | "failed";
+  query: string | null;
+  revision: number;
+  matches: PoseSelection[];
+  selectedPoseId: string | null;
+  error: string | null;
+};
+export type PoseSubmission = {
+  poseEnabled: boolean;
+  poseQuery: string | null;
+  characterReferenceAssetId: string | null;
+  poseSelection: PoseSelection | null;
+};
 export type SceneDraft = {
   prompt: string;
   width: number;
   height: number;
   referenceAssetIds: string[];
+  poseEnabled: boolean;
+  poseQuery: string;
+  characterReferenceAssetId: string | null;
+  poseSearch: PoseSearch;
 };
 export type SceneImagePlan = {
   id: string;
@@ -41,6 +67,8 @@ export type SceneImagePlan = {
   profileVersion: number;
   referenceImages: SceneReference[];
   prompt: string;
+  poseQuery: string | null;
+  characterReferenceAssetId: string | null;
   error: string | null;
   draft?: SceneDraft;
 };
@@ -48,7 +76,7 @@ export type SceneInputReference = Omit<SceneReference, "sourceSha256"> & {
   sourceSha256: string;
   sha256: string | null;
 };
-export type SceneSubmission = {
+export type SceneSubmission = PoseSubmission & {
   prompt: string;
   effectivePrompt: string | null;
   // 旧失败任务无法还原请求尺寸，迁移时明确保留未知值。
@@ -94,6 +122,10 @@ export type SceneTaskSnapshot = {
 };
 export type GenerationCapabilities = {
   enabled: boolean;
+  poseMaxBytes: number;
+  poseSearchMaxRequestBytes: number;
+  poseSearchMaxResponseBytes: number;
+  poseSearchTopK: number;
   defaultWidth: number;
   defaultHeight: number;
   dimensionAlignment: number;

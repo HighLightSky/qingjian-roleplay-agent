@@ -7,8 +7,8 @@ const hash = createHash("sha256")
   .update(Buffer.from(png, "base64"))
   .digest("hex");
 
-for (const legacyVersion of [8, 9, 10]) {
-  test(`原生 IndexedDB 的 v${legacyVersion} 库保留原件、正文与草稿后升级为 v11`, async ({
+for (const legacyVersion of [8, 9, 10, 11]) {
+  test(`原生 IndexedDB 的 v${legacyVersion} 库保留原件、正文与草稿后升级为 v12`, async ({
     page,
     baseURL,
   }) => {
@@ -201,7 +201,7 @@ for (const legacyVersion of [8, 9, 10]) {
             sourceSeq: 2,
             sourceCheckpointVersion: 4,
             sceneId: "scene",
-            ...(legacyVersion === 10
+            ...(legacyVersion >= 10
               ? {
                   submission: {
                     prompt: "原始提交",
@@ -211,7 +211,9 @@ for (const legacyVersion of [8, 9, 10]) {
                     referenceImages: [
                       {
                         assetId: "img1",
-                        roles: ["identity"],
+                        ...(legacyVersion === 10
+                          ? { roles: ["identity"] }
+                          : {}),
                         scope: "人物身份",
                         sha256: hash,
                         sourceSha256: hash,
@@ -261,7 +263,7 @@ for (const legacyVersion of [8, 9, 10]) {
       "原来未发的草稿",
     );
     const migrated = await page.evaluate(async () => {
-      const request = indexedDB.open("roleplay-agent", 11);
+      const request = indexedDB.open("roleplay-agent", 12);
       const db = await new Promise<IDBDatabase>((resolve) => {
         request.onsuccess = () => resolve(request.result);
       });
@@ -297,7 +299,7 @@ for (const legacyVersion of [8, 9, 10]) {
       db.close();
       return result;
     });
-    expect(migrated.version).toBe(11);
+    expect(migrated.version).toBe(12);
     expect(migrated.tables).toEqual(
       expect.arrayContaining(["sceneImagePlans", "sceneGenerations"]),
     );

@@ -45,7 +45,7 @@ class ChatControllerTest {
     @MockitoBean Clock clock;
     final AtomicLong time = new AtomicLong(1000);
     final List<String> ids = new ArrayList<>();
-    static final String EMPTY = "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"sceneImage\":{\"prompt\":\"人物坐在椅子上阅读。\",\"additionalReferences\":[]},\"goalChanges\":[]}";
+    static final String EMPTY = "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"sceneImage\":{\"poseQuery\":\"人物坐在椅子上，双脚落地，正面观察。\",\"prompt\":\"人物坐在椅子上阅读。\",\"additionalReferences\":[]},\"goalChanges\":[]}";
     @BeforeEach void setup() throws Exception {
         when(clock.millis()).thenAnswer(i -> time.get());
         when(counter.countTextOnly(any())).thenReturn(new ContextDtos.TokenCount(100, "exact", "test", "fp"));

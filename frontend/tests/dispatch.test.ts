@@ -603,7 +603,7 @@ test("思考随消息及 v13 备份保存，普通复制和下一轮上下文不
   assert.deepEqual(replies[0].reasoning, trace);
   assert.ok(!plainText(replies[0]).includes(trace.text));
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 13);
+  assert.equal(backup.formatVersion, 14);
   await restoreSnapshot(backup);
   assert.deepEqual(
     (await allMessages(session.id)).find((m) => m.id === replies[0].id)!
@@ -614,7 +614,7 @@ test("思考随消息及 v13 备份保存，普通复制和下一轮上下文不
   legacy.formatVersion = 12;
   for (const message of legacy.data.messages) delete message.reasoning;
   const converted = validateBackup(legacy);
-  assert.equal(converted.formatVersion, 13);
+  assert.equal(converted.formatVersion, 14);
   assert.ok(converted.data.messages.every((m) => m.reasoning === undefined));
   const corrupt = JSON.parse(JSON.stringify(backup));
   corrupt.data.messages.find(

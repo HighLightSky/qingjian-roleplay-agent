@@ -8,6 +8,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.*;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
@@ -16,6 +17,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import com.example.config.ImageGenerationProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 
 /** 长连接只由生成请求持有，取消在另一个 HTTP 请求中执行。 */
 @Component
@@ -49,10 +52,14 @@ public class QwenImageClient {
         this.config = config;
     }
 
-    public byte[] edit(String taskId, String prompt, List<Image> images) throws IOException, InterruptedException {
+    public byte[] edit(String taskId, String prompt, List<Image> images, JsonNode pose)
+            throws IOException, InterruptedException {
+        ready();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(config.timeoutSeconds());
         var parts = new LinkedMultiValueMap<String, Object>();
         parts.add("prompt", prompt);
+        if (pose != null)
+            parts.add("pose", mapper.writeValueAsString(pose));
         for (int i = 0; i < images.size(); i++) {
             var image = images.get(i);
             final String filename = "image" + (i + 1) + (image.mimeType().equals("image/png") ? ".png" : ".jpg");
@@ -91,6 +98,36 @@ public class QwenImageClient {
             if (bytes.length > config.maxOutputBytes())
                 throw new ServiceError(502, "INVALID_OUTPUT", "生成图片体积超限");
             return bytes;
+        }
+    }
+
+    public void ready() throws IOException, InterruptedException {
+        json(request("/ready", config.readyTimeoutSeconds()).GET().build(), config.readyTimeoutSeconds(), 65536);
+    }
+
+    public JsonNode searchPoses(String query) throws IOException, InterruptedException {
+        ready();
+        var body = mapper.writeValueAsBytes(Map.of("query", query, "top_k", config.poseSearchTopK()));
+        return json(request("/api/pose/search", config.poseSearchTimeoutSeconds())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(), config.poseSearchTimeoutSeconds(),
+                config.poseSearchMaxResponseBytes());
+    }
+
+    private JsonNode json(HttpRequest request, int seconds, int maxBytes) throws IOException, InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
+        var response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        try (var stream = response.body()) {
+            if (response.statusCode() != 200)
+                throw readError(response.statusCode(), response.headers(), stream, deadline);
+            if (!response.headers().firstValue("Content-Type").orElse("").split(";")[0]
+                    .equalsIgnoreCase("application/json"))
+                throw new ServiceError(502, "IMAGE_SERVICE_PROTOCOL", "图像服务未返回 JSON");
+            var result = mapper.reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                    .readTree(readLimited(stream, maxBytes, deadline));
+            if (result == null || !result.isObject())
+                throw new ServiceError(502, "IMAGE_SERVICE_PROTOCOL", "图像服务返回的 JSON 不是对象");
+            return result;
         }
     }
 

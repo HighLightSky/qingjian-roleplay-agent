@@ -12,13 +12,15 @@ import com.example.web.dto.SceneImageDtos.*;
 public class ImageGenerationValidation {
     private final ImageGenerationProperties config;
     private final VisionProperties vision;
+    private final PoseValidation poses;
 
-    public ImageGenerationValidation(ImageGenerationProperties config, VisionProperties vision) {
+    public ImageGenerationValidation(ImageGenerationProperties config, VisionProperties vision, PoseValidation poses) {
         this.config = config;
         this.vision = vision;
+        this.poses = poses;
     }
 
-    public Submission validateRequest(GenerationRequest request) {
+    public Submission validateRequest(GenerationRequest request) throws IOException {
         if (request == null || request.source() == null)
             throw new IllegalArgumentException("生图请求缺少来源");
         StateValidation.id(request.runId());
@@ -32,10 +34,23 @@ public class ImageGenerationValidation {
         int width = aligned(request.width()), height = aligned(request.height());
         if ((long) width * height > config.maxPixels())
             throw new IllegalArgumentException("黑色画布像素超出生图限制");
-        String effectivePrompt = SceneImagePromptAssembler.assemble(request.prompt(), request.referenceImages());
+        if (request.characterReferenceAssetId() != null)
+            ImageIds.requireValid(request.characterReferenceAssetId());
+        if (request.poseEnabled()) {
+            poses.query(request.poseQuery());
+            poses.selection(request.poseSelection());
+            if (request.referenceImages().isEmpty()
+                    || !request.referenceImages().getFirst().assetId().equals(request.characterReferenceAssetId()))
+                throw new IllegalArgumentException("姿势生图必须将指定的人物参考图放在 image2");
+        } else if (request.poseSelection() != null) {
+            throw new IllegalArgumentException("关闭姿势参考时不能提交姿势候选");
+        }
+        String effectivePrompt = SceneImagePromptAssembler.assemble(request.prompt(), request.poseQuery(),
+                request.poseEnabled(), request.referenceImages());
         if (effectivePrompt.codePointCount(0, effectivePrompt.length()) > config.maxPromptCharacters())
             throw new IllegalArgumentException("包含参考说明的实际提示词长度超限");
-        return new Submission(request.prompt(), effectivePrompt, width, height, request.referenceImages());
+        return new Submission(request.prompt(), effectivePrompt, width, height, request.referenceImages(), request.poseEnabled(),
+                request.poseQuery(), request.characterReferenceAssetId(), request.poseSelection());
     }
 
     public Submission validateDirectRequest(DirectGenerationRequest request) {
@@ -47,7 +62,7 @@ public class ImageGenerationValidation {
             throw new IllegalArgumentException("直接生图至少需要一张参考图，第一张为编辑目标");
         if (request.prompt().codePointCount(0, request.prompt().length()) > config.maxPromptCharacters())
             throw new IllegalArgumentException("生图提示词长度超限");
-        return new Submission(request.prompt(), request.prompt(), null, null, request.referenceImages());
+        return new Submission(request.prompt(), request.prompt(), null, null, request.referenceImages(), false, null, null, null);
     }
 
     private void validatePromptAndReferences(String prompt, List<InputImage> references, boolean canvas) {

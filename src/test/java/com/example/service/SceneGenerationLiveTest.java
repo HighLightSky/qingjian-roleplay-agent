@@ -35,7 +35,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @EnabledIfSystemProperty(named = "roleplay.live-images", matches = "true")
 class SceneGenerationLiveTest {
     @Test
-    void stateGeneratedPromptsCreatePoseOutfitAndReadingScenes() throws Exception {
+    void stateGeneratedPromptsSearchPosesAndCreateControlledScenes() throws Exception {
         var yaml = new YamlPropertiesFactoryBean();
         yaml.setResources(new ClassPathResource("application.yml"));
         var environment = new StandardEnvironment();
@@ -52,13 +52,15 @@ class SceneGenerationLiveTest {
         Files.createDirectories(output);
         try (var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()) {
             var imageClient = new QwenImageClient(http, mapper, generation);
-            var validation = new ImageGenerationValidation(generation, vision);
+            var poseValidation = new PoseValidation(generation, mapper);
+            var validation = new ImageGenerationValidation(generation, vision, poseValidation);
+            var poseSearch = new PoseSearchService(imageClient, poseValidation, generation);
             var initial = new GenerationRequest(UUID.randomUUID().toString(), new Source("seed", "session", "assistant", 2, 1),
                     "一位二十六岁的成年女性，黑色长发，穿白衬衫与红色斗篷，正面站立在明亮书房内，双手自然垂在身体两侧，背景有木书桌、椅子与窗户，写实摄影，全身构图。",
-                    generation.defaultWidth(), generation.defaultHeight(), List.of());
+                    generation.defaultWidth(), generation.defaultHeight(), List.of(), false, null, null, null);
             var seedSubmission = validation.validateRequest(initial);
             byte[] seed = imageClient.edit(UUID.randomUUID().toString(), seedSubmission.effectivePrompt(),
-                    List.of(validation.blackCanvas(seedSubmission)));
+                    List.of(validation.blackCanvas(seedSubmission)), null);
             validation.validateOutput(seed);
             Files.write(output.resolve("identity.png"), seed);
             var decoded = ImageIO.read(new ByteArrayInputStream(seed));
@@ -80,6 +82,8 @@ class SceneGenerationLiveTest {
             scenes.put("pose", "她穿着原来的红色斗篷，侧身站在窗边，右手扶住窗台，目视窗外，双脚落地。");
             scenes.put("outfit", "她脱下红色斗篷，穿着里面的白色衬衫，站在书桌旁，斗篷搭在椅背上。");
             scenes.put("reading", "她脱下红色斗篷并搭在椅背上，穿白色衬衫，坐在书桌旁的椅子上，双脚落地，左手扶住桌上的书，右手搭在书页边缘，低头阅读。");
+            scenes.put("boxing", "她穿着白衬衫与红色斗篷，左脚在前右脚在后，双手握拳举到面前，身体侧对镜头，在书房里摆出拳击架势。");
+            scenes.put("jump", "她穿着白衬衫与红色斗篷在书房跳起，双脚离地，膝盖弯曲，双臂向两侧张开，正面对镜头。");
             for (var scene : scenes.entrySet()) {
                 var context = new ChatApiRequest(new CharacterDto("林溪", "旧友", "二十六岁的成年女性", "img1", 1),
                         TestRequests.state(List.of()), TestRequests.summary(), List.of(), new InputDto("继续当前场景。", null),
@@ -91,18 +95,25 @@ class SceneGenerationLiveTest {
                 state.validateRequest(request);
                 var result = state.update(request);
                 assertTrue(result.scenePlan().prompt().contains("<image2>"));
+                var candidates = poseSearch.search(new PoseSearchRequest(result.scenePlan().poseQuery()));
+                assertFalse(candidates.matches().isEmpty(), "真实服务未返回姿势候选");
+                // 批量回归显式选首项；保存全部候选，画面与左右肢体仍须人工检查。
+                var selected = candidates.matches().getFirst();
                 var imageRequest = new GenerationRequest(UUID.randomUUID().toString(), initial.source(), result.scenePlan().prompt(),
                         generation.defaultWidth(), generation.defaultHeight(),
-                        List.of(new InputImage("img1", result.scenePlan().referenceImages().getFirst().scope(), hash, hash, null)));
+                        List.of(new InputImage("img1", result.scenePlan().referenceImages().getFirst().scope(), hash, hash, null)), true, result.scenePlan().poseQuery(), "img1", selected);
                 var submission = validation.validateRequest(imageRequest);
                 byte[] generated = imageClient.edit(UUID.randomUUID().toString(), submission.effectivePrompt(), List.of(
-                        validation.blackCanvas(submission), new QwenImageClient.Image("img1", "image/png", decoded.getWidth(), decoded.getHeight(), seed)));
+                        validation.blackCanvas(submission), new QwenImageClient.Image("img1", "image/png", decoded.getWidth(), decoded.getHeight(), seed)), selected.pose());
                 validation.validateOutput(generated);
                 var dimensions = ImageIO.read(new ByteArrayInputStream(generated));
                 assertEquals(submission.width(), dimensions.getWidth());
                 assertEquals(submission.height(), dimensions.getHeight());
                 Files.write(output.resolve(scene.getKey() + ".png"), generated);
-                results.set(scene.getKey(), mapper.valueToTree(result));
+                var record = results.putObject(scene.getKey());
+                record.set("stateResult", mapper.valueToTree(result));
+                record.set("poseCandidates", mapper.valueToTree(candidates));
+                record.set("submission", mapper.valueToTree(submission));
                 Files.writeString(output.resolve("results.json"), mapper.writerWithDefaultPrettyPrinter().writeValueAsString(results));
                 System.out.println("实际生图通过：场景=" + scene.getKey() + "，画幅=" + dimensions.getWidth() + "×" + dimensions.getHeight());
             }

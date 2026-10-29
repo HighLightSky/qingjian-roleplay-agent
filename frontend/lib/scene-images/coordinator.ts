@@ -14,6 +14,11 @@ import {
 import { validateScenePlan } from "./validation";
 import type { Capabilities } from "../images/types";
 import { SSEParser } from "../chat/sse";
+import {
+  initialSceneDraft,
+  orderedSceneReferences,
+  poseGenerationError,
+} from "./draft";
 
 const following = new Map<string, Promise<void>>();
 export function notifySceneImages() {
@@ -41,19 +46,7 @@ async function ack(runId: string, commit: Commit) {
   });
 }
 
-export function initialSceneDraft(
-  plan: SceneImagePlan,
-  caps: Capabilities,
-): SceneDraft {
-  return (
-    plan.draft ?? {
-      prompt: plan.prompt,
-      width: caps.imageGeneration.defaultWidth,
-      height: caps.imageGeneration.defaultHeight,
-      referenceAssetIds: plan.referenceImages.map((ref) => ref.assetId),
-    }
-  );
-}
+export { initialSceneDraft } from "./draft";
 
 export async function saveSceneDraft(
   planId: string,
@@ -64,6 +57,24 @@ export async function saveSceneDraft(
   await commit(async () => {
     const plan = await db.get("sceneImagePlans", planId);
     if (!plan) throw new Error("画面草稿不存在。");
+    // 检索在后台完成时，文本编辑保存不能把同版本的新结果覆盖回旧状态。
+    const current = plan.draft;
+    if (
+      current &&
+      current.poseQuery === draft.poseQuery &&
+      current.poseSearch.revision >= draft.poseSearch.revision
+    )
+      draft = {
+        ...draft,
+        poseSearch: {
+          ...current.poseSearch,
+          selectedPoseId:
+            current.poseSearch.revision === draft.poseSearch.revision &&
+            current.poseSearch.status === draft.poseSearch.status
+              ? draft.poseSearch.selectedPoseId
+              : current.poseSearch.selectedPoseId,
+        },
+      };
     await db.put("sceneImagePlans", { ...plan, draft });
   });
 }
@@ -98,13 +109,11 @@ export async function addSceneReferences(
             sourceGenerationId: null,
           });
       }
-      await tx
-        .objectStore("sceneImagePlans")
-        .put({
-          ...plan,
-          referenceImages: references,
-          draft: { ...draft, referenceAssetIds: selected },
-        });
+      await tx.objectStore("sceneImagePlans").put({
+        ...plan,
+        referenceImages: references,
+        draft: { ...draft, referenceAssetIds: selected },
+      });
     });
   });
   notifySceneImages();
@@ -136,9 +145,19 @@ export async function startSceneGeneration(planId: string, commit: Commit) {
   const align = caps.imageGeneration.dimensionAlignment;
   const width = Math.ceil(draft.width / align) * align;
   const height = Math.ceil(draft.height / align) * align;
-  const references = plan.referenceImages.filter((ref) =>
-    draft.referenceAssetIds.includes(ref.assetId),
-  );
+  const poseError = poseGenerationError(draft);
+  if (poseError) throw new Error(poseError);
+  const references = orderedSceneReferences(plan, draft);
+  const poseSubmission = structuredClone({
+    poseEnabled: draft.poseEnabled,
+    poseQuery: draft.poseQuery || null,
+    characterReferenceAssetId: draft.characterReferenceAssetId,
+    poseSelection: draft.poseEnabled
+      ? draft.poseSearch.matches.find(
+          (match) => match.poseId === draft.poseSearch.selectedPoseId,
+        )!
+      : null,
+  });
   if (references.length > caps.imageGeneration.maxReferenceImages)
     throw new Error(
       "生图参考图数量超限，请移除部分参考，黑色画布占用一个名额。",
@@ -165,6 +184,7 @@ export async function startSceneGeneration(planId: string, commit: Commit) {
     referenceStatus: "eligible",
     revision: 0,
     submission: {
+      ...poseSubmission,
       prompt: draft.prompt,
       effectivePrompt: null,
       width,
@@ -221,6 +241,7 @@ export async function startSceneGeneration(planId: string, commit: Commit) {
           sourceSeq: plan.sourceSeq,
           sourceCheckpointVersion: plan.sourceCheckpointVersion,
         },
+        ...poseSubmission,
         prompt: generation.submission.prompt,
         width,
         height,

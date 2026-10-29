@@ -32,7 +32,7 @@ class AuxiliaryAgentsTest {
     private final LLMClient model = mock(LLMClient.class);
     private final LlamaTokenCounter counter = mock(LlamaTokenCounter.class);
     private final VisionProperties vision = com.example.TestRequests.vision();
-    private static final String EMPTY = "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"sceneImage\":{\"prompt\":\"人物坐在椅子上阅读。\",\"additionalReferences\":[]},\"goalChanges\":[]}";
+    private static final String EMPTY = "{\"visualObservations\":[],\"visualChanges\":[],\"storyChanges\":[],\"memoryChanges\":[],\"sceneImage\":{\"poseQuery\":\"人物坐在椅子上，双脚落地，正面观察。\",\"prompt\":\"人物坐在椅子上阅读。\",\"additionalReferences\":[]},\"goalChanges\":[]}";
 
     @BeforeEach void setup() throws Exception {
         vision.setSupported(true);

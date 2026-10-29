@@ -38,6 +38,10 @@ public class CapabilitiesController {
         result.put("retainedTurns", context.retainedTurns());
         result.put("compactionMaxBatches", context.compactionMaxBatches());
         result.put("imageGeneration", Map.ofEntries(Map.entry("enabled", !generation.apiToken().isBlank()),
+                Map.entry("poseMaxBytes", generation.poseMaxBytes()),
+                Map.entry("poseSearchMaxRequestBytes", generation.poseSearchMaxRequestBytes()),
+                Map.entry("poseSearchMaxResponseBytes", generation.poseSearchMaxResponseBytes()),
+                Map.entry("poseSearchTopK", generation.poseSearchTopK()),
                 Map.entry("defaultWidth", generation.defaultWidth()),
                 Map.entry("defaultHeight", generation.defaultHeight()),
                 Map.entry("dimensionAlignment", generation.dimensionAlignment()),

@@ -15,11 +15,19 @@ public class SceneImageController {
     private final SceneImageTaskService tasks;
     private final ImageCache cache;
     private final ImageGenerationProperties config;
+    private final PoseSearchService poses;
 
-    public SceneImageController(SceneImageTaskService tasks, ImageCache cache, ImageGenerationProperties config) {
+    public SceneImageController(SceneImageTaskService tasks, ImageCache cache, ImageGenerationProperties config,
+            PoseSearchService poses) {
         this.tasks = tasks;
         this.cache = cache;
         this.config = config;
+        this.poses = poses;
+    }
+
+    @PostMapping("/poses/search")
+    public ResponseEntity<PoseSearchResult> searchPoses(@RequestBody PoseSearchRequest request) throws IOException, InterruptedException {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(poses.search(request));
     }
 
     @PostMapping

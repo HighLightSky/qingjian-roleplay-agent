@@ -1,3 +1,4 @@
+import { emptyPoseSearch } from "../lib/scene-images/draft";
 import "fake-indexeddb/auto";
 import { beforeEach, afterEach, test } from "node:test";
 import assert from "node:assert/strict";
@@ -41,6 +42,10 @@ const caps: Capabilities = {
   ...contextCapabilities,
   imageGeneration: {
     enabled: true,
+    poseMaxBytes: 1048576,
+    poseSearchMaxRequestBytes: 65536,
+    poseSearchMaxResponseBytes: 4194304,
+    poseSearchTopK: 3,
     defaultWidth: 256,
     defaultHeight: 512,
     dimensionAlignment: 32,
@@ -114,6 +119,8 @@ async function fixture() {
       },
     ],
     prompt: "[参考图说明]参照 <image1> 的人物。\n[画面摘要]白裙人物坐在窗边。",
+    poseQuery: null,
+    characterReferenceAssetId: null,
     error: null,
   };
   await db.put("sceneImagePlans", plan);
@@ -125,6 +132,10 @@ async function fixture() {
     sourceCheckpointVersion: 1,
     sourceSeq: plan.sourceSeq,
     submission: {
+      poseEnabled: false,
+      poseQuery: null,
+      characterReferenceAssetId: null,
+      poseSelection: null,
       prompt: plan.prompt,
       effectivePrompt: plan.prompt,
       width: 256,
@@ -253,7 +264,7 @@ test("v9 备份一次性转换为 v11；新图关系可完整恢复且不恢复�
     delete session.visualSources;
   }
   const converted = validateBackup(legacy);
-  assert.equal(converted.formatVersion, 13);
+  assert.equal(converted.formatVersion, 14);
   assert.equal(converted.data.assets[0].creationOrigin, "uploaded");
   assert.equal(converted.data.sessions[0].stateVersion, 0);
   await db.put("sceneGenerations", generation);
@@ -387,6 +398,10 @@ test("编辑草稿持久化；每次提交冻结实际提示词和对齐尺寸�
     width: 250,
     height: 513,
     referenceAssetIds: ["img1"],
+    poseEnabled: false,
+    poseQuery: "",
+    characterReferenceAssetId: null,
+    poseSearch: emptyPoseSearch(),
   };
   await saveSceneDraft(plan.id, draft, commit);
   assert.deepEqual((await db.get("sceneImagePlans", plan.id))!.draft, draft);
@@ -434,6 +449,10 @@ test("建议解析失败不封锁手动草稿；无身份参考可仅提交文�
       width: 256,
       height: 512,
       referenceAssetIds: [],
+      poseEnabled: false,
+      poseQuery: "",
+      characterReferenceAssetId: null,
+      poseSearch: emptyPoseSearch(),
     },
   });
   let request: any;
@@ -496,7 +515,7 @@ test("v10 备份保留真实提示词与原件尺寸，移除旧前幕和目标�
   delete oldGeneration.submission;
   oldGeneration.sceneId = "scene";
   const converted = validateBackup(backup);
-  assert.equal(converted.formatVersion, 13);
+  assert.equal(converted.formatVersion, 14);
   const result = converted.data.sceneGenerations[0];
   assert.equal(result.submission.effectivePrompt, plan.prompt);
   assert.equal(result.submission.width, 1);
@@ -519,6 +538,10 @@ test("手动取消参考后原样提交提示词，不校验或改写旧图片�
       width: 256,
       height: 512,
       referenceAssetIds: [],
+      poseEnabled: false,
+      poseQuery: "",
+      characterReferenceAssetId: null,
+      poseSearch: emptyPoseSearch(),
     },
   });
   let request: any;
@@ -551,12 +574,16 @@ test("v11 备份转为 v12 后移除所有参考 roles 并保留真实文本和�
     width: 256,
     height: 512,
     referenceAssetIds: [],
+    poseEnabled: false,
+    poseQuery: "",
+    characterReferenceAssetId: null,
+    poseSearch: emptyPoseSearch(),
   };
   legacy.data.sceneGenerations[0].submission.referenceImages[0].roles = [
     "identity",
   ];
   const migrated = validateBackup(legacy);
-  assert.equal(migrated.formatVersion, 13);
+  assert.equal(migrated.formatVersion, 14);
   assert.equal(
     "roles" in migrated.data.sceneImagePlans[0].referenceImages[0],
     false,
@@ -655,6 +682,10 @@ test("从资源库添加剧情参考会保存选择和原件哈希，不改写�
       width: 320,
       height: 640,
       referenceAssetIds: [],
+      poseEnabled: false,
+      poseQuery: "",
+      characterReferenceAssetId: null,
+      poseSearch: emptyPoseSearch(),
     },
     commit,
   );
@@ -773,4 +804,323 @@ test("直接生图发送原始文件和提示词，临时结果不入库，取�
   assert.equal(acknowledgements, 1);
   assert.equal((await db.getAll("assets")).length, 1);
   assert.equal((await db.getAll("sceneGenerations")).length, 0);
+});
+
+function poseCandidate(id: string) {
+  return {
+    poseId: id,
+    score: 0.12,
+    description: {
+      zh: `双手撑地的${id}姿势`,
+      en: `Pose ${id} with hands supporting the body`,
+    },
+    pose: {
+      schema_version: 3,
+      active_character_id: "hero",
+      activeTab: "pose1",
+      characters: [
+        { id: "hero", poses: { pose1: { bones: { leftArm: [1, 2, 3] } } } },
+      ],
+      camera: { position: [2, 3, 4], zoom: 1.5 },
+      old_prompt: "保留但不使用",
+    },
+  };
+}
+
+test("新草稿自动检索但不默认选择；恢复保留候选、失败不自动重试", async () => {
+  const { resumeScenePoseSearches, searchScenePoses } =
+    await import("../lib/scene-images/poses");
+  const { saveSceneDraft } = await import("../lib/scene-images/coordinator");
+  const { db, plan } = await fixture();
+  await db.put("sceneImagePlans", {
+    ...plan,
+    poseQuery: "坐在地上，双手撑在身后",
+    characterReferenceAssetId: "img1",
+  });
+  let searches = 0;
+  let fail = false;
+  globalThis.fetch = async (path) => {
+    if (path === "/api/capabilities") return Response.json(caps);
+    assert.equal(path, "/api/scene-images/poses/search");
+    searches++;
+    return fail
+      ? Response.json(
+          {
+            code: "POSE_SEARCH_BUSY",
+            message: "检索繁忙，服务请求 ID：search1",
+          },
+          { status: 429 },
+        )
+      : Response.json({
+          matches: [poseCandidate("sit"), poseCandidate("stand")],
+        });
+  };
+  await resumeScenePoseSearches(commit);
+  let draft = (await db.get("sceneImagePlans", plan.id))!.draft!;
+  assert.equal(draft.poseEnabled, true);
+  assert.equal(draft.characterReferenceAssetId, "img1");
+  assert.equal(draft.poseSearch.status, "succeeded");
+  assert.equal(draft.poseSearch.selectedPoseId, null);
+  assert.deepEqual(draft.poseSearch.matches[0].pose, poseCandidate("sit").pose);
+  await resumeScenePoseSearches(commit);
+  assert.equal(searches, 1);
+  await saveSceneDraft(
+    plan.id,
+    { ...draft, poseSearch: { ...draft.poseSearch, selectedPoseId: "stand" } },
+    commit,
+  );
+  draft = (await db.get("sceneImagePlans", plan.id))!.draft!;
+  assert.equal(draft.poseSearch.selectedPoseId, "stand");
+  await saveSceneDraft(plan.id, { ...draft, poseEnabled: false }, commit);
+  await resumeScenePoseSearches(commit);
+  assert.equal(
+    (await db.get("sceneImagePlans", plan.id))!.draft!.poseSearch
+      .selectedPoseId,
+    "stand",
+  );
+  fail = true;
+  await saveSceneDraft(plan.id, { ...draft, poseEnabled: true }, commit);
+  await searchScenePoses(plan.id, commit);
+  await resumeScenePoseSearches(commit);
+  draft = (await db.get("sceneImagePlans", plan.id))!.draft!;
+  assert.equal(draft.poseSearch.status, "failed");
+  assert.match(draft.poseSearch.error!, /POSE_SEARCH_BUSY.*search1/);
+  assert.equal(draft.poseSearch.selectedPoseId, null);
+  assert.equal(searches, 2);
+});
+
+test("修改描述使旧候选失效，迟到检索不得覆盖新结果或用户提示词", async () => {
+  const { searchScenePoses } = await import("../lib/scene-images/poses");
+  const { saveSceneDraft } = await import("../lib/scene-images/coordinator");
+  const { initialSceneDraft, withPoseQuery, poseGenerationError } =
+    await import("../lib/scene-images/draft");
+  const { db, plan } = await fixture();
+  let release!: () => void;
+  let entered!: () => void;
+  const firstEntered = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  globalThis.fetch = async (path, init) => {
+    if (path === "/api/capabilities") return Response.json(caps);
+    assert.equal(path, "/api/scene-images/poses/search");
+    const { query } = JSON.parse(String(init!.body));
+    if (query === "旧动作") {
+      entered();
+      await waiting;
+    }
+    return Response.json({ matches: [poseCandidate(query)] });
+  };
+  await saveSceneDraft(
+    plan.id,
+    {
+      ...initialSceneDraft(plan, caps),
+      poseEnabled: true,
+      poseQuery: "旧动作",
+      characterReferenceAssetId: "img1",
+    },
+    commit,
+  );
+  const old = searchScenePoses(plan.id, commit);
+  await firstEntered;
+  let draft = (await db.get("sceneImagePlans", plan.id))!.draft!;
+  await saveSceneDraft(plan.id, withPoseQuery(draft, "新动作"), commit);
+  draft = (await db.get("sceneImagePlans", plan.id))!.draft!;
+  assert.equal(draft.poseSearch.matches.length, 0);
+  assert.match(poseGenerationError(draft)!, /重新检索/);
+  await searchScenePoses(plan.id, commit);
+  // 文本编辑拿着较早的 searching 状态保存，也不能清掉已经收到的新候选。
+  await saveSceneDraft(plan.id, { ...draft, prompt: "用户新提示词" }, commit);
+  release();
+  await old;
+  draft = (await db.get("sceneImagePlans", plan.id))!.draft!;
+  assert.equal(draft.prompt, "用户新提示词");
+  assert.equal(draft.poseSearch.matches[0].poseId, "新动作");
+  assert.equal(draft.poseSearch.query, "新动作");
+});
+
+test("恢复中断检索；无候选和响应超限均阻止姿势生成", async () => {
+  const { resumeScenePoseSearches, searchScenePoses } =
+    await import("../lib/scene-images/poses");
+  const { initialSceneDraft } = await import("../lib/scene-images/draft");
+  const { db, plan } = await fixture();
+  const draft = {
+    ...initialSceneDraft(plan, caps),
+    poseEnabled: true,
+    poseQuery: "跳跃",
+    characterReferenceAssetId: "img1",
+    poseSearch: {
+      ...emptyPoseSearch(),
+      status: "searching" as const,
+      query: "跳跃",
+    },
+  };
+  await db.put("sceneImagePlans", { ...plan, draft });
+  let large = false;
+  globalThis.fetch = async (path) => {
+    if (path === "/api/capabilities") return Response.json(caps);
+    if (large)
+      return new Response(
+        " ".repeat(caps.imageGeneration.poseSearchMaxResponseBytes + 1),
+      );
+    return Response.json({ matches: [] });
+  };
+  await resumeScenePoseSearches(commit);
+  assert.equal(
+    (await db.get("sceneImagePlans", plan.id))!.draft!.poseSearch.status,
+    "succeeded",
+  );
+  await assert.rejects(
+    startSceneGeneration(plan.id, commit),
+    /请选择一个姿势候选/,
+  );
+  large = true;
+  await searchScenePoses(plan.id, commit);
+  assert.match(
+    (await db.get("sceneImagePlans", plan.id))!.draft!.poseSearch.error!,
+    /体积限制/,
+  );
+});
+
+test("选择非首项候选并更换人物图后，编号、完整 pose 与提交快照一致", async () => {
+  const { saveSceneDraft } = await import("../lib/scene-images/coordinator");
+  const { initialSceneDraft, orderedSceneReferences } =
+    await import("../lib/scene-images/draft");
+  const { db, plan } = await fixture();
+  const secondBytes = new Uint8Array([...png, 0]);
+  const secondHash = sha256(secondBytes);
+  const identity = {
+    ...plan.referenceImages[0],
+    assetId: "img2",
+    sourceSha256: secondHash,
+  };
+  const source = (await db.get("assets", "img1"))!;
+  await db.put("assets", {
+    ...source,
+    id: "img2",
+    sha256: secondHash,
+    byteSize: secondBytes.length,
+    originalBlob: new Blob([secondBytes], { type: "image/png" }),
+  });
+  await db.put("settings", { key: IMAGE_SEQUENCE_KEY, value: "2" });
+  const modern = {
+    ...plan,
+    poseQuery: "拳击",
+    characterReferenceAssetId: "img1",
+    referenceImages: [...plan.referenceImages, identity],
+  };
+  await db.put("sceneImagePlans", modern);
+  const draft = {
+    ...initialSceneDraft(modern, caps),
+    characterReferenceAssetId: "img2",
+    poseSearch: {
+      status: "succeeded" as const,
+      query: "拳击",
+      revision: 1,
+      matches: [poseCandidate("first"), poseCandidate("boxing")],
+      selectedPoseId: "boxing",
+      error: null,
+    },
+  };
+  await saveSceneDraft(plan.id, draft, commit);
+  assert.deepEqual(
+    orderedSceneReferences(modern, draft).map((ref) => ref.assetId),
+    ["img2", "img1"],
+  );
+  let submitted: any;
+  globalThis.fetch = async (path, init) => {
+    if (path === "/api/capabilities") return Response.json(caps);
+    if (path === "/api/images/missing") return Response.json({ missing: [] });
+    if (path === "/api/scene-images") {
+      submitted = JSON.parse(String(init!.body));
+      return Response.json({ runId: submitted.runId });
+    }
+    if (String(path).endsWith("/events"))
+      return new Response(
+        `event: snapshot\ndata: ${JSON.stringify({
+          runId: submitted.runId,
+          revision: 2,
+          status: "failed",
+          terminal: true,
+          error: "测试结束",
+          submission: { ...submitted, effectivePrompt: submitted.prompt },
+        })}\n\n`,
+      );
+    if (String(path).endsWith("/ack")) return new Response(null);
+    throw new Error(`意外请求：${path}`);
+  };
+  await startSceneGeneration(plan.id, commit);
+  await followSceneGeneration(submitted.runId, commit);
+  assert.deepEqual(
+    submitted.referenceImages.map((ref: any) => ref.assetId),
+    ["img2", "img1"],
+  );
+  assert.equal(submitted.characterReferenceAssetId, "img2");
+  assert.equal(submitted.poseSelection.poseId, "boxing");
+  assert.deepEqual(submitted.poseSelection.pose, poseCandidate("boxing").pose);
+  await saveSceneDraft(
+    plan.id,
+    { ...draft, poseSearch: { ...draft.poseSearch, selectedPoseId: "first" } },
+    commit,
+  );
+  const frozen = (await db.get("sceneGenerations", submitted.runId))!
+    .submission;
+  assert.equal(frozen.poseSelection!.poseId, "boxing");
+  assert.deepEqual(frozen.poseSelection!.pose, poseCandidate("boxing").pose);
+  const backup = validateBackup(await takeSnapshot());
+  assert.equal(
+    backup.data.sceneGenerations[0].submission.poseSelection!.poseId,
+    "boxing",
+  );
+  await restoreSnapshot(backup);
+  assert.deepEqual(
+    (await db.get("sceneGenerations", submitted.runId))!.submission
+      .poseSelection!.pose,
+    poseCandidate("boxing").pose,
+  );
+});
+
+test("v13 备份迁移保留历史动作文本及嵌套草稿，明确关闭姿势参考", async () => {
+  const { db, plan, generation } = await fixture();
+  await db.put("sceneGenerations", {
+    ...generation,
+    status: "failed",
+    acknowledged: true,
+  });
+  const backup = structuredClone(await takeSnapshot()) as any;
+  backup.formatVersion = 13;
+  const oldPlan = backup.data.sceneImagePlans[0];
+  delete oldPlan.poseQuery;
+  delete oldPlan.characterReferenceAssetId;
+  oldPlan.draft = {
+    prompt: "历史动作仍在此处",
+    width: 256,
+    height: 512,
+    referenceAssetIds: ["img1"],
+  };
+  for (const key of [
+    "poseQuery",
+    "poseEnabled",
+    "poseSelection",
+    "characterReferenceAssetId",
+  ])
+    delete backup.data.sceneGenerations[0].submission[key];
+  const migrated = validateBackup(backup);
+  assert.equal(migrated.formatVersion, 14);
+  assert.equal(migrated.data.sceneImagePlans[0].poseQuery, null);
+  assert.equal(migrated.data.sceneImagePlans[0].draft!.poseEnabled, false);
+  assert.equal(
+    migrated.data.sceneImagePlans[0].draft!.prompt,
+    "历史动作仍在此处",
+  );
+  assert.equal(
+    migrated.data.sceneGenerations[0].submission.poseSelection,
+    null,
+  );
+  assert.equal(
+    migrated.data.sceneGenerations[0].submission.prompt,
+    generation.submission.prompt,
+  );
 });

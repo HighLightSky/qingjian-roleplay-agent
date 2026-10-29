@@ -3,6 +3,7 @@ import {
   convertV10Backup,
   convertV9Backup,
   convertV11Backup,
+  convertV13Backup,
 } from "./scene-images/migration";
 import {
   isActiveGeneration,
@@ -86,7 +87,7 @@ export type Snapshot = {
 };
 export type Backup = {
   format: "roleplay-agent-backup";
-  formatVersion: 13;
+  formatVersion: 14;
   exportedAt: string;
   data: Snapshot;
 };
@@ -113,7 +114,11 @@ export function validateBackup(value: unknown): Backup {
   }
   if (value.format === "roleplay-agent-backup" && value.formatVersion === 12)
     value.formatVersion = 13;
-  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 13)
+  if (value.format === "roleplay-agent-backup" && value.formatVersion === 13) {
+    value = convertV13Backup(value);
+    object(value);
+  }
+  if (value.format !== "roleplay-agent-backup" || value.formatVersion !== 14)
     throw new Error("不支持此备份格式或版本，请选择本应用导出的文件。");
   date(value.exportedAt);
   object(value.data);
@@ -372,7 +377,7 @@ export function validateBackup(value: unknown): Backup {
   validateImages(snapshot);
   return {
     format: "roleplay-agent-backup",
-    formatVersion: 13,
+    formatVersion: 14,
     exportedAt: value.exportedAt as string,
     data: snapshot,
   };
@@ -1022,7 +1027,7 @@ export async function takeSnapshot(): Promise<Backup> {
   }
   const backup: Backup = {
     format: "roleplay-agent-backup",
-    formatVersion: 13,
+    formatVersion: 14,
     exportedAt: new Date().toISOString(),
     data: { ...data, assets: serialized },
   };

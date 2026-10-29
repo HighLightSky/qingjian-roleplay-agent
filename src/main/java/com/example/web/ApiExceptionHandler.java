@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -36,6 +37,11 @@ public class ApiExceptionHandler {
     @ExceptionHandler(com.example.service.ContextTooLargeException.class)
     public ResponseEntity<ApiError> contextTooLarge(com.example.service.ContextTooLargeException exception) {
         return jsonError(HttpStatus.CONFLICT, new ApiError("CONTEXT_TOO_LARGE", exception.getMessage()));
+    }
+
+    @ExceptionHandler(com.example.image.QwenImageClient.ServiceError.class)
+    public ResponseEntity<ApiError> imageServiceError(com.example.image.QwenImageClient.ServiceError exception) {
+        return jsonError(HttpStatusCode.valueOf(exception.status()), new ApiError(exception.code(), exception.getMessage()));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
@@ -81,7 +87,7 @@ public class ApiExceptionHandler {
                 : new ApiError("MODEL_ERROR", "模型服务调用失败，请稍后重试。原因：" + details);
     }
 
-    private ResponseEntity<ApiError> jsonError(HttpStatus status, ApiError error) {
+    private ResponseEntity<ApiError> jsonError(HttpStatusCode status, ApiError error) {
         // 显式设置 JSON，确保请求 Accept 为 text/event-stream 时仍能返回 JSON 错误。
         return ResponseEntity.status(status)
                 .contentType(MediaType.APPLICATION_JSON)

@@ -97,8 +97,9 @@ public class StateUpdateService {
                 throw new IOException("整理结果缺少数组：visualObservations");
             JsonNode scene = node.path("sceneImage");
             if (!scene.isObject() || !scene.path("prompt").isTextual() || scene.path("prompt").asText().isBlank()
+                    || !scene.path("poseQuery").isTextual() || scene.path("poseQuery").asText().isBlank()
                     || !scene.path("additionalReferences").isArray())
-                throw new IOException("整理结果缺少有效的 sceneImage 提示词与参考数组");
+                throw new IOException("整理结果缺少有效的 sceneImage 生图提示词、姿态描述与参考数组");
             for (var reference : scene.path("additionalReferences"))
                 if (!reference.path("assetId").isTextual() || !reference.path("scope").isTextual()
                         || reference.path("scope").asText().isBlank())
