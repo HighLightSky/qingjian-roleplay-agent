@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type Locator } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { poseScene } from "../pose-fixture";
 import type { JsonObject } from "../../lib/scene-images/types";
@@ -30,6 +30,15 @@ const generationCaps = {
   referenceMaxEdge: 1024,
   referenceJpegQuality: 0.85,
 };
+async function openSettings(card: Locator) {
+  const settings = card.getByTestId("generation-settings");
+  if (
+    !(await settings.evaluate(
+      (element) => (element as HTMLDetailsElement).open,
+    ))
+  )
+    await settings.getByText("调整设置", { exact: true }).click();
+}
 async function setup(page: Page) {
   await page.route("**/api/chat", async (route) =>
     route.fulfill({
@@ -56,7 +65,7 @@ async function setup(page: Page) {
   await expect
     .poll(() =>
       page.evaluate(async () => {
-        const request = indexedDB.open("roleplay-agent", 13);
+        const request = indexedDB.open("roleplay-agent", 14);
         const db = await new Promise<IDBDatabase>((resolve) => {
           request.onsuccess = () => resolve(request.result);
         });
@@ -77,7 +86,7 @@ async function setup(page: Page) {
   await expect(page.getByTestId("scene-image-card")).toBeVisible();
   await page.evaluate(
     async ({ base64, hash }) => {
-      const request = indexedDB.open("roleplay-agent", 13);
+      const request = indexedDB.open("roleplay-agent", 14);
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
@@ -172,7 +181,7 @@ async function setup(page: Page) {
 
 test("生成不阻塞输入；刷新只恢复原任务，成功结果保存后展示", async ({
   page,
-}) => {
+}, testInfo) => {
   let submission: any;
   let starts = 0,
     complete = false,
@@ -221,6 +230,39 @@ test("生成不阻塞输入；刷新只恢复原任务，成功结果保存后�
   await expect(
     page.getByRole("button", { name: "再次生成", exact: true }),
   ).toBeVisible();
+  const card = page.getByTestId("scene-image-card").last();
+  const settings = card.getByTestId("generation-settings");
+  await expect(settings).not.toHaveAttribute("open");
+  expect((await card.getByAltText("剧情图").boundingBox())!.y).toBeLessThan(
+    (await settings.boundingBox())!.y,
+  );
+  await page.evaluate(async () => {
+    const opening = indexedDB.open("roleplay-agent");
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      opening.onsuccess = () => resolve(opening.result);
+    });
+    const tx = db.transaction("sceneGenerations", "readwrite");
+    const rows = await new Promise<any[]>((resolve) => {
+      const get = tx.objectStore("sceneGenerations").getAll();
+      get.onsuccess = () => resolve(get.result);
+    });
+    tx.objectStore("sceneGenerations").put({
+      ...rows[0],
+      id: `${rows[0].id}-old`,
+      createdAt: new Date(Date.parse(rows[0].createdAt) - 1000).toISOString(),
+    });
+    await new Promise<void>((resolve) => {
+      tx.oncomplete = () => resolve();
+    });
+    db.close();
+    window.dispatchEvent(new Event("scene-images-changed"));
+  });
+  await expect(card.getByText("历史图片 · 1", { exact: true })).toBeVisible();
+  await expect(card.getByRole("button", { name: "预览剧情图" })).toHaveCount(1);
+  await card.getByText("历史图片 · 1", { exact: true }).click();
+  await expect(card.getByRole("button", { name: "预览剧情图" })).toHaveCount(2);
+  await card.getByText("历史图片 · 1", { exact: true }).click();
+  await card.screenshot({ path: testInfo.outputPath("scene-result.png") });
 });
 
 test("停止收到 202 显示取消中，等原任务终态才允许重新生成", async ({
@@ -260,7 +302,7 @@ test("停止收到 202 显示取消中，等原任务终态才允许重新生成
   expect(stops).toBe(1);
   await expect(
     page.getByRole("button", { name: "再次生成", exact: true }),
-  ).toBeDisabled();
+  ).toHaveCount(0);
   cancelled = true;
   await expect(
     page.getByRole("button", { name: "再次生成", exact: true }),
@@ -285,7 +327,7 @@ test("身份和服装参考均可压缩，黑图由后端注入", async ({ page 
       ),
       (b) => b.toString(16).padStart(2, "0"),
     ).join("");
-    const request = indexedDB.open("roleplay-agent", 13);
+    const request = indexedDB.open("roleplay-agent", 14);
     const db = await new Promise<IDBDatabase>((resolve) => {
       request.onsuccess = () => resolve(request.result);
     });
@@ -334,7 +376,7 @@ test("身份和服装参考均可压缩，黑图由后端注入", async ({ page 
     return hash;
   });
   const card = page.getByTestId("scene-image-card").last();
-  await card.locator("summary").click();
+  await openSettings(card);
   await card.getByLabel("使用参考图 img2").check();
   const uploaded: { hash: string; bytes: Buffer }[] = [];
   await page.route("**/api/images/missing", (route) =>
@@ -414,13 +456,13 @@ test("编辑提示词先确认；取消不提交，确认后冻结参数；放�
   );
   await setup(page);
   const card = page.getByTestId("scene-image-card").last();
-  await card.locator("summary").click();
+  await openSettings(card);
   await card
     .getByLabel("生图提示词")
     .fill("李白穿蓝袍站在瀑布旁，参考 img1。无需图片编号和固定段落。");
   await card.getByLabel("画面宽度").fill("257");
   await card.getByLabel("画面高度").fill("513");
-  await expect(card.getByText("实际画幅：288 × 544")).toBeVisible();
+  await expect(card.getByText("实际输出尺寸：288 × 544")).toBeVisible();
   await card.getByRole("button", { name: "生成图片", exact: true }).click();
   await expect(
     page.getByText("修改提示词可能导致视觉上下文不连贯，是否要继续？", {
@@ -431,7 +473,7 @@ test("编辑提示词先确认；取消不提交，确认后冻结参数；放�
   expect(requests).toHaveLength(0);
   await page.reload();
   const restored = page.getByTestId("scene-image-card").last();
-  await restored.locator("summary").click();
+  await openSettings(restored);
   await expect(restored.getByLabel("生图提示词")).toHaveValue(/李白穿蓝袍/);
   await expect(restored.getByLabel("画面宽度")).toHaveValue("257");
   await restored.getByRole("button", { name: "生成图片", exact: true }).click();
@@ -467,7 +509,7 @@ test("无身份照片且参考建议报错时，仍允许仅用提示词生成�
   );
   await setup(page);
   await page.evaluate(async () => {
-    const opening = indexedDB.open("roleplay-agent", 13);
+    const opening = indexedDB.open("roleplay-agent", 14);
     const db = await new Promise<IDBDatabase>((resolve) => {
       opening.onsuccess = () => resolve(opening.result);
     });
@@ -498,7 +540,7 @@ test("无身份照片且参考建议报错时，仍允许仅用提示词生成�
     window.dispatchEvent(new Event("scene-images-changed"));
   });
   const card = page.getByTestId("scene-image-card").last();
-  await card.locator("summary").click();
+  await openSettings(card);
   await expect(card.getByLabel("生图提示词")).toHaveValue("李白站在瀑布旁。");
   await expect(card.getByLabel("画面宽度")).toHaveValue("512");
   await expect(card.getByLabel("画面高度")).toHaveValue("512");
@@ -561,7 +603,7 @@ test("剧情图从资源库添加列表外参考，上传先入库且刷新保�
     },
   );
   const card = page.getByTestId("scene-image-card").last();
-  await card.locator("summary").click();
+  await openSettings(card);
   await card.getByRole("button", { name: "从资源库添加" }).click();
   await page.getByLabel("选择 img2", { exact: true }).check();
   await page.getByRole("button", { name: "添加所选图片（1）" }).click();
@@ -581,7 +623,7 @@ test("剧情图从资源库添加列表外参考，上传先入库且刷新保�
   await expect(card.getByLabel("使用参考图 img3")).toBeChecked();
   await page.reload();
   const restored = page.getByTestId("scene-image-card").last();
-  await restored.locator("summary").click();
+  await openSettings(restored);
   await expect(restored.getByLabel("使用参考图 img2")).toBeChecked();
   await expect(restored.getByLabel("使用参考图 img3")).toBeChecked();
   const pin = await page.evaluate(async () => {
@@ -707,18 +749,16 @@ test("自动检索无需展开卡片；换选候选和人物图后按 image2 顺
   await expect(
     card.getByRole("button", { name: "生成图片", exact: true }),
   ).toBeDisabled();
-  await card.locator("summary").click();
+  await openSettings(card);
   await expect(card.getByLabel("使用姿势参考")).toBeChecked();
   await expect(card.getByRole("radio")).toHaveCount(3);
   await expect(card.getByRole("radio", { checked: true })).toHaveCount(0);
   await card.getByLabel("选择姿势 坐姿，双手撑在身后").check();
   await card.getByLabel("人物参考图", { exact: true }).selectOption("img2");
-  await expect(
-    card.getByText("参考图 2：img2", { exact: false }),
-  ).toBeVisible();
+  await expect(card.getByText("image2", { exact: true })).toBeVisible();
   await page.reload();
   const restored = page.getByTestId("scene-image-card").last();
-  await restored.locator("summary").click();
+  await openSettings(restored);
   await expect(
     restored.getByLabel("选择姿势 坐姿，双手撑在身后"),
   ).toBeChecked();
@@ -761,12 +801,12 @@ test("检索失败只影响姿势区域，关闭参考可普通生成并保留�
   await setup(page);
   await seedPosePlan(page);
   const card = page.getByTestId("scene-image-card").last();
-  await card.locator("summary").click();
+  await openSettings(card);
   await expect(card.getByRole("alert")).toContainText("pose-123");
   await expect(page.getByRole("textbox", { name: "消息内容" })).toBeEnabled();
   await page.reload();
   const restored = page.getByTestId("scene-image-card").last();
-  await restored.locator("summary").click();
+  await openSettings(restored);
   await expect(restored.getByRole("alert")).toContainText("pose-123");
   expect(searches).toBe(1);
   await restored.getByLabel("使用姿势参考").uncheck();
@@ -797,7 +837,7 @@ test("修改描述后旧候选与选择失效，重新检索为空时提示修�
   await setup(page);
   await seedPosePlan(page);
   const card = page.getByTestId("scene-image-card").last();
-  await card.locator("summary").click();
+  await openSettings(card);
   await card.getByLabel("选择姿势 坐姿，双手撑在身后").check();
   await expect(
     card.getByRole("button", { name: "生成图片", exact: true }),
@@ -841,7 +881,7 @@ test("新回复整理落库立即触发姿势检索，等待检索不阻塞聊�
   await expect.poll(() => searches).toBe(1);
   await expect(page.getByRole("textbox", { name: "消息内容" })).toBeEnabled();
   const card = page.getByTestId("scene-image-card").last();
-  await card.locator("summary").click();
+  await openSettings(card);
   await expect(card.getByLabel("姿态检索描述")).toHaveValue(
     "人物站立，双手下垂",
   );
@@ -872,7 +912,7 @@ async function editorFixture(page: Page, source: JsonObject = poseScene()) {
   await setup(page);
   await seedPosePlan(page);
   const card = page.getByTestId("scene-image-card").last();
-  await card.locator("summary").click();
+  await openSettings(card);
   await card.getByLabel("选择姿势 原始姿势").check();
   await card.getByRole("button", { name: "编辑姿势", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "编辑姿势", exact: true });
@@ -915,7 +955,7 @@ for (const version of [undefined, 1, 2]) {
     await expect(card.getByText("已编辑", { exact: true })).toBeVisible();
     await page.reload();
     const restored = page.getByTestId("scene-image-card").last();
-    await restored.locator("summary").click();
+    await openSettings(restored);
     await expect(restored.getByText("已编辑", { exact: true })).toBeVisible();
     let submitted: any;
     await page.route("**/api/scene-images", (route) => {
@@ -1009,7 +1049,7 @@ test("实际人体编辑可撤销重做，应用并刷新后生成冻结完整�
   await expect(card.getByText("已编辑", { exact: true })).toBeVisible();
   await page.reload();
   const restored = page.getByTestId("scene-image-card").last();
-  await restored.locator("summary").click();
+  await openSettings(restored);
   await expect(restored.getByText("已编辑", { exact: true })).toBeVisible();
   let submitted: any;
   await page.route("**/api/scene-images", (route) => {
@@ -1098,7 +1138,7 @@ test("人体贴图缺失显示预览错误，仍能原样应用姿势交给服�
   await setup(page);
   await seedPosePlan(page);
   const card = page.getByTestId("scene-image-card").last();
-  await card.locator("summary").click();
+  await openSettings(card);
   await card.getByLabel("选择姿势 缺贴图姿势").check();
   await card.getByRole("button", { name: "编辑姿势", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "编辑姿势", exact: true });
@@ -1179,7 +1219,7 @@ test("未知版本和不完整嵌套结构原样提交，服务端渲染失败�
   await setup(page);
   await seedPosePlan(page);
   const card = page.getByTestId("scene-image-card").last();
-  await card.locator("summary").click();
+  await openSettings(card);
   await card.getByLabel("选择姿势 未来姿势").check();
   await card.getByRole("button", { name: "编辑姿势", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "编辑姿势", exact: true });
@@ -1203,7 +1243,50 @@ test("未知版本和不完整嵌套结构原样提交，服务端渲染失败�
   ).toBeVisible();
   await page.reload();
   const restored = page.getByTestId("scene-image-card").last();
-  await restored.locator("summary").click();
+  await openSettings(restored);
   await restored.getByRole("button", { name: "再次生成", exact: true }).click();
   await expect.poll(() => submissions[1]?.poseSelection?.pose).toEqual(source);
+});
+
+test("动作库默认原有库，切换范围清空候选，重新检索与刷新保留范围", async ({
+  page,
+}, testInfo) => {
+  const libraries: string[] = [];
+  await page.route("**/api/scene-images/poses/search", (route) => {
+    libraries.push(route.request().postDataJSON().library);
+    return route.fulfill({ json: { matches: poseMatches } });
+  });
+  await setup(page);
+  await seedPosePlan(page);
+  const card = page.getByTestId("scene-image-card").last();
+  await openSettings(card);
+  await expect(card.getByLabel("动作库检索范围")).toHaveValue("default");
+  await card.getByLabel("选择姿势 坐姿，双手撑在身后").check();
+  await card.getByLabel("动作库检索范围").selectOption("mixamo");
+  await expect(card.getByRole("radio")).toHaveCount(0);
+  await expect(
+    card.getByRole("button", { name: "生成图片", exact: true }),
+  ).toBeDisabled();
+  await card.getByRole("button", { name: "重新检索" }).click();
+  await expect(card.getByRole("radio")).toHaveCount(3);
+  expect(libraries).toEqual(["default", "mixamo"]);
+  await page.reload();
+  const restored = page.getByTestId("scene-image-card").last();
+  await openSettings(restored);
+  await expect(restored.getByLabel("动作库检索范围")).toHaveValue("mixamo");
+  await restored.getByLabel("动作库检索范围").selectOption("all");
+  await restored.getByRole("button", { name: "重新检索" }).click();
+  await expect(restored.getByRole("radio")).toHaveCount(3);
+  expect(libraries).toEqual(["default", "mixamo", "all"]);
+  for (const theme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    expect(
+      await restored.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+    await restored.screenshot({
+      path: testInfo.outputPath(`scene-settings-${theme}.png`),
+    });
+  }
 });

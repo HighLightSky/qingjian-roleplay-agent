@@ -105,9 +105,9 @@ public class QwenImageClient {
         json(request("/ready", config.readyTimeoutSeconds()).GET().build(), config.readyTimeoutSeconds(), 65536);
     }
 
-    public JsonNode searchPoses(String query) throws IOException, InterruptedException {
+    public JsonNode searchPoses(String query, String library) throws IOException, InterruptedException {
         ready();
-        var body = mapper.writeValueAsBytes(Map.of("query", query, "top_k", config.poseSearchTopK()));
+        var body = mapper.writeValueAsBytes(Map.of("query", query, "top_k", config.poseSearchTopK(), "library", library));
         return json(request("/api/pose/search", config.poseSearchTimeoutSeconds())
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(), config.poseSearchTimeoutSeconds(),

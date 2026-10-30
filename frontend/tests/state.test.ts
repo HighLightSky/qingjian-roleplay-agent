@@ -412,6 +412,7 @@ test("正常整理结果与手动重试共用草稿事务，重复接收保留�
       referenceAssetIds: [],
       poseEnabled: false,
       poseQuery: "",
+      poseLibrary: "default",
       characterReferenceAssetId: null,
       poseSearch: emptyPoseSearch(),
       poseEdit: null,
@@ -427,7 +428,7 @@ test("正常整理结果与手动重试共用草稿事务，重复接收保留�
     (await db.get("sessions", session.id))!.stateVersion,
     session.stateVersion,
   );
-  assert.equal(validateBackup(await takeSnapshot()).formatVersion, 15);
+  assert.equal(validateBackup(await takeSnapshot()).formatVersion, 16);
 });
 
 test("computed 画面草稿的独占原图参与计量、回收和备份，重提无需再次调用模型", async () => {

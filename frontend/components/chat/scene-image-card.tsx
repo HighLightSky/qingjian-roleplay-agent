@@ -1,6 +1,25 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import {
+  ImageIcon,
+  ImagesIcon,
+  UploadIcon,
+  FolderOpenIcon,
+  SparklesIcon,
+  SquareIcon,
+  Loader2Icon,
+  Trash2Icon,
+  DownloadIcon,
+  RefreshCwIcon,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  GenerationSettings,
+  ImageDimensions,
+} from "@/components/images/generation-settings";
+import { PoseControls } from "@/components/images/pose-controls";
+import { CharacterReference } from "@/components/images/character-reference";
 import { useEffect, useRef, useState } from "react";
 import { useAuiState } from "@assistant-ui/react";
 import { ImagePreviewDialog } from "@/components/image-preview-dialog";
@@ -27,9 +46,7 @@ import { searchScenePoses } from "@/lib/scene-images/poses";
 import {
   orderedSceneReferences,
   poseGenerationError,
-  withPoseQuery,
   selectedScenePose,
-  selectScenePose,
 } from "@/lib/scene-images/draft";
 import { useImageUrl } from "@/hooks/use-image-url";
 import { useAppStore, write } from "@/stores/use-app-store";
@@ -53,47 +70,103 @@ const PoseEditorDialog = dynamic(() => import("./pose-editor-dialog"), {
   ssr: false,
 });
 
-function AssetPreview({ assetId }: { assetId: string }) {
+function AssetPreview({
+  assetId,
+  disabled,
+  onDiscard,
+}: {
+  assetId: string;
+  disabled: boolean;
+  onDiscard(): void;
+}) {
   const { url, missing } = useImageUrl(assetId);
-  return missing ? (
-    <p>图片原件缺失。</p>
-  ) : url ? (
-    <ImagePreviewDialog src={url} name="剧情图.png">
-      <button type="button" aria-label="预览剧情图">
-        <img
-          src={url}
-          alt="剧情图"
-          className="mt-2 max-h-[32rem] rounded-lg object-contain"
-        />
-      </button>
-    </ImagePreviewDialog>
-  ) : null;
+  if (missing)
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        图片原件缺失。
+      </p>
+    );
+  if (!url) return null;
+  return (
+    <div className="grid min-w-0 gap-2">
+      <ImagePreviewDialog src={url} name="剧情图.png">
+        <button
+          type="button"
+          aria-label="预览剧情图"
+          className="flex w-full justify-center overflow-hidden rounded-lg bg-muted/30"
+        >
+          <img
+            src={url}
+            alt="剧情图"
+            className="max-h-[65dvh] max-w-full object-contain"
+          />
+        </button>
+      </ImagePreviewDialog>
+      <div className="flex flex-wrap items-center justify-end gap-1">
+        <Button variant="ghost" size="sm" asChild>
+          <a href={url} download="剧情图.png">
+            <DownloadIcon />
+            下载图片
+          </a>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={disabled}
+          onClick={onDiscard}
+          className="text-muted-foreground"
+        >
+          <Trash2Icon />
+          放弃这张
+        </Button>
+      </div>
+    </div>
+  );
 }
 function ReferencePreview({
   assetId,
   number,
   scope,
+  character,
 }: {
   assetId: string;
   number?: number;
   scope: string;
+  character: boolean;
 }) {
   const { url, missing } = useImageUrl(assetId, true);
   return (
-    <li className="flex items-center gap-2 py-1">
+    <div className="flex min-w-0 flex-1 items-center gap-3">
       {url && (
         <img
           src={url}
           alt={number === undefined ? "未使用参考图" : `参考图 ${number}`}
-          className="h-12 w-12 rounded object-contain"
+          className="size-14 shrink-0 rounded-md bg-muted/40 object-contain"
         />
       )}
-      <span>
-        {number === undefined ? "未使用参考" : `参考图 ${number}`}：{assetId} ·{" "}
-        {scope}
-        {missing ? "（原件缺失）" : ""}
-      </span>
-    </li>
+      <div className="grid min-w-0 gap-1">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-muted-foreground">
+            {number === undefined ? "未使用" : `image${number}`}
+          </span>
+          <span>{assetId}</span>
+          {character && (
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-primary">
+              人物
+            </span>
+          )}
+        </div>
+        <span
+          className="line-clamp-2 break-words text-xs text-muted-foreground"
+          title={scope}
+        >
+          {scope}
+        </span>
+        {missing && (
+          <span className="text-xs text-destructive">图片原件缺失。</span>
+        )}
+      </div>
+    </div>
   );
 }
 const labels = {
@@ -160,6 +233,7 @@ export function SceneImageCard() {
           setDraft((current) =>
             current &&
             current.poseQuery === selected.draft!.poseQuery &&
+            current.poseLibrary === selected.draft!.poseLibrary &&
             current.poseSearch.revision <= selected.draft!.poseSearch.revision
               ? {
                   ...current,
@@ -231,318 +305,262 @@ export function SceneImageCard() {
     setPlan(updated!);
     setDraft(updated!.draft!);
   }
+  async function editPose() {
+    await writes.current;
+    const stored = await (await database()).get("sceneImagePlans", plan!.id);
+    if (!stored) throw new Error("姿势编辑对应的草稿不存在。");
+    const next = initialSceneDraft(stored, caps!);
+    const original = next.poseSearch.matches.find(
+      (match) => match.poseId === next.poseSearch.selectedPoseId,
+    );
+    if (!original) throw new Error("请先选择姿势候选。");
+    const unit = caps!.imageGeneration.dimensionAlignment;
+    setEditing({
+      binding: {
+        sourcePoseId: original.poseId,
+        searchRevision: next.poseSearch.revision,
+      },
+      scene: structuredClone(selectedScenePose(next).pose),
+      original: structuredClone(original.pose),
+      width: Math.ceil(next.width / unit) * unit,
+      height: Math.ceil(next.height / unit) * unit,
+    });
+  }
   const disabled = readOnly || busy || active;
   const poseError = draft ? poseGenerationError(draft) : null;
+  const showPoseError =
+    draft?.poseSearch.status !== "failed" &&
+    draft?.poseSearch.status !== "searching";
   const orderedReferences = draft ? orderedSceneReferences(plan, draft) : [];
+  const results = generations.filter(
+    (g) => g.assetId && g.referenceStatus !== "rejected",
+  );
+  const currentResult = results.at(-1);
+  function renderResult(g: SceneGeneration) {
+    return (
+      <AssetPreview
+        key={g.id}
+        assetId={g.assetId!}
+        disabled={disabled}
+        onDiscard={() => void action(() => rejectSceneGeneration(g.id, write))}
+      />
+    );
+  }
   return (
     <div
-      className="mt-3 rounded-lg border p-3 text-sm"
+      className="mt-4 grid min-w-0 gap-3 rounded-xl border border-border/70 bg-card/40 p-3 text-sm sm:p-4"
       data-testid="scene-image-card"
     >
-      <details>
-        <summary className="cursor-pointer">
-          剧情图 · {latest ? labels[latest.status] : "待生成"}
-        </summary>
-        {draft ? (
-          <div className="mt-3 grid gap-3">
-            <label className="grid gap-1">
-              生图提示词
-              <textarea
-                aria-label="生图提示词"
-                className="min-h-40 w-full rounded border bg-background p-2 text-xs"
-                value={draft.prompt}
-                disabled={disabled}
-                onChange={(e) =>
-                  updateDraft({ ...draft, prompt: e.target.value })
-                }
-              />
-            </label>
-            <fieldset className="grid gap-3 rounded border p-3">
-              <legend>姿势参考</legend>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  aria-label="使用姿势参考"
-                  checked={draft.poseEnabled}
-                  disabled={disabled}
-                  onChange={(e) =>
-                    updateDraft({ ...draft, poseEnabled: e.target.checked })
-                  }
-                />
-                使用姿势参考
-              </label>
-              <label className="grid gap-1">
-                姿态检索描述
-                <textarea
-                  aria-label="姿态检索描述"
-                  value={draft.poseQuery}
-                  disabled={disabled}
-                  className="min-h-24 w-full rounded border bg-background p-2 text-xs"
-                  onChange={(e) =>
-                    updateDraft(withPoseQuery(draft, e.target.value))
-                  }
-                />
-              </label>
-              <p className="text-xs text-muted-foreground">
-                描述动作、朝向、四肢、支撑关系和观察角度。关闭姿势参考后，此描述仍会加入普通生图提示词。
-              </p>
-              <button
-                type="button"
-                className="justify-self-start"
-                disabled={
-                  disabled ||
-                  !draft.poseEnabled ||
-                  !draft.poseQuery.trim() ||
-                  draft.poseSearch.status === "searching"
-                }
-                onClick={() =>
-                  void action(async () => {
-                    await writes.current;
-                    await searchScenePoses(plan!.id, write);
-                  })
-                }
-              >
-                重新检索
-              </button>
-              <div aria-live="polite">
-                {draft.poseSearch.status === "searching" && (
-                  <p>正在检索姿势…</p>
-                )}
-                {draft.poseSearch.status === "failed" && (
-                  <p role="alert" className="text-destructive">
-                    {draft.poseSearch.error}
-                  </p>
-                )}
-                {draft.poseSearch.status === "succeeded" &&
-                  !draft.poseSearch.matches.length && (
-                    <p>没有姿势候选，请修改描述后重新检索。</p>
-                  )}
-              </div>
-              {draft.poseSearch.matches.map((match) => (
-                <label
-                  key={match.poseId}
-                  className="flex items-start gap-2 rounded border p-2"
-                >
-                  <input
-                    type="radio"
-                    name={`pose-${plan.id}`}
-                    aria-label={`选择姿势 ${match.description.zh}`}
-                    disabled={disabled || !draft.poseEnabled}
-                    checked={draft.poseSearch.selectedPoseId === match.poseId}
-                    onChange={() =>
-                      updateDraft(selectScenePose(draft, match.poseId))
-                    }
-                  />
-                  <span className="grid min-w-0 gap-1 break-words">
-                    <span>{match.description.zh}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {match.description.en}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      相似度：{match.score.toFixed(3)}（非置信概率）
-                    </span>
-                  </span>
-                </label>
-              ))}
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  disabled={
-                    disabled ||
-                    !draft.poseEnabled ||
-                    !draft.poseSearch.selectedPoseId ||
-                    !sizeValid ||
-                    !caps
-                  }
-                  onClick={() =>
-                    void action(async () => {
-                      await writes.current;
-                      const stored = await (
-                        await database()
-                      ).get("sceneImagePlans", plan!.id);
-                      if (!stored)
-                        throw new Error("姿势编辑对应的草稿不存在。");
-                      const next = initialSceneDraft(stored, caps!);
-                      const original = next.poseSearch.matches.find(
-                        (match) =>
-                          match.poseId === next.poseSearch.selectedPoseId,
-                      );
-                      if (!original) throw new Error("请先选择姿势候选。");
-                      const unit = caps!.imageGeneration.dimensionAlignment;
-                      setEditing({
-                        binding: {
-                          sourcePoseId: original.poseId,
-                          searchRevision: next.poseSearch.revision,
-                        },
-                        scene: structuredClone(selectedScenePose(next).pose),
-                        original: structuredClone(original.pose),
-                        width: Math.ceil(next.width / unit) * unit,
-                        height: Math.ceil(next.height / unit) * unit,
-                      });
-                    })
-                  }
-                >
-                  编辑姿势
-                </button>
-                <button
-                  type="button"
-                  disabled={disabled || !draft.poseEdit}
-                  onClick={() =>
-                    void action(async () => {
-                      await writes.current;
-                      await resetPoseEdit(plan!.id, write);
-                    })
-                  }
-                >
-                  恢复检索姿势
-                </button>
-                {draft.poseEdit && <span className="text-xs">已编辑</span>}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                只保留当前候选的编辑，切换候选或重新检索会清除修改。
-              </p>
-              <label className="grid gap-1">
-                人物参考图（image2）
-                <select
-                  aria-label="人物参考图"
-                  value={draft.characterReferenceAssetId ?? ""}
-                  disabled={disabled || !draft.poseEnabled}
-                  className="min-w-0 rounded border bg-background p-2"
-                  onChange={(e) =>
-                    updateDraft({
-                      ...draft,
-                      characterReferenceAssetId: e.target.value || null,
-                    })
-                  }
-                >
-                  <option value="">请选择人物参考图</option>
-                  {plan.referenceImages
-                    .filter((ref) =>
-                      draft.referenceAssetIds.includes(ref.assetId),
-                    )
-                    .map((ref) => (
-                      <option key={ref.assetId} value={ref.assetId}>
-                        {ref.assetId} · {ref.scope}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <p className="text-xs text-muted-foreground">
-                候选按描述展示，选择后用于生成图片。
-              </p>
-            </fieldset>
-            <div className="flex flex-wrap items-end gap-3">
-              <label className="grid gap-1">
-                宽度
-                <input
-                  aria-label="画面宽度"
-                  type="number"
-                  min="1"
-                  className="w-28 rounded border bg-background p-2"
-                  value={widthText}
-                  disabled={disabled}
-                  onChange={(e) => {
-                    setWidthText(e.target.value);
-                    const value = Number(e.target.value);
-                    if (Number.isSafeInteger(value) && value > 0)
-                      updateDraft({ ...draft, width: value });
-                  }}
-                />
-              </label>
-              <label className="grid gap-1">
-                高度
-                <input
-                  aria-label="画面高度"
-                  type="number"
-                  min="1"
-                  className="w-28 rounded border bg-background p-2"
-                  value={heightText}
-                  disabled={disabled}
-                  onChange={(e) => {
-                    setHeightText(e.target.value);
-                    const value = Number(e.target.value);
-                    if (Number.isSafeInteger(value) && value > 0)
-                      updateDraft({ ...draft, height: value });
-                  }}
-                />
-              </label>
-              {sizeValid && (
-                <span>
-                  实际画幅：{width} × {height}
+      <header className="flex flex-wrap items-center gap-2">
+        <ImageIcon className="size-4 text-primary" />
+        <span className="font-medium">剧情图</span>
+        <span
+          role="status"
+          className={`rounded-full px-2 py-0.5 text-xs ${active ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}
+        >
+          {latest ? labels[latest.status] : "待生成"}
+        </span>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {active ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={readOnly || busy || latest?.status === "cancelling"}
+              onClick={() => void action(() => stopSceneGeneration(latest!.id))}
+            >
+              <SquareIcon />
+              {latest?.status === "cancelling" ? "取消中…" : "停止生成"}
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              disabled={
+                disabled ||
+                !draft ||
+                !sizeValid ||
+                !draft.prompt.trim() ||
+                !!poseError
+              }
+              onClick={() =>
+                draft!.prompt !== plan.prompt
+                  ? setConfirmEdit(true)
+                  : generate()
+              }
+            >
+              <SparklesIcon />
+              {latest ? "再次生成" : "生成图片"}
+            </Button>
+          )}
+          {busy && (
+            <Loader2Icon
+              aria-label="正在处理"
+              className="size-4 animate-spin"
+            />
+          )}
+          {latest?.error && (active || latest.status === "succeeded") && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={readOnly || busy}
+              onClick={() =>
+                void action(() => followSceneGeneration(latest.id, write))
+              }
+            >
+              <RefreshCwIcon />
+              重试取回
+            </Button>
+          )}
+        </div>
+      </header>
+      {(error || latest?.error) && (
+        <p role="alert" className="break-words text-sm text-destructive">
+          {error || latest?.error}
+        </p>
+      )}
+      {plan.error && (
+        <p className="break-words text-xs text-muted-foreground">
+          {plan.error}
+        </p>
+      )}
+      {showPoseError && poseError && (
+        <p className="text-xs text-muted-foreground">{poseError}</p>
+      )}
+      {currentResult && renderResult(currentResult)}
+      {results.length > 1 && (
+        <details className="group/history">
+          <summary className="flex min-h-9 cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+            <ImagesIcon className="size-3.5" />
+            历史图片 · {results.length - 1}
+          </summary>
+          <div className="grid gap-4 pt-2">
+            {results.slice(0, -1).reverse().map(renderResult)}
+          </div>
+        </details>
+      )}
+      {draft && caps && (
+        <GenerationSettings
+          resultKey={currentResult?.id}
+          summary={`${width ?? draft.width} × ${height ?? draft.height} · ${draft.referenceAssetIds.length} 张参考`}
+        >
+          <label className="grid min-w-0 gap-2 text-sm font-medium">
+            画面描述
+            <textarea
+              aria-label="生图提示词"
+              rows={4}
+              value={draft.prompt}
+              disabled={disabled}
+              onChange={(e) =>
+                updateDraft({ ...draft, prompt: e.target.value })
+              }
+              className="min-h-24 w-full resize-y rounded-md border border-input bg-background p-3 text-sm font-normal leading-relaxed focus-visible:outline-ring"
+            />
+          </label>
+          <PoseControls
+            draft={draft}
+            disabled={disabled}
+            canEdit={sizeValid}
+            onChange={updateDraft}
+            onSearch={() =>
+              void action(async () => {
+                await writes.current;
+                await searchScenePoses(plan!.id, write);
+              })
+            }
+            onEdit={() => void action(editPose)}
+            onReset={() =>
+              void action(async () => {
+                await writes.current;
+                await resetPoseEdit(plan!.id, write);
+              })
+            }
+          />
+          <section
+            aria-label="参考图片"
+            className="grid min-w-0 gap-3 border-t border-border/60 pt-4"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="mr-auto flex items-center gap-2 text-sm font-medium">
+                <ImagesIcon className="size-4 text-muted-foreground" />
+                参考图片
+                <span className="text-xs font-normal text-muted-foreground">
+                  {draft.referenceAssetIds.length}/
+                  {caps.imageGeneration.maxReferenceImages}
                 </span>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {draft.poseEnabled
-                ? "image1 为指定画幅的人偶姿势图，image2 必须为人物参考。"
-                : "第一张为指定画幅的黑色画布，普通生图可不选参考。"}
-              最多 {caps?.imageGeneration.maxReferenceImages} 张参考图。
-            </p>
-            <div className="flex flex-wrap gap-3">
-              <button
+              </h3>
+              <Button
+                variant="ghost"
+                size="sm"
                 disabled={
                   disabled ||
-                  !caps ||
                   draft.referenceAssetIds.length >=
                     caps.imageGeneration.maxReferenceImages
                 }
+                aria-label="从资源库添加"
                 onClick={() => setPicker(true)}
               >
-                从资源库添加
-              </button>
-              <button
+                <FolderOpenIcon />
+                资源库
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
                 disabled={
                   disabled ||
-                  !caps ||
                   draft.referenceAssetIds.length >=
                     caps.imageGeneration.maxReferenceImages
                 }
+                aria-label="上传参考图"
                 onClick={() => upload.current?.click()}
               >
-                上传参考图
-              </button>
-              <input
-                ref={upload}
-                type="file"
-                accept="image/png,image/jpeg"
-                multiple
-                hidden
-                aria-label="上传剧情参考图"
-                onChange={(e) => {
-                  const files = Array.from(e.target.files!);
-                  e.target.value = "";
-                  void action(async () => {
-                    if (
-                      draft.referenceAssetIds.length + files.length >
-                      caps!.imageGeneration.maxReferenceImages
-                    )
-                      throw new Error("参考图数量超限，请减少图片。");
-                    const ids = [];
-                    for (const file of files)
-                      ids.push(
-                        (await saveLibraryImage(file, "uploaded", write)).id,
-                      );
-                    await addReferences(ids);
-                  });
-                }}
-              />
+                <UploadIcon />
+                上传
+              </Button>
             </div>
-            {!!plan?.referenceImages.length && (
-              <ul className="text-xs">
+            <input
+              ref={upload}
+              type="file"
+              accept="image/png,image/jpeg"
+              multiple
+              hidden
+              aria-label="上传剧情参考图"
+              onChange={(e) => {
+                const files = Array.from(e.target.files!);
+                e.target.value = "";
+                void action(async () => {
+                  if (
+                    draft.referenceAssetIds.length + files.length >
+                    caps.imageGeneration.maxReferenceImages
+                  )
+                    throw new Error("参考图数量超限，请减少图片。");
+                  const ids = [];
+                  for (const file of files)
+                    ids.push(
+                      (await saveLibraryImage(file, "uploaded", write)).id,
+                    );
+                  await addReferences(ids);
+                });
+              }}
+            />
+            {!!plan.referenceImages.length && (
+              <ul className="grid min-w-0 gap-2">
                 {plan.referenceImages.map((ref) => {
-                  const related = generations.find(
-                    (g) => g.id === ref.sourceGenerationId,
-                  );
                   const selectedIndex = orderedReferences.findIndex(
                     (item) => item.assetId === ref.assetId,
                   );
+                  const related = generations.find(
+                    (g) => g.id === ref.sourceGenerationId,
+                  );
                   return (
-                    <li key={ref.assetId} className="flex items-center gap-2">
+                    <li
+                      key={ref.assetId}
+                      className="flex min-w-0 items-center gap-3 rounded-md bg-muted/20 p-2"
+                    >
                       <input
                         type="checkbox"
                         aria-label={`使用参考图 ${ref.assetId}`}
                         disabled={disabled}
                         checked={draft.referenceAssetIds.includes(ref.assetId)}
+                        className="accent-primary"
                         onChange={(e) =>
                           updateDraft({
                             ...draft,
@@ -559,90 +577,61 @@ export function SceneImageCard() {
                           })
                         }
                       />
-                      <ul>
-                        <ReferencePreview
-                          assetId={ref.assetId}
-                          number={
-                            selectedIndex < 0 ? undefined : selectedIndex + 2
-                          }
-                          scope={ref.scope}
-                        />
-                      </ul>
+                      <ReferencePreview
+                        assetId={ref.assetId}
+                        number={
+                          selectedIndex < 0 ? undefined : selectedIndex + 2
+                        }
+                        scope={ref.scope}
+                        character={
+                          draft.poseEnabled &&
+                          draft.characterReferenceAssetId === ref.assetId
+                        }
+                      />
                       {related?.referenceStatus === "rejected" && (
-                        <span>已放弃，请移除参考</span>
+                        <span className="text-xs text-destructive">
+                          已放弃，请移除参考
+                        </span>
                       )}
                     </li>
                   );
                 })}
               </ul>
             )}
-          </div>
-        ) : null}
-      </details>
-      {(error || latest?.error) && (
-        <p role="alert" className="mt-2 text-destructive">
-          {error || latest?.error}
-        </p>
+            {draft.poseEnabled && (
+              <CharacterReference
+                value={draft.characterReferenceAssetId}
+                disabled={disabled}
+                options={orderedReferences.map((ref) => ({
+                  id: ref.assetId,
+                  label: `${ref.assetId} · ${ref.scope}`,
+                }))}
+                onChange={(value) =>
+                  updateDraft({ ...draft, characterReferenceAssetId: value })
+                }
+              />
+            )}
+          </section>
+          <ImageDimensions
+            width={widthText}
+            height={heightText}
+            alignment={caps.imageGeneration.dimensionAlignment}
+            disabled={disabled}
+            onWidthChange={(text) => {
+              setWidthText(text);
+              const value = Number(text);
+              if (Number.isSafeInteger(value) && value > 0)
+                updateDraft({ ...draft, width: value });
+            }}
+            onHeightChange={(text) => {
+              setHeightText(text);
+              const value = Number(text);
+              if (Number.isSafeInteger(value) && value > 0)
+                updateDraft({ ...draft, height: value });
+            }}
+          />
+        </GenerationSettings>
       )}
-      {plan?.error && (
-        <p className="mt-2 text-xs text-muted-foreground">
-          {plan.error}。可调整提示词和参考后生成。
-        </p>
-      )}
-      {poseError && (
-        <p className="mt-2 text-xs text-muted-foreground">{poseError}</p>
-      )}
-      <div className="mt-2 flex flex-wrap gap-3">
-        {plan && draft && (
-          <button
-            disabled={
-              disabled || !sizeValid || !draft.prompt.trim() || !!poseError
-            }
-            onClick={() =>
-              draft.prompt !== plan.prompt ? setConfirmEdit(true) : generate()
-            }
-          >
-            {latest ? "再次生成" : "生成图片"}
-          </button>
-        )}
-        {latest && ["running", "cancelling"].includes(latest.status) && (
-          <button
-            disabled={readOnly || busy || latest.status === "cancelling"}
-            onClick={() => void action(() => stopSceneGeneration(latest.id))}
-          >
-            {latest.status === "cancelling" ? "取消中…" : "停止生成"}
-          </button>
-        )}
-        {latest?.error && (active || latest.status === "succeeded") && (
-          <button
-            disabled={readOnly || busy}
-            onClick={() =>
-              void action(() => followSceneGeneration(latest.id, write))
-            }
-          >
-            重试取回
-          </button>
-        )}
-      </div>
-      {generations
-        .filter((g) => g.assetId && g.referenceStatus !== "rejected")
-        .map((g) => (
-          <div key={g.id}>
-            <AssetPreview assetId={g.assetId!} />
-            <span className="text-xs text-muted-foreground">
-              生成要求，未经图像核实
-            </span>
-            <button
-              className="ml-3 text-xs"
-              disabled={readOnly || busy || active}
-              onClick={() =>
-                void action(() => rejectSceneGeneration(g.id, write))
-              }
-            >
-              放弃这张
-            </button>
-          </div>
-        ))}
       {editing && caps && (
         <PoseEditorDialog
           scene={editing.scene}
@@ -677,10 +666,12 @@ export function SceneImageCard() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <button onClick={() => setConfirmEdit(false)}>返回修改</button>
-            <button disabled={disabled} onClick={generate}>
+            <Button variant="outline" onClick={() => setConfirmEdit(false)}>
+              返回修改
+            </Button>
+            <Button disabled={disabled} onClick={generate}>
               继续生成
-            </button>
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

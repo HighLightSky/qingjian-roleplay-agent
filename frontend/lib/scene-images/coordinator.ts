@@ -63,6 +63,7 @@ export async function saveSceneDraft(
     if (
       current &&
       current.poseQuery === draft.poseQuery &&
+      current.poseLibrary === draft.poseLibrary &&
       current.poseSearch.revision >= draft.poseSearch.revision
     )
       draft = {
@@ -79,6 +80,7 @@ export async function saveSceneDraft(
     const sameSelection =
       current &&
       current.poseQuery === draft.poseQuery &&
+      current.poseLibrary === draft.poseLibrary &&
       current.poseSearch.revision === draft.poseSearch.revision &&
       current.poseSearch.selectedPoseId === draft.poseSearch.selectedPoseId;
     draft = { ...draft, poseEdit: sameSelection ? current.poseEdit : null };

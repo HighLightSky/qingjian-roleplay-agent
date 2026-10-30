@@ -132,7 +132,7 @@ test("v9 到 v10 升级失败整体回滚；成功保留原件和生成记录并
   );
   preserved.close();
   const current = await database();
-  assert.equal(current.version, 13);
+  assert.equal(current.version, 14);
   assert.equal(
     await (await current.get("assets", "img1"))!.originalBlob.text(),
     "原件",

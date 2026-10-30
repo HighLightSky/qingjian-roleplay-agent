@@ -300,11 +300,11 @@ curl --fail-with-body -X POST "$API_BASE_URL/api/image/edit/$TASK_ID/cancel" \
 curl --fail-with-body "$API_BASE_URL/api/pose/search" \
   -H "Authorization: Bearer $IMAGE_SERVICE_API_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data '{"query":"坐在地上，双手撑在身后，上身后仰","top_k":3}'
+  --data '{"query":"坐在地上，双手撑在身后，上身后仰","top_k":3,"library":"default"}'
 ```
 
 请求体为 JSON，最大 64 KiB：`query` 为必填非空字符串，`top_k` 为正整数、默认 1。
-超出索引数量时返回全部姿势。不要上传向量、模型名或文件路径；查询编码使用服务端索引记录的模型和检索指令。
+`library` 可选 `default`（原有姿势库，136 条）、`mixamo`（Mixamo 扩展库，420 条）或 `all`（全部姿势，556 条），省略时为 `default`，与生图后端默认值一致。先按库筛选再取 Top-K，超过库内数量时返回该库全部记录；空库返回 `{"matches":[]}`。不要上传向量、模型名或文件路径；查询编码使用服务端索引记录的模型和检索指令。
 
 成功返回 `200 application/json`，设置 `Cache-Control: no-store`，结构始终为：
 
@@ -338,7 +338,7 @@ curl --fail-with-body "$API_BASE_URL/api/pose/search" \
 
 | HTTP 状态 | 错误码 | 处理方式 |
 |---|---|---|
-| 400 | `INVALID_POSE_REQUEST` | 检查 JSON、query、top_k 或正文大小 |
+| 400 | `INVALID_POSE_REQUEST` | 检查 JSON、query、top_k、library 或正文大小 |
 | 401 | `UNAUTHORIZED` | 检查现有 API Token |
 | 408 | `UPLOAD_TIMEOUT` | 检查客户端上传连接 |
 | 429 | `POSE_SEARCH_BUSY` | 稍后重试 |

@@ -201,7 +201,7 @@ test("v8 backup restores original bytes and rejects damaged originals before rep
   const a = await asset();
   await beginTurn(session.id, "", [{ type: "image", assetId: a.id }]);
   const backup = await takeSnapshot();
-  assert.equal(backup.formatVersion, 15);
+  assert.equal(backup.formatVersion, 16);
   await restoreSnapshot(backup);
   assert.equal((await getOriginal(a.id)).sha256, a.sha256);
   const invalid = structuredClone(backup);

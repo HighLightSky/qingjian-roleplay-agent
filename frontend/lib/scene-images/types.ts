@@ -41,6 +41,8 @@ export type PoseSelection = {
   description: { zh: string; en: string };
   pose: { [key: string]: JsonValue };
 };
+export const POSE_LIBRARIES = ["default", "mixamo", "all"] as const;
+export type PoseLibrary = (typeof POSE_LIBRARIES)[number];
 export type PoseSearch = {
   status: "idle" | "searching" | "succeeded" | "failed";
   query: string | null;
@@ -62,6 +64,7 @@ export type SceneDraft = {
   referenceAssetIds: string[];
   poseEnabled: boolean;
   poseQuery: string;
+  poseLibrary: PoseLibrary;
   characterReferenceAssetId: string | null;
   poseSearch: PoseSearch;
   poseEdit: PoseEdit | null;

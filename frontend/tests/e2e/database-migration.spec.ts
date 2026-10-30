@@ -286,7 +286,7 @@ for (const legacyVersion of [8, 9, 10, 11, 12]) {
       "原来未发的草稿",
     );
     const migrated = await page.evaluate(async () => {
-      const request = indexedDB.open("roleplay-agent", 13);
+      const request = indexedDB.open("roleplay-agent", 14);
       const db = await new Promise<IDBDatabase>((resolve) => {
         request.onsuccess = () => resolve(request.result);
       });
@@ -322,7 +322,7 @@ for (const legacyVersion of [8, 9, 10, 11, 12]) {
       db.close();
       return result;
     });
-    expect(migrated.version).toBe(13);
+    expect(migrated.version).toBe(14);
     expect(migrated.tables).toEqual(
       expect.arrayContaining(["sceneImagePlans", "sceneGenerations"]),
     );

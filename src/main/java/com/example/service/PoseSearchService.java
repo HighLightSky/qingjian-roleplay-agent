@@ -25,10 +25,10 @@ public class PoseSearchService {
     public PoseSearchResult search(PoseSearchRequest request) throws IOException, InterruptedException {
         if (request == null)
             throw new IllegalArgumentException("姿态检索请求不能为空");
-        validation.query(request.query());
+        validation.search(request);
         if (config.apiToken().isBlank())
             throw new DispatchException(HttpStatus.SERVICE_UNAVAILABLE, "GENERATION_NOT_CONFIGURED", "未配置生图服务 Token");
-        var result = client.searchPoses(request.query());
+        var result = client.searchPoses(request.query(), request.library());
         var matches = result.path("matches");
         if (!matches.isArray() || matches.size() > config.poseSearchTopK())
             throw new ServiceError(502, "INVALID_POSE_RESPONSE", "姿态检索返回了无效的候选数组");

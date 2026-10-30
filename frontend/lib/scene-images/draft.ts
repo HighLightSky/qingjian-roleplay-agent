@@ -1,5 +1,10 @@
 import type { Capabilities } from "../images/types";
-import type { SceneDraft, SceneImagePlan, PoseSearch } from "./types";
+import type {
+  SceneDraft,
+  SceneImagePlan,
+  PoseSearch,
+  PoseLibrary,
+} from "./types";
 
 export function emptyPoseSearch(revision = 0): PoseSearch {
   return {
@@ -24,6 +29,7 @@ export function initialSceneDraft(
       referenceAssetIds: plan.referenceImages.map((ref) => ref.assetId),
       poseEnabled: plan.poseQuery !== null,
       poseQuery: plan.poseQuery ?? "",
+      poseLibrary: "default",
       characterReferenceAssetId: plan.characterReferenceAssetId,
       poseSearch: emptyPoseSearch(),
       poseEdit: null,
@@ -35,6 +41,18 @@ export function withPoseQuery(draft: SceneDraft, query: string): SceneDraft {
   return {
     ...draft,
     poseQuery: query,
+    poseEdit: null,
+    poseSearch: emptyPoseSearch(draft.poseSearch.revision + 1),
+  };
+}
+
+export function withPoseLibrary(
+  draft: SceneDraft,
+  library: PoseLibrary,
+): SceneDraft {
+  return {
+    ...draft,
+    poseLibrary: library,
     poseEdit: null,
     poseSearch: emptyPoseSearch(draft.poseSearch.revision + 1),
   };

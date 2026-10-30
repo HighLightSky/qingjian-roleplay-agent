@@ -60,7 +60,7 @@ test("v12 升级保留候选、选择、computed 草稿和历史提交，只初�
   assert.deepEqual(await preserved.get("sceneImagePlans", "p"), plan);
   preserved.close();
   const db = await database();
-  assert.equal(db.version, 13);
+  assert.equal(db.version, 14);
   const current = (await db.get("sceneImagePlans", "p"))!;
   assert.equal(current.draft!.poseEdit, null);
   assert.deepEqual(current.draft!.poseSearch, poseSearch);

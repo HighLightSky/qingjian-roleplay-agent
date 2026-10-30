@@ -95,7 +95,7 @@ class SceneGenerationLiveTest {
                 state.validateRequest(request);
                 var result = state.update(request);
                 assertTrue(result.scenePlan().prompt().contains("<image2>"));
-                var candidates = poseSearch.search(new PoseSearchRequest(result.scenePlan().poseQuery()));
+                var candidates = poseSearch.search(new PoseSearchRequest(result.scenePlan().poseQuery(), "default"));
                 assertFalse(candidates.matches().isEmpty(), "真实服务未返回姿势候选");
                 // 批量回归显式选首项；保存全部候选，画面与左右肢体仍须人工检查。
                 var selected = candidates.matches().getFirst();

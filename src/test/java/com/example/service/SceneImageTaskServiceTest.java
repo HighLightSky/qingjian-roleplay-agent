@@ -160,7 +160,7 @@ class SceneImageTaskServiceTest {
     void directGenerationKeepsOriginalPromptAndFirstImageAndSharesPermit() throws Exception {
         String hash = ImageValidationService.sha256(png);
         var request = new DirectGenerationRequest(UUID.randomUUID().toString(), "将<image1>背景改成蓝色。",
-                List.of(new InputImage("img1", "编辑目标", hash, hash, null)));
+                List.of(new InputImage("img1", "编辑目标", hash, hash, null)), false, null, null, null, null, null);
         mvc.perform(post("/api/scene-images/direct").contentType("application/json")
                 .content(mapper.writeValueAsBytes(request)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.submission.effectivePrompt").value(request.prompt()));
@@ -184,15 +184,61 @@ class SceneImageTaskServiceTest {
     }
 
     @Test
+    void directPoseGenerationUsesAlignedCanvasCharacterOrderAndCompleteEditedPose() throws Exception {
+        var base = posedRequest("edited");
+        var request = new DirectGenerationRequest(base.runId(), base.prompt(), base.referenceImages(), true,
+                257, 513, base.poseQuery(), base.characterReferenceAssetId(), base.poseSelection());
+        var snapshot = tasks.startDirect(request);
+        assertEquals(288, snapshot.submission().width());
+        assertEquals(544, snapshot.submission().height());
+        assertTrue(snapshot.submission().poseEnabled());
+        assertEquals(request.poseSelection(), snapshot.submission().poseSelection());
+        assertTrue(received.await(3, TimeUnit.SECONDS));
+        assertTrue(multipart.contains("image2.png"));
+        assertTrue(multipart.contains("name=\"pose\"\r\n"));
+        assertTrue(multipart.contains(mapper.writeValueAsString(request.poseSelection().pose())));
+        assertTrue(multipart.contains("image1>用于姿态参考"));
+        assertFalse(multipart.contains("纯黑画布"));
+        assertEquals(0, searches.get());
+        finish.countDown();
+        assertEquals("succeeded", terminal(request.runId()).status());
+    }
+
+    @Test
+    void directPoseMissingDimensionsIdentityPoseAndExcessiveResourcesAreRejectedBeforeDispatch() throws Exception {
+        var base = posedRequest("sit");
+        for (var request : List.of(
+                new DirectGenerationRequest(base.runId(), base.prompt(), base.referenceImages(), true,
+                        null, 512, base.poseQuery(), "img1", base.poseSelection()),
+                new DirectGenerationRequest(base.runId(), base.prompt(), base.referenceImages(), true,
+                        512, 512, base.poseQuery(), null, base.poseSelection()),
+                new DirectGenerationRequest(base.runId(), base.prompt(), base.referenceImages(), true,
+                        512, 512, base.poseQuery(), "img9", base.poseSelection()),
+                new DirectGenerationRequest(base.runId(), base.prompt(), base.referenceImages(), true,
+                        512, 512, base.poseQuery(), "img1", null),
+                new DirectGenerationRequest(base.runId(), base.prompt(), base.referenceImages(), true,
+                        8192, 8192, base.poseQuery(), "img1", base.poseSelection()),
+                new DirectGenerationRequest(base.runId(), base.prompt(), Collections.nCopies(10, base.referenceImages().getFirst()), true,
+                        512, 512, base.poseQuery(), "img1", base.poseSelection()),
+                new DirectGenerationRequest(base.runId(), base.prompt(), base.referenceImages(), false,
+                        null, null, null, null, base.poseSelection()))) {
+            mvc.perform(post("/api/scene-images/direct").contentType("application/json")
+                    .content(mapper.writeValueAsBytes(request))).andExpect(status().isBadRequest());
+        }
+        assertEquals(0, readyChecks.get());
+        assertEquals(0, edits.get());
+    }
+
+    @Test
     void directGenerationValidatesRequiredImagesCountAndPromptAtEntry() throws Exception {
         String hash = ImageValidationService.sha256(png);
         var reference = new InputImage("img1", "编辑目标", hash, hash, null);
         var requests = List.of(
-                new DirectGenerationRequest("empty", "提示词", List.of()),
-                new DirectGenerationRequest("blank", " ", List.of(reference)),
-                new DirectGenerationRequest("long", "字".repeat(16385), List.of(reference)),
-                new DirectGenerationRequest("many", "提示词", Collections.nCopies(11, reference)),
-                new DirectGenerationRequest("duplicate", "提示词", List.of(reference, reference)));
+                new DirectGenerationRequest("empty", "提示词", List.of(), false, null, null, null, null, null),
+                new DirectGenerationRequest("blank", " ", List.of(reference), false, null, null, null, null, null),
+                new DirectGenerationRequest("long", "字".repeat(16385), List.of(reference), false, null, null, null, null, null),
+                new DirectGenerationRequest("many", "提示词", Collections.nCopies(11, reference), false, null, null, null, null, null),
+                new DirectGenerationRequest("duplicate", "提示词", List.of(reference, reference), false, null, null, null, null, null));
         for (var request : requests)
             mvc.perform(post("/api/scene-images/direct").contentType("application/json")
                     .content(mapper.writeValueAsBytes(request))).andExpect(status().isBadRequest());
@@ -433,8 +479,28 @@ class SceneImageTaskServiceTest {
         assertEquals(pose.pose(), result.path("matches").get(0).get("pose"));
         assertEquals("Bearer test-token", searchToken);
         assertEquals(3, mapper.readTree(searchBody).path("top_k").asInt());
+        assertEquals("default", mapper.readTree(searchBody).path("library").asText());
         assertEquals("坐姿，双手撑在身后", mapper.readTree(searchBody).path("query").asText());
         assertEquals(1, readyChecks.get());
+        assertEquals(0, edits.get());
+    }
+
+    @Test
+    void poseSearchForwardsEachLibraryAndRejectsInvalidScopeBeforeRemoteCalls() throws Exception {
+        for (var library : List.of("default", "mixamo", "all")) {
+            mvc.perform(post("/api/scene-images/poses/search").contentType("application/json")
+                    .content(mapper.writeValueAsBytes(Map.of("query", "跑步", "library", library))))
+                    .andExpect(status().isOk());
+            assertEquals(library, mapper.readTree(searchBody).path("library").asText());
+        }
+        for (var library : List.of("", "DEFAULT", "unknown")) {
+            mvc.perform(post("/api/scene-images/poses/search").contentType("application/json")
+                    .content(mapper.writeValueAsBytes(Map.of("query", "跑步", "library", library))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("library 必须是 default、mixamo 或 all"));
+        }
+        assertEquals(3, readyChecks.get());
+        assertEquals(3, searches.get());
         assertEquals(0, edits.get());
     }
 

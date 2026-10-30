@@ -99,7 +99,7 @@ test("v10 原地升级失败回滚，成功移除用途分类并保留草稿、�
   );
   preserved.close();
   const current = await database();
-  assert.equal(current.version, 13);
+  assert.equal(current.version, 14);
   const plan = (await current.get("sceneImagePlans", "plan"))!;
   assert.equal("roles" in plan.referenceImages[0], false);
   assert.deepEqual(plan.draft, {
@@ -107,6 +107,7 @@ test("v10 原地升级失败回滚，成功移除用途分类并保留草稿、�
     poseEdit: null,
     poseEnabled: false,
     poseQuery: "",
+    poseLibrary: "default",
     characterReferenceAssetId: null,
     poseSearch: {
       status: "idle",

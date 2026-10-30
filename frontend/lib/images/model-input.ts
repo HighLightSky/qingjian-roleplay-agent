@@ -19,7 +19,18 @@ export type ModelInput = {
   width: number;
   height: number;
 };
-const original = (asset: ImageAsset): ModelInput => ({
+export type GenerationAsset = Pick<
+  ImageAsset,
+  | "id"
+  | "sha256"
+  | "originalBlob"
+  | "mimeType"
+  | "byteSize"
+  | "width"
+  | "height"
+>;
+
+const original = (asset: GenerationAsset): ModelInput => ({
   assetId: asset.id,
   sha256: asset.sha256,
   sourceSha256: asset.sha256,
@@ -32,13 +43,13 @@ const original = (asset: ImageAsset): ModelInput => ({
 
 const derivatives = new Map<string, WeakRef<ModelInput>>();
 async function encode(
-  asset: ImageAsset,
+  asset: GenerationAsset,
   edge: number,
   quality: number,
 ): Promise<ModelInput> {
   const key = `${asset.sha256}:reference-v1:${edge}:${quality}`;
   const existing = derivatives.get(key)?.deref();
-  if (existing) return existing;
+  if (existing) return { ...existing, assetId: asset.id };
   for (const [cachedKey, cached] of derivatives)
     if (!cached.deref()) derivatives.delete(cachedKey);
   const input = await prepareAuxiliaryReference(asset, edge, quality);
@@ -47,7 +58,7 @@ async function encode(
 }
 
 export async function prepareAuxiliaryReference(
-  asset: ImageAsset,
+  asset: GenerationAsset,
   edge: number,
   quality: number,
 ): Promise<ModelInput> {
@@ -91,12 +102,21 @@ export async function prepareGenerationInputs(
   width: number,
   height: number,
 ): Promise<ModelInput[]> {
-  const limits = caps.imageGeneration;
-  const inputs: ModelInput[] = [];
   const assets = await Promise.all(
     references.map((ref) => getOriginal(ref.assetId)),
   );
-  if (references.length > limits.maxReferenceImages)
+  return prepareGenerationAssets(assets, caps, width, height);
+}
+
+export async function prepareGenerationAssets(
+  assets: GenerationAsset[],
+  caps: Capabilities,
+  width: number,
+  height: number,
+): Promise<ModelInput[]> {
+  const limits = caps.imageGeneration;
+  const inputs: ModelInput[] = [];
+  if (assets.length > limits.maxReferenceImages)
     throw new Error("生图参考图数量超限，黑色画布占用一个名额。");
   const blackPixels = width * height;
   if (
@@ -110,13 +130,13 @@ export async function prepareGenerationInputs(
     Math.floor(Math.sqrt(limits.maxPixels)),
     Math.floor(
       Math.sqrt(
-        (limits.maxTotalPixels - blackPixels) / Math.max(1, references.length),
+        (limits.maxTotalPixels - blackPixels) / Math.max(1, assets.length),
       ),
     ),
   );
-  if (references.length && edgeBudget < 1)
+  if (assets.length && edgeBudget < 1)
     throw new Error("没有足够的参考图像素预算。");
-  for (let i = 0; i < references.length; i++) {
+  for (let i = 0; i < assets.length; i++) {
     let input = await encode(
       assets[i],
       edgeBudget,
@@ -125,7 +145,7 @@ export async function prepareGenerationInputs(
     while (input.byteSize > limits.maxImageBytes) {
       const edge = Math.floor(Math.max(input.width, input.height) * 0.7);
       if (edge < 1)
-        throw new Error(`参考图无法压缩到服务限制：${references[i].assetId}`);
+        throw new Error(`参考图无法压缩到服务限制：${assets[i].id}`);
       input = await encode(assets[i], edge, limits.referenceJpegQuality);
     }
     inputs.push(input);

@@ -341,3 +341,36 @@ export function convertV14Backup(value: Record<string, unknown>) {
   }
   return { ...value, formatVersion: 15, data: converted };
 }
+
+export function upgradeV13Record(
+  table: string,
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  const row = { ...value };
+  if (table === "sceneImagePlans" && row.draft)
+    row.draft = { ...(row.draft as object), poseLibrary: "default" };
+  if (table === "operations" && row.kind === "state_update" && row.result) {
+    const result = row.result as Record<string, unknown>;
+    if (result.scenePlan)
+      row.result = {
+        ...result,
+        scenePlan: upgradeV13Record(
+          "sceneImagePlans",
+          result.scenePlan as Record<string, unknown>,
+        ),
+      };
+  }
+  return row;
+}
+
+export function convertV15Backup(value: Record<string, unknown>) {
+  const data = value.data;
+  if (!data || typeof data !== "object" || Array.isArray(data))
+    throw new Error("旧备份数据缺失。");
+  const converted: Record<string, unknown[]> = {};
+  for (const [table, rows] of Object.entries(data)) {
+    if (!Array.isArray(rows)) throw new Error(`旧备份的 ${table} 数据无效。`);
+    converted[table] = rows.map((row) => upgradeV13Record(table, row));
+  }
+  return { ...value, formatVersion: 16, data: converted };
+}

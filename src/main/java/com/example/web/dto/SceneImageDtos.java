@@ -47,7 +47,9 @@ public final class SceneImageDtos {
         }
     }
 
-    public record DirectGenerationRequest(String runId, String prompt, List<InputImage> referenceImages)
+    public record DirectGenerationRequest(String runId, String prompt, List<InputImage> referenceImages,
+            boolean poseEnabled, Integer width, Integer height, String poseQuery, String characterReferenceAssetId,
+            PoseSelection poseSelection)
             implements TaskRequest {
         public DirectGenerationRequest {
             referenceImages = referenceImages == null ? List.of() : List.copyOf(referenceImages);
@@ -59,7 +61,10 @@ public final class SceneImageDtos {
             PoseSelection poseSelection) {
     }
 
-    public record PoseSearchRequest(String query) {
+    public record PoseSearchRequest(String query, String library) {
+        public PoseSearchRequest {
+            library = library == null ? "default" : library;
+        }
     }
 
     public record PoseDescription(String zh, String en) {

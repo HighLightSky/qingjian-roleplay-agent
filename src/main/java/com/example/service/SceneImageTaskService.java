@@ -67,7 +67,8 @@ public class SceneImageTaskService {
     }
 
     public synchronized TaskSnapshot startDirect(DirectGenerationRequest request) throws IOException {
-        return start(request, validation.validateDirectRequest(request), false);
+        var submission = validation.validateDirectRequest(request);
+        return start(request, submission, submission.poseEnabled());
     }
 
     private TaskSnapshot start(TaskRequest request, Submission submission, boolean canvas) throws IOException {

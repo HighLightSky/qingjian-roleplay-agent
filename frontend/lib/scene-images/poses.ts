@@ -1,11 +1,10 @@
 import { database } from "../db";
 import { capabilities } from "../images/repository";
 import type { Commit } from "../images/types";
-import type { PoseSelection } from "./types";
+import type { PoseLibrary } from "./types";
 import { initialSceneDraft, emptyPoseSearch } from "./draft";
 import { notifySceneImages } from "./coordinator";
-import { array } from "../state/validation";
-import { validatePoseSelection } from "./validation";
+import { requestPoseSearch } from "./pose-search";
 
 const searching = new Map<string, Promise<void>>();
 
@@ -24,6 +23,7 @@ async function search(planId: string, commit: Commit) {
   const db = await database();
   const caps = await capabilities();
   let query = "";
+  let library: PoseLibrary = "default";
   let revision = 0;
   await commit(async () => {
     const plan = await db.get("sceneImagePlans", planId);
@@ -31,6 +31,7 @@ async function search(planId: string, commit: Commit) {
     const draft = initialSceneDraft(plan, caps);
     if (!draft.poseQuery.trim()) throw new Error("姿态检索描述不能为空。");
     query = draft.poseQuery;
+    library = draft.poseLibrary;
     revision = draft.poseSearch.revision + 1;
     await db.put("sceneImagePlans", {
       ...plan,
@@ -47,57 +48,17 @@ async function search(planId: string, commit: Commit) {
   });
   notifySceneImages();
   try {
-    const response = await fetch("/api/scene-images/poses/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query }),
-    });
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`${error.code}：${error.message}`);
-    }
-    // 在读取过程中限流，不能先无界加载完整候选再检查大小。
-    const reader = response.body!.getReader();
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.length;
-        if (size > caps.imageGeneration.poseSearchMaxResponseBytes) {
-          await reader.cancel();
-          throw new Error("姿势检索响应超过体积限制。");
-        }
-        chunks.push(value);
-      }
-    } finally {
-      reader.releaseLock();
-    }
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.length;
-    }
-    let result: { matches: unknown };
-    try {
-      result = JSON.parse(new TextDecoder().decode(bytes));
-    } catch {
-      throw new Error("姿势 JSON 格式错误。");
-    }
-    array(result.matches, caps.imageGeneration.poseSearchTopK);
-    const ids = new Set<string>();
-    for (const match of result.matches) {
-      validatePoseSelection(match, caps.imageGeneration.poseMaxBytes);
-      if (ids.has(match.poseId)) throw new Error("姿势检索返回了重复候选。");
-      ids.add(match.poseId);
-    }
+    const matches = await requestPoseSearch(
+      query,
+      library,
+      caps.imageGeneration,
+    );
     await commit(async () => {
       const plan = await db.get("sceneImagePlans", planId);
       if (
         !plan ||
         plan.draft?.poseQuery !== query ||
+        plan.draft.poseLibrary !== library ||
         plan.draft.poseSearch.revision !== revision
       )
         return;
@@ -109,7 +70,7 @@ async function search(planId: string, commit: Commit) {
             status: "succeeded",
             query,
             revision,
-            matches: result.matches as PoseSelection[],
+            matches,
             selectedPoseId: null,
             error: null,
           },
@@ -122,6 +83,7 @@ async function search(planId: string, commit: Commit) {
       if (
         !plan ||
         plan.draft?.poseQuery !== query ||
+        plan.draft.poseLibrary !== library ||
         plan.draft.poseSearch.revision !== revision
       )
         return;

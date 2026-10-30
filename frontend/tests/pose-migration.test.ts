@@ -67,7 +67,7 @@ test("v11 原地升级保留历史草稿、生成快照与 computed 内嵌计划
   assert.deepEqual(await old.get("sceneImagePlans", "plan"), plan);
   old.close();
   const db = await database();
-  assert.equal(db.version, 13);
+  assert.equal(db.version, 14);
   const current = (await db.get("sceneImagePlans", "plan"))!;
   assert.equal(current.poseQuery, null);
   assert.equal(current.draft!.poseEnabled, false);

@@ -6,6 +6,7 @@ import java.util.ArrayDeque;
 import org.springframework.stereotype.Service;
 import com.example.config.ImageGenerationProperties;
 import com.example.web.dto.SceneImageDtos.PoseSelection;
+import com.example.web.dto.SceneImageDtos.PoseSearchRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -23,7 +24,14 @@ public class PoseValidation {
     public void query(String query) throws IOException {
         if (query == null || query.isBlank())
             throw new IllegalArgumentException("姿态检索描述不能为空");
-        if (mapper.writeValueAsBytes(Map.of("query", query, "top_k", config.poseSearchTopK())).length
+    }
+
+    public void search(PoseSearchRequest request) throws IOException {
+        query(request.query());
+        if (!java.util.Set.of("default", "mixamo", "all").contains(request.library()))
+            throw new IllegalArgumentException("library 必须是 default、mixamo 或 all");
+        if (mapper.writeValueAsBytes(Map.of("query", request.query(), "top_k", config.poseSearchTopK(),
+                "library", request.library())).length
                 > config.poseSearchMaxRequestBytes())
             throw new IllegalArgumentException("姿态检索请求体超限");
     }

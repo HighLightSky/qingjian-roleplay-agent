@@ -1,4 +1,5 @@
 import { validatePoseJson } from "./pose-json";
+import { POSE_LIBRARIES } from "./types";
 import { assertImageId } from "../images/ids";
 import { object, string, integer, array } from "../state/validation";
 import type {
@@ -61,6 +62,9 @@ export function validateScenePlan(
     if (typeof value.draft.poseEnabled !== "boolean")
       throw new Error("姿势参考开关无效。");
     string(value.draft.poseQuery);
+    const library = value.draft.poseLibrary;
+    if (!POSE_LIBRARIES.some((allowed) => allowed === library))
+      throw new Error("姿势检索范围必须是 default、mixamo 或 all。");
     if (value.draft.characterReferenceAssetId !== null)
       assertImageId(value.draft.characterReferenceAssetId);
     validatePoseSearch(value.draft.poseSearch, poseMaxBytes);
